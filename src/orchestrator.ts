@@ -7,10 +7,11 @@ import { LinearClient } from "./linear.js";
 import { redactText } from "./redaction.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, readReviewArtifact, repeatedBlockingHashes, reviewArtifactPath, reviewerPrompt } from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
+import { RunArtifactStore } from "./runs.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { WorkspaceManager } from "./workspace.js";
-import type { AgentRunResult, AgentRunner, Issue, IssueState, IssueTracker, ReviewFinding, ReviewStateReviewer, ReviewStatus, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, Issue, IssueState, IssueTracker, ReviewFinding, ReviewStateReviewer, ReviewStatus, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 
 export interface OrchestratorOptions {
@@ -44,6 +45,7 @@ export class Orchestrator {
   private tracker!: IssueTracker;
   private runner!: AgentRunner;
   private logger: JsonlLogger;
+  private runArtifacts: RunArtifactStore;
   private running = new Map<string, RunningEntry>();
   private claimed = new Set<string>();
   private retries = new Map<string, RetryEntry>();
@@ -53,6 +55,7 @@ export class Orchestrator {
 
   constructor(private readonly options: OrchestratorOptions) {
     this.logger = options.logger ?? new JsonlLogger(resolve(options.repoRoot));
+    this.runArtifacts = new RunArtifactStore(resolve(options.repoRoot));
   }
 
   async reload(): Promise<void> {
@@ -99,6 +102,11 @@ export class Orchestrator {
     }
   }
 
+  private async writeRunEvent(runId: string, entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }): Promise<void> {
+    const payload = await this.logger.write({ ...entry, runId });
+    await this.runArtifacts.writeEvent(runId, payload);
+  }
+
   private dispatch(issue: Issue, attempt: number | null): void {
     this.claimed.add(issue.id);
     this.retries.delete(issue.id);
@@ -117,21 +125,24 @@ export class Orchestrator {
   }
 
   private async runIssue(issue: Issue, attempt: number | null, abortController: AbortController): Promise<void> {
-    await this.logger.write({
+    const run = await this.runArtifacts.startRun({ issue, attempt });
+    const runId = run.runId;
+    await this.writeRunEvent(runId, {
       type: "run_started",
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       message: issue.title
     });
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
-    await this.recordIssueState(issue, { phase: "workspace" });
+    await this.recordIssueState(issue, { phase: "workspace", lastRunId: runId });
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     const workspace = await workspaceManager.createOrReuse(issue.identifier);
+    await this.runArtifacts.setWorkspace(runId, workspace);
     try {
       await this.markLinearStarted(issue, workspace, attempt);
       await workspaceManager.beforeRun(workspace);
-      const result = await this.runImplementationTurns(issue, attempt, workspace, abortController.signal);
-      await this.logger.write({
+      const result = await this.runImplementationTurns(issue, attempt, workspace, abortController.signal, runId);
+      await this.writeRunEvent(runId, {
         type: `run_${result.status}`,
         issueId: issue.id,
         issueIdentifier: issue.identifier,
@@ -143,6 +154,7 @@ export class Orchestrator {
       } else {
         this.completedMarkers.set(issue.id, completionMarker(issue));
         const handoff = await readHandoff(workspace.path, issue.identifier);
+        if (handoff) await this.runArtifacts.writeHandoff(runId, handoff);
         const stateFromHandoff = handoff ? issueStateFromHandoff(issue, handoff) : null;
         const validation = handoff ? await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path }) : null;
         const persistedState = stateFromHandoff
@@ -172,14 +184,16 @@ export class Orchestrator {
         const reviewedState = await this.reviewIfNeeded(issue, workspace, persistedState, attempt, abortController.signal);
         await this.markLinearSucceeded(issue, workspace, handoff, reviewedState ?? persistedState ?? undefined);
       }
+      await this.runArtifacts.completeRun(runId, result);
     } catch (error) {
       await this.handleFailedRun(issue, workspace, attempt, error instanceof Error ? error.message : String(error));
-      await this.logger.write({
+      await this.writeRunEvent(runId, {
         type: "run_failed",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
         message: error instanceof Error ? error.message : String(error)
       });
+      await this.runArtifacts.failRun(runId, error instanceof Error ? error.message : String(error));
       await this.recordIssueState(issue, {
         errorCategory: categorizeRunError(error instanceof Error ? error.message : String(error)),
         lastError: error instanceof Error ? error.message : String(error)
@@ -189,11 +203,12 @@ export class Orchestrator {
     }
   }
 
-  private async runImplementationTurns(issue: Issue, attempt: number | null, workspace: Workspace, signal?: AbortSignal): Promise<AgentRunResult> {
+  private async runImplementationTurns(issue: Issue, attempt: number | null, workspace: Workspace, signal: AbortSignal | undefined, runId: string): Promise<AgentRunResult> {
     let result: AgentRunResult = { status: "failed", error: "no_turn_started" };
     for (let turnNumber = 1; turnNumber <= this.config.agent.maxTurns; turnNumber += 1) {
       await this.recordIssueState(issue, { phase: "prompt" });
       const prompt = await this.implementationPrompt(issue, attempt, turnNumber);
+      await this.runArtifacts.writePrompt(runId, prompt);
       await this.recordIssueState(issue, { phase: "streaming-turn" });
       result = await this.runner.run({
         issue,
@@ -202,9 +217,9 @@ export class Orchestrator {
         workspace,
         config: this.config,
         signal,
-        onEvent: (event) => void this.logger.write(event)
+        onEvent: (event) => void this.writeRunEvent(runId, { ...event, runId })
       });
-      await this.logger.write({
+      await this.writeRunEvent(runId, {
         type: "turn_completed",
         issueId: issue.id,
         issueIdentifier: issue.identifier,

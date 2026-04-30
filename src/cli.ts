@@ -11,6 +11,7 @@ import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "
 import { Orchestrator } from "./orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
+import { formatRunInspect, RunArtifactStore } from "./runs.js";
 import { formatSetupReport, runSetupWizard } from "./setup-wizard.js";
 
 const program = new Command();
@@ -193,6 +194,27 @@ program
   .option("--limit <number>", "number of recent issue events", "30")
   .action(async (issue, options) => {
     console.log(await inspectIssue(options.repo, issue, Number.parseInt(options.limit, 10)));
+  });
+
+const runs = program.command("runs").description("Inspect AgentOS run artifacts");
+
+runs
+  .command("inspect")
+  .argument("<run-id>", "run identifier")
+  .option("--repo <path>", "repository path", process.cwd())
+  .action(async (runId, options) => {
+    const store = new RunArtifactStore(resolve(options.repo));
+    console.log(formatRunInspect(await store.inspect(runId)));
+  });
+
+runs
+  .command("list")
+  .option("--repo <path>", "repository path", process.cwd())
+  .action(async (options) => {
+    const store = new RunArtifactStore(resolve(options.repo));
+    for (const run of await store.listRuns()) {
+      console.log(`${run.runId}\t${run.issueIdentifier}\t${run.status}\t${run.startedAt}`);
+    }
   });
 
 const linear = program.command("linear").description("Linear helper commands");

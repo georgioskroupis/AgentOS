@@ -99,7 +99,15 @@ describe("current AgentOS characterization", () => {
     expect(entries.some((entry) => entry.type === "run_started" && entry.issueIdentifier === "AG-1")).toBe(true);
     expect(entries.some((entry) => entry.type === "run_succeeded" && entry.issueIdentifier === "AG-1")).toBe(true);
     expect(entries.every((entry) => !("schemaVersion" in entry))).toBe(true);
-    expect(entries.every((entry) => !("runId" in entry))).toBe(true);
+    const runId = entries.find((entry) => entry.type === "run_started")?.runId;
+    expect(runId).toMatch(/^run_/);
+    const summary = JSON.parse(await readFile(join(repo, ".agent-os", "runs", String(runId), "summary.json"), "utf8"));
+    expect(summary).toMatchObject({
+      schemaVersion: 1,
+      runId,
+      issueIdentifier: "AG-1",
+      status: "succeeded"
+    });
     expect(tracker.moves.map((move) => `${move.issue} -> ${move.state}`)).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
   });
 

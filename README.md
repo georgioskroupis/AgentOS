@@ -92,7 +92,7 @@ Runs one Symphony-style scheduling pass:
 8. run the Ralph Wiggum review/fix loop before `Human Review`
 9. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
 10. track retries, unchanged successful issues, startup cleanup, and reconciliation
-11. write `.agent-os/runs/agent-os.jsonl`
+11. write `.agent-os/runs/agent-os.jsonl` and per-run artifacts
 
 Continuous mode is:
 
@@ -108,6 +108,17 @@ issue state, PR metadata, review state, recent events, and review artifacts.
 ```bash
 bin/agent-os status --repo <repo>
 bin/agent-os inspect VER-28 --repo <repo>
+```
+
+### `runs list` and `runs inspect`
+
+`runs list` shows durable run summaries. `runs inspect <run-id>` prints run
+status, session/token metrics, and warns if recorded artifact hashes no longer
+match the persisted artifacts.
+
+```bash
+bin/agent-os runs list --repo <repo>
+bin/agent-os runs inspect run_20260501_AG-1_ab12cd --repo <repo>
 ```
 
 ### `linear seed-roadmap`

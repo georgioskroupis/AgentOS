@@ -181,6 +181,7 @@ export interface IssueState {
   prUrl?: string;
   outcome?: "implemented" | "already_satisfied" | "partially_satisfied";
   phase?: RunPhase;
+  lastRunId?: string;
   errorCategory?: RunErrorCategory;
   lastError?: string;
   nextRetryAt?: string;
