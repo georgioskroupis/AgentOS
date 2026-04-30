@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadWorkflow, parseWorkflowText, renderPrompt, resolveServiceConfig } from "../src/workflow.js";
+import { loadWorkflow, parseWorkflowText, renderPrompt, resolveServiceConfig, validateWorkflowDefinition } from "../src/workflow.js";
 import type { Issue } from "../src/types.js";
 
 const issue: Issue = {
@@ -65,5 +65,37 @@ describe("workflow", () => {
     const parsed = parseWorkflowText("Body");
     expect(parsed.config).toEqual({});
     expect(parsed.body).toBe("Body");
+  });
+
+  it("validates strict workflow safety defaults", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-strict-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  kind: linear",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "codex:",
+        "  command: npx -y @openai/codex@0.125.0 app-server",
+        "github:",
+        "  allow_human_merge_override: false",
+        "---",
+        "Hello {{ issue.identifier }}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const workflow = await loadWorkflow(workflowPath);
+    expect(validateWorkflowDefinition(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true)).toMatchObject({
+      ok: true,
+      errors: []
+    });
+
+    const loose = await loadWorkflow(join(repo, "WORKFLOW.md"));
+    loose.config = { tracker: { api_key: "$LINEAR_API_KEY", project_slug: "AgentOS" } };
+    expect(validateWorkflowDefinition(loose, { LINEAR_API_KEY: "", HOME: "/tmp" }, true).errors).toContain("tracker.api_key did not resolve from the environment");
   });
 });

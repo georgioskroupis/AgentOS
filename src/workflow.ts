@@ -130,6 +130,43 @@ export function validateDispatchConfig(config: ServiceConfig): void {
   if (!config.codex.command) throw new Error("codex.command is required");
 }
 
+export interface WorkflowValidationResult {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export function validateWorkflowDefinition(workflow: WorkflowDefinition, env: NodeJS.ProcessEnv = process.env, strict = false): WorkflowValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  let config: ServiceConfig | null = null;
+  try {
+    config = resolveServiceConfig(workflow, env);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+
+  if (!config) return { ok: false, errors, warnings };
+  if (!config.tracker.projectSlug) errors.push("tracker.project_slug is required");
+  if (!config.tracker.activeStates.length) errors.push("tracker.active_states must include at least one state");
+  if (!config.tracker.terminalStates.length) errors.push("tracker.terminal_states must include at least one state");
+  if (!workflow.prompt_template.trim()) warnings.push("workflow prompt template is empty");
+  if (config.github.requireChecks === false) warnings.push("github.require_checks is disabled");
+
+  if (strict) {
+    if (!config.tracker.apiKey) errors.push("tracker.api_key did not resolve from the environment");
+    if (/@latest\b/.test(config.codex.command)) errors.push("codex.command must be pinned in strict mode");
+    if (config.github.allowHumanMergeOverride) errors.push("github.allow_human_merge_override must be false in strict mode");
+    for (const state of ["Done", "Canceled", "Duplicate"]) {
+      if (!config.tracker.terminalStates.some((candidate) => candidate.toLowerCase() === state.toLowerCase())) {
+        errors.push(`tracker.terminal_states should include ${state} in strict mode`);
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors, warnings };
+}
+
 export async function renderPrompt(template: string, issue: Issue, attempt: number | null): Promise<string> {
   if (!template.trim()) {
     return "You are working on an issue from Linear.";

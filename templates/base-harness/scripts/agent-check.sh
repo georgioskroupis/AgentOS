@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
+mode="full"
+
+case "${1:-}" in
+  --structure-only)
+    mode="structure-only"
+    ;;
+  "")
+    ;;
+  *)
+    echo "usage: scripts/agent-check.sh [--structure-only]" >&2
+    exit 2
+    ;;
+esac
 
 echo "==> Harness file check"
 
@@ -38,7 +51,16 @@ if [[ "$missing" -ne 0 ]]; then
   exit 1
 fi
 
+if [[ "$mode" == "structure-only" ]]; then
+  echo "Agent harness structure-only checks passed."
+  exit 0
+fi
+
 if [[ -f package.json ]]; then
+  if [[ ! -d node_modules ]]; then
+    echo "Full harness check requires node_modules. Run npm ci, or use --structure-only for structural validation only." >&2
+    exit 1
+  fi
   scripts="$(npm run 2>/dev/null || true)"
   if grep -q "format:check" <<<"$scripts"; then npm run format:check; fi
   if grep -q "lint" <<<"$scripts"; then npm run lint; fi

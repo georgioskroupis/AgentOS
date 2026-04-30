@@ -63,9 +63,20 @@ Checks whether the target repository has the expected harness files.
 Use `--workflow AGENTOS_WORKFLOW.md` when setup preserved an existing
 non-AgentOS `WORKFLOW.md`.
 
+### `workflow validate [path]`
+
+Validates workflow front matter and prompt configuration. Use `--strict` for
+production-safe defaults such as pinned Codex commands and disabled human merge
+override.
+
 ### `check <repo>`
 
 Runs the target repository's `scripts/agent-check.sh` if present.
+
+The AgentOS repo's own `npm run agent-check` is full validation by default and
+fails if dependency-backed checks cannot run. Use
+`scripts/agent-check.sh --structure-only` only when you intentionally want the
+required-file and contract subset.
 
 ### `orchestrator once --repo <repo>`
 

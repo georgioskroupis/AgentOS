@@ -26,4 +26,3 @@ describe("harness", () => {
     await expect(readFile(join(repo, "AGENTS.md"), "utf8")).rejects.toThrow();
   });
 });
-

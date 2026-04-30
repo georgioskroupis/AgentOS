@@ -2,6 +2,19 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+mode="full"
+
+case "${1:-}" in
+  --structure-only)
+    mode="structure-only"
+    ;;
+  "")
+    ;;
+  *)
+    echo "usage: scripts/agent-check.sh [--structure-only]" >&2
+    exit 2
+    ;;
+esac
 
 required=(
   "README.md"
@@ -57,12 +70,25 @@ bash -n "$root/scripts/agent-bootstrap-worktree.sh"
 bash -n "$root/templates/base-harness/scripts/agent-bootstrap-worktree.sh"
 node "$root/scripts/check-harness-contract.mjs"
 
-if [[ -d "$root/node_modules" ]]; then
-  npm --prefix "$root" run typecheck
-  npm --prefix "$root" test
-  npm --prefix "$root" run build
-else
-  echo "Skipping npm checks because node_modules is not installed."
+if [[ "$mode" == "structure-only" ]]; then
+  echo "AgentOS structure-only check passed."
+  exit 0
 fi
+
+if [[ ! -d "$root/node_modules" ]]; then
+  echo "Full AgentOS check requires node_modules. Run npm ci, or use --structure-only for structural validation only." >&2
+  exit 1
+fi
+
+npm --prefix "$root" run format:check
+npm --prefix "$root" run lint
+npm --prefix "$root" run typecheck
+npm --prefix "$root" run test
+npm --prefix "$root" run coverage
+npm --prefix "$root" run build
+npm --prefix "$root" run check:architecture
+npm --prefix "$root" run check:docs
+npm --prefix "$root" run check:security
+npm --prefix "$root" run check:contracts
 
 echo "AgentOS check passed."

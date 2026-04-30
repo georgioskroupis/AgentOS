@@ -18,4 +18,3 @@ Run:
 ```bash
 ./scripts/agent-check.sh
 ```
-

@@ -6,6 +6,7 @@ import { Orchestrator } from "../src/orchestrator.js";
 import type { AgentRunResult, AgentRunner, Issue, IssueTracker } from "../src/types.js";
 import { JsonlLogger } from "../src/logging.js";
 import { writeReviewArtifact } from "../src/review.js";
+import { writeValidationEvidence } from "../src/validation.js";
 
 const readyIssue: Issue = {
   id: "issue-1",
@@ -465,9 +466,16 @@ describe("orchestrator", () => {
           await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
           await writeFile(
             join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
-            "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1\n\nValidation passed.",
+            "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1\n\nValidation-JSON: .agent-os/validation/AG-1.json",
             "utf8"
           );
+          const now = new Date().toISOString();
+          await writeValidationEvidence(join(input.workspace.path, ".agent-os", "validation", "AG-1.json"), {
+            schemaVersion: 1,
+            issueIdentifier: "AG-1",
+            status: "passed",
+            commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+          });
           return { status: "succeeded" };
         }
         const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();

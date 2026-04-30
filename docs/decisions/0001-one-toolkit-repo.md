@@ -5,4 +5,3 @@ in one repository.
 
 This makes replication simple: projects install from one source, and the
 orchestrator can dogfood the same harness it applies elsewhere.
-

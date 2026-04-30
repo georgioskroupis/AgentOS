@@ -9,4 +9,3 @@ mkdir -p .agent-os/runs
 } > .agent-os/runs/latest-log-index.txt
 
 echo "Wrote .agent-os/runs/latest-log-index.txt"
-

@@ -6,4 +6,3 @@ Expected checks:
 - contract or integration tests for endpoints
 - health check validation
 - structured logging for failure paths
-

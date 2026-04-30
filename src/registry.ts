@@ -59,4 +59,3 @@ export async function removeProject(name: string, registryPath?: string): Promis
   await saveRegistry(registry, registryPath);
   return registry;
 }
-

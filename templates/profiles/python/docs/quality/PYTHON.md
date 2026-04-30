@@ -8,4 +8,3 @@ Expected checks when tools are installed:
 
 Agents should keep IO, orchestration, and domain logic separated enough for
 targeted tests.
-
