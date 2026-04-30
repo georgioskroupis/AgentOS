@@ -15,6 +15,8 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   `schemaVersion`, and record hashes for prompt/event/handoff artifacts.
 - Workspace locks live under `.agent-os/workspaces/.agent-os/locks/workspaces`
   with schema-versioned owners and are recovered when stale.
+- AgentOS lifecycle comments include `agentos:event` markers so Linear comments
+  can be updated in place instead of duplicated after retries or restarts.
 
 ## Validation
 

@@ -170,6 +170,7 @@ export interface IssueTracker {
   fetchIssueStates(issueIds: string[]): Promise<Map<string, Issue | null>>;
   fetchTerminalIssues?(terminalStates: string[]): Promise<Issue[]>;
   comment?(issueIdentifierOrId: string, body: string): Promise<void>;
+  upsertComment?(issueIdentifierOrId: string, body: string, key: string): Promise<void>;
   move?(issueIdentifierOrId: string, stateName: string): Promise<void>;
 }
 

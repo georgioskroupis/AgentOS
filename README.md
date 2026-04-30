@@ -149,6 +149,8 @@ the ticket for start, retry, failure, and review handoff. Codex focuses on the
 repo work and writes `.agent-os/handoff-<issue>.md` for the final Linear
 comment. Each handoff includes an `AgentOS-Outcome` line so already-satisfied
 issues can become no-op review handoffs instead of duplicate implementations.
+AgentOS-owned lifecycle comments include hidden `agentos:event` markers so
+retries and restarts update those comments in place when Linear supports it.
 Implemented PRs now pass through automated reviewer turns for self-review,
 correctness, tests, architecture, and conditional security review. Blocking
 findings trigger focused fixer turns on the same PR until reviewers approve or

@@ -206,6 +206,29 @@ export class LinearClient implements IssueTracker {
     );
   }
 
+  async upsertComment(issueIdentifierOrId: string, body: string, key: string): Promise<void> {
+    const issue = await this.findIssue(issueIdentifierOrId);
+    const marker = linearCommentMarker(key);
+    const markedBody = body.includes(marker) ? body : `${marker}\n${body}`;
+    const comments = await this.listIssueComments(issue.id);
+    const existing = comments.find((comment) => comment.body.includes(marker));
+    if (existing) {
+      await this.request(
+        `mutation AgentOSCommentUpdate($id: String!, $input: CommentUpdateInput!) {
+          commentUpdate(id: $id, input: $input) { success }
+        }`,
+        { id: existing.id, input: { body: markedBody } }
+      );
+    } else {
+      await this.request(
+        `mutation AgentOSComment($input: CommentCreateInput!) {
+          commentCreate(input: $input) { success }
+        }`,
+        { input: { issueId: issue.id, body: markedBody } }
+      );
+    }
+  }
+
   async move(issueIdentifierOrId: string, stateName: string): Promise<void> {
     const issue = await this.findIssue(issueIdentifierOrId);
     const states = await this.listWorkflowStates(issue.team.id);
@@ -233,6 +256,18 @@ export class LinearClient implements IssueTracker {
     const issue = data.issues.nodes[0];
     if (!issue) throw new Error(`Linear issue not found: ${issueIdentifierOrId}`);
     return issue;
+  }
+
+  private async listIssueComments(issueId: string): Promise<Array<{ id: string; body: string }>> {
+    const data = await this.request<{ issue: { comments: { nodes: Array<{ id: string; body: string }> } } }>(
+      `query AgentOSIssueComments($id: String!) {
+        issue(id: $id) {
+          comments(first: 50) { nodes { id body } }
+        }
+      }`,
+      { id: issueId }
+    );
+    return data.issue.comments.nodes;
   }
 
   private async request<T>(query: string, variables: Record<string, unknown>): Promise<T> {
@@ -278,6 +313,10 @@ export class LinearClient implements IssueTracker {
     } while (after);
     return issues;
   }
+}
+
+export function linearCommentMarker(key: string): string {
+  return `<!-- agentos:event=${key} -->`;
 }
 
 export function isLinearIdentifier(value: string): boolean {
