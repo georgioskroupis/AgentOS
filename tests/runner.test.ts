@@ -34,6 +34,7 @@ describe("CodexAppServerRunner", () => {
     const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-"));
     const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
     const config: ServiceConfig = {
+      trustMode: "ci-locked",
       tracker: {
         kind: "linear",
         endpoint: "https://api.linear.app/graphql",
@@ -59,7 +60,7 @@ describe("CodexAppServerRunner", () => {
         stallTimeoutMs: 5000,
         passThrough: {}
       },
-      github: { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
+      github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
       review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"] }
     };
 
@@ -83,6 +84,7 @@ describe("CodexAppServerRunner", () => {
     const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-instant-"));
     const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
     const config: ServiceConfig = {
+      trustMode: "ci-locked",
       tracker: {
         kind: "linear",
         endpoint: "https://api.linear.app/graphql",
@@ -108,7 +110,7 @@ describe("CodexAppServerRunner", () => {
         stallTimeoutMs: 5000,
         passThrough: {}
       },
-      github: { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
+      github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
       review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"] }
     };
 
@@ -129,6 +131,7 @@ describe("CodexAppServerRunner", () => {
     const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-sandbox-"));
     const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
     const config: ServiceConfig = {
+      trustMode: "ci-locked",
       tracker: {
         kind: "linear",
         endpoint: "https://api.linear.app/graphql",
@@ -152,7 +155,7 @@ describe("CodexAppServerRunner", () => {
         stallTimeoutMs: 5000,
         passThrough: {}
       },
-      github: { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
+      github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
       review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"] }
     };
 

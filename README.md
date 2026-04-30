@@ -142,9 +142,10 @@ Implemented PRs now pass through automated reviewer turns for self-review,
 correctness, tests, architecture, and conditional security review. Blocking
 findings trigger focused fixer turns on the same PR until reviewers approve or
 AgentOS escalates to Human Review with a concrete reason.
-When you move an approved issue to `Merging`, AgentOS reads the stored PR
-metadata, requires green GitHub checks, squash-merges, deletes the branch,
-comments in Linear, and moves the issue to `Done`.
+Public harness defaults leave `github.merge_mode: manual`; AgentOS dogfood opts
+into `shepherd`, where moving an approved issue to `Merging` lets AgentOS read
+the stored PR metadata, require green GitHub checks, squash-merge, delete the
+branch, comment in Linear, and move the issue to `Done`.
 
 The runner targets Codex App Server. Run:
 
@@ -153,4 +154,6 @@ bin/agent-os codex-doctor
 ```
 
 If this reports unavailable, upgrade or install a Codex build that exposes
-`npx -y @openai/codex@latest app-server` before running live orchestration.
+`npx -y @openai/codex@0.125.0 app-server` before running live orchestration.
+Run `bin/agent-os workflow validate --strict` to catch unsafe workflow drift,
+including unpinned Codex commands and incompatible trust-mode/network settings.

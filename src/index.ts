@@ -10,3 +10,5 @@ export * from "./orchestrator.js";
 export * from "./status.js";
 export * from "./redaction.js";
 export * from "./validation.js";
+export * from "./trust.js";
+export * from "./defaults.js";

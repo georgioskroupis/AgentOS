@@ -13,7 +13,8 @@ const requiredDocs = [
   "docs/runbooks/LINEAR_SETUP.md",
   "docs/runbooks/ROLLOUT.md",
   "docs/runbooks/MIGRATIONS.md",
-  "docs/security/SECURITY.md"
+  "docs/security/SECURITY.md",
+  "docs/security/ORCHESTRATOR_TRUST_MODEL.md"
 ];
 
 for (const path of requiredDocs) {

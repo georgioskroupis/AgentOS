@@ -1,6 +1,8 @@
 export const harnessProfiles = ["base", "typescript", "python", "web", "api"] as const;
 
 export type HarnessProfile = (typeof harnessProfiles)[number];
+export type TrustMode = "review-only" | "ci-locked" | "local-trusted" | "danger";
+export type GitHubMergeMode = "manual" | "shepherd" | "auto";
 
 export interface HarnessChange {
   action: "add" | "overwrite" | "exists" | "missing" | "invalid";
@@ -60,6 +62,7 @@ export interface WorkflowDefinition {
 }
 
 export interface ServiceConfig {
+  trustMode: TrustMode;
   tracker: {
     kind: "linear";
     endpoint: string;
@@ -104,6 +107,7 @@ export interface ServiceConfig {
   };
   github: {
     command: string;
+    mergeMode: GitHubMergeMode;
     mergeMethod: "squash" | "merge" | "rebase";
     requireChecks: boolean;
     deleteBranch: boolean;

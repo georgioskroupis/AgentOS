@@ -1,7 +1,9 @@
 import { dirname, resolve } from "node:path";
 import YAML from "yaml";
 import { Liquid } from "liquidjs";
+import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, readText } from "./fs-utils.js";
+import { defaultThreadSandboxForTrustMode, defaultTurnSandboxPolicyForTrustMode, parseGitHubMergeMode, parseTrustMode, validateTrustCompatibility } from "./trust.js";
 import type { Issue, ServiceConfig, WorkflowDefinition } from "./types.js";
 
 const defaultActiveStates = ["Todo", "In Progress"];
@@ -51,6 +53,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
   const codex = objectAt(cfg, "codex");
   const github = objectAt(cfg, "github");
   const workflowDir = dirname(workflow.workflowPath);
+  const trustMode = parseTrustMode(cfg.trust_mode);
 
   const trackerKind = stringAt(tracker, "kind", "linear");
   if (trackerKind !== "linear") {
@@ -62,6 +65,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
   const projectSlug = stringAt(tracker, "project_slug", stringAt(tracker, "projectSlug", ""));
 
   return {
+    trustMode,
     tracker: {
       kind: "linear",
       endpoint: stringAt(tracker, "endpoint", "https://api.linear.app/graphql"),
@@ -95,10 +99,10 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       maxConcurrentAgentsByState: stateConcurrencyMap(agent.max_concurrent_agents_by_state)
     },
     codex: {
-      command: stringAt(codex, "command", "npx -y @openai/codex@latest app-server"),
+      command: stringAt(codex, "command", DEFAULT_CODEX_APP_SERVER_COMMAND),
       approvalPolicy: codex.approval_policy,
-      threadSandbox: codex.thread_sandbox,
-      turnSandboxPolicy: codex.turn_sandbox_policy,
+      threadSandbox: codex.thread_sandbox ?? defaultThreadSandboxForTrustMode(trustMode),
+      turnSandboxPolicy: codex.turn_sandbox_policy ?? defaultTurnSandboxPolicyForTrustMode(trustMode),
       turnTimeoutMs: positiveIntAt(codex, "turn_timeout_ms", 3_600_000),
       readTimeoutMs: positiveIntAt(codex, "read_timeout_ms", 5_000),
       stallTimeoutMs: intAt(codex, "stall_timeout_ms", 300_000),
@@ -106,11 +110,12 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
     },
     github: {
       command: stringAt(github, "command", "gh"),
+      mergeMode: parseGitHubMergeMode(github.merge_mode),
       mergeMethod: mergeMethodAt(github, "merge_method", "squash"),
       requireChecks: booleanAt(github, "require_checks", true),
       deleteBranch: booleanAt(github, "delete_branch", true),
       doneState: stringAt(github, "done_state", "Done"),
-      allowHumanMergeOverride: booleanAt(github, "allow_human_merge_override", true)
+      allowHumanMergeOverride: booleanAt(github, "allow_human_merge_override", false)
     },
     review: {
       enabled: booleanAt(objectAt(cfg, "review"), "enabled", true),
@@ -152,6 +157,14 @@ export function validateWorkflowDefinition(workflow: WorkflowDefinition, env: No
   if (!config.tracker.terminalStates.length) errors.push("tracker.terminal_states must include at least one state");
   if (!workflow.prompt_template.trim()) warnings.push("workflow prompt template is empty");
   if (config.github.requireChecks === false) warnings.push("github.require_checks is disabled");
+  const trust = validateTrustCompatibility({
+    trustMode: config.trustMode,
+    githubMergeMode: config.github.mergeMode,
+    turnSandboxPolicy: config.codex.turnSandboxPolicy,
+    reviewEnabled: config.review.enabled
+  });
+  errors.push(...trust.errors);
+  warnings.push(...trust.warnings);
 
   if (strict) {
     if (!config.tracker.apiKey) errors.push("tracker.api_key did not resolve from the environment");

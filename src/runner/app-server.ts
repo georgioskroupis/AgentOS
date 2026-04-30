@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
 import type { AgentRunResult, AgentRunner } from "../types.js";
 
 interface PendingRequest {
@@ -7,7 +8,7 @@ interface PendingRequest {
   timer: NodeJS.Timeout;
 }
 
-export async function verifyCodexAppServer(command = "npx -y @openai/codex@latest app-server"): Promise<{ ok: boolean; details: string }> {
+export async function verifyCodexAppServer(command = DEFAULT_CODEX_APP_SERVER_COMMAND): Promise<{ ok: boolean; details: string }> {
   const output = await captureShell(`${command} --help`, 5_000).catch((error: Error) => error.message);
   const ok = /app server|app-server protocol|json-rpc/i.test(output) && !/Commands:\s+exec\s+Run Codex non-interactively/i.test(output);
   return { ok, details: output.trim() };
@@ -223,12 +224,18 @@ function normalizeSandboxPolicy(policy: unknown, workspacePath: string): unknown
   if (policy && typeof policy === "object" && !Array.isArray(policy)) {
     const normalized = { ...(policy as Record<string, unknown>) };
     normalized.type = normalizeTurnSandbox(normalized.type);
+    if (normalized.type === "workspaceWrite" && !Array.isArray(normalized.writableRoots)) {
+      normalized.writableRoots = [workspacePath];
+    }
+    if (typeof normalized.networkAccess !== "boolean") {
+      normalized.networkAccess = false;
+    }
     return normalized;
   }
   return {
     type: "workspaceWrite",
     writableRoots: [workspacePath],
-    networkAccess: true
+    networkAccess: false
   };
 }
 

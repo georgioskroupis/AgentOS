@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { DEFAULT_CODEX_EXEC_PACKAGE } from "./defaults.js";
 import { exists, isDirectory, readText, walkFiles, writeTextEnsuringDir } from "./fs-utils.js";
 import type { HarnessProfile } from "./types.js";
 
@@ -168,7 +169,7 @@ async function codexSummaryProvider(staticProfile: ProjectProfile): Promise<Part
       "npx",
       [
         "-y",
-        "@openai/codex@latest",
+        DEFAULT_CODEX_EXEC_PACKAGE,
         "exec",
         "-c",
         'model_reasoning_effort="low"',

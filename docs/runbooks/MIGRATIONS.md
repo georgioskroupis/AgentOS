@@ -17,3 +17,13 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   dependency-backed checks.
 - Future validation evidence is JSON-first so the orchestrator can verify issue,
   run, command, timestamp, and exit-code metadata mechanically.
+
+## Workflow Defaults
+
+- New harness installs should use `trust_mode: ci-locked`,
+  `github.merge_mode: manual`, and `github.allow_human_merge_override: false`.
+- Existing dogfood workflows may opt into `trust_mode: local-trusted` and
+  `github.merge_mode: shepherd` when they intentionally need PR/network access.
+- Codex App Server commands should be pinned. Replace
+  `@openai/codex@latest app-server` with the current pinned command from
+  `src/defaults.ts`.

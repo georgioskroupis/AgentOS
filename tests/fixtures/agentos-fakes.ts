@@ -22,6 +22,7 @@ export function fakeIssue(overrides: Partial<Issue> = {}): Issue {
 
 export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): ServiceConfig {
   return {
+    trustMode: "ci-locked",
     tracker: {
       kind: "linear",
       endpoint: "https://linear.test/graphql",
@@ -53,11 +54,12 @@ export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): Servi
     },
     github: {
       command: "gh",
+      mergeMode: "manual",
       mergeMethod: "squash",
       requireChecks: true,
       deleteBranch: true,
       doneState: "Done",
-      allowHumanMergeOverride: true
+      allowHumanMergeOverride: false
     },
     review: {
       enabled: false,
