@@ -9,6 +9,8 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   public contract.
 - Readers should preserve legacy fields long enough to support existing local
   runs, then write the current shape on the next state update.
+- Issue state lazily migrates legacy `prUrl` to `prs[]` and keeps `prUrl` as a
+  primary-PR compatibility mirror while downstream code moves to `prs[]`.
 
 ## Validation
 

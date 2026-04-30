@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
+import { normalizeIssueState, pullRequestUrls } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
 
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
@@ -25,13 +26,14 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
   const entries = (await logger.tail(500))
     .filter((entry) => entry.issueIdentifier?.toLowerCase() === identifier.toLowerCase())
     .slice(-limit);
-  const state = (await exists(statePath)) ? JSON.parse(await readText(statePath)) : null;
+  const state = (await exists(statePath)) ? normalizeIssueState(JSON.parse(await readText(statePath))) : null;
+  const prs = pullRequestUrls(state);
   const reviewRoot = join(root, ".agent-os", "reviews", safeFileName(identifier));
   const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot) : [];
   const lines = [
     `Issue: ${identifier}`,
     state ? `Phase: ${state.phase ?? "unknown"}` : "Phase: unknown",
-    state?.prUrl ? `PR: ${state.prUrl}` : "PR: none recorded",
+    prs.length ? `PRs:\n${prs.map((url) => `- ${url}`).join("\n")}` : "PRs: none recorded",
     state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
     state?.lastError ? `Last error: ${state.lastError}` : null,
     state?.nextRetryAt ? `Next retry: ${state.nextRetryAt}` : null,

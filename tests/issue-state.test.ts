@@ -1,5 +1,8 @@
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractOutcome, issueStateFromHandoff } from "../src/issue-state.js";
+import { extractOutcome, extractPullRequestUrls, issueStateFromHandoff, IssueStateStore } from "../src/issue-state.js";
 import type { Issue } from "../src/types.js";
 
 const issue: Issue = {
@@ -31,6 +34,7 @@ describe("issue state handoff parsing", () => {
 
     expect(extractOutcome(handoff)).toBe("already_satisfied");
     expect(issueStateFromHandoff(issue, handoff)).toMatchObject({
+      schemaVersion: 1,
       issueId: "issue-1",
       issueIdentifier: "AG-1",
       outcome: "already_satisfied"
@@ -43,11 +47,63 @@ describe("issue state handoff parsing", () => {
       "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1"
     );
 
+    expect(extractPullRequestUrls("PR: https://github.com/o/r/pull/1\nFollow-up: https://github.com/o/r/pull/2")).toEqual([
+      "https://github.com/o/r/pull/1",
+      "https://github.com/o/r/pull/2"
+    ]);
     expect(state).toMatchObject({
+      schemaVersion: 1,
       prUrl: "https://github.com/o/r/pull/1",
+      prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff" }],
       outcome: "implemented",
       reviewStatus: "pending",
       reviewIteration: 0
     });
+  });
+
+  it("stores multiple PRs from handoff text", () => {
+    const state = issueStateFromHandoff(
+      issue,
+      [
+        "AgentOS-Outcome: implemented",
+        "PR: https://github.com/o/r/pull/1",
+        "Follow-up PR: https://github.com/o/r/pull/2",
+        "Duplicate mention: https://github.com/o/r/pull/1"
+      ].join("\n")
+    );
+
+    expect(state?.prs?.map((pr) => pr.url)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
+    expect(state?.prUrl).toBe("https://github.com/o/r/pull/1");
+  });
+
+  it("lazily migrates legacy prUrl state to prs on merge", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-issue-state-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        prUrl: "https://github.com/o/r/pull/1",
+        updatedAt: "2026-01-01T00:00:00.000Z"
+      }),
+      "utf8"
+    );
+
+    const store = new IssueStateStore(repo);
+    const read = await store.read("AG-1");
+    expect(read).toMatchObject({
+      schemaVersion: 1,
+      prs: [{ url: "https://github.com/o/r/pull/1", source: "legacy" }]
+    });
+
+    await store.merge("AG-1", {
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      prs: [{ url: "https://github.com/o/r/pull/2", source: "manual", discoveredAt: "2026-01-02T00:00:00.000Z" }]
+    });
+    const persisted = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(persisted.schemaVersion).toBe(1);
+    expect(persisted.prs.map((pr: { url: string }) => pr.url)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
   });
 });
