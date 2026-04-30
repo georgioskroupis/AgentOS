@@ -36,6 +36,8 @@ export class CodexAppServerRunner implements AgentRunner {
     let turnId: string | undefined;
     let turnCompletion: ((message: Record<string, any>) => void) | undefined;
     let turnFailure: ((error: Error) => void) | undefined;
+    let bufferedTurnCompletion: Record<string, any> | undefined;
+    let bufferedTurnError: Error | undefined;
     let lastEventAt = Date.now();
 
     const send = (method: string, params: Record<string, unknown>) => {
@@ -48,6 +50,10 @@ export class CodexAppServerRunner implements AgentRunner {
         }, input.config.codex.readTimeoutMs);
         pending.set(requestId, { resolve, reject, timer });
       });
+    };
+
+    const notify = (method: string, params: Record<string, unknown> = {}) => {
+      child.stdin.write(`${JSON.stringify({ method, params })}\n`);
     };
 
     child.stderr.on("data", (chunk) => {
@@ -82,10 +88,13 @@ export class CodexAppServerRunner implements AgentRunner {
             threadId = message.params?.threadId ?? message.params?.thread?.id ?? message.params?.thread_id ?? message.thread_id ?? threadId;
             turnId = message.params?.turnId ?? message.params?.turn?.id ?? message.params?.turn_id ?? message.turn_id ?? turnId;
             if (message.method === "turn/completed" && (!turnId || message.params?.turn?.id === turnId)) {
-              turnCompletion?.(message);
+              if (turnCompletion) turnCompletion(message);
+              else bufferedTurnCompletion = message;
             }
             if (message.method === "error" && (!turnId || message.params?.turnId === turnId)) {
-              turnFailure?.(new Error(message.params?.error?.message ?? "codex_turn_error"));
+              const error = new Error(message.params?.error?.message ?? "codex_turn_error");
+              if (turnFailure) turnFailure(error);
+              else bufferedTurnError = error;
             }
           }
         } catch {
@@ -119,20 +128,25 @@ export class CodexAppServerRunner implements AgentRunner {
           experimentalApi: true
         }
       });
+      notify("initialized");
       const thread = (await send("thread/start", {
         cwd: input.workspace.path,
         approvalPolicy: input.config.codex.approvalPolicy ?? "never",
-        sandbox: input.config.codex.threadSandbox ?? "workspace-write",
+        sandbox: input.config.codex.threadSandbox ?? "workspaceWrite",
         experimentalRawEvents: false,
         persistExtendedHistory: true
       })) as Record<string, any>;
       threadId = String(thread.thread?.id ?? thread.threadId ?? thread.id ?? "");
       const turn = (await send("turn/start", {
         threadId,
-        input: [{ type: "text", text: input.prompt, text_elements: [] }],
+        input: [{ type: "text", text: input.prompt }],
         cwd: input.workspace.path,
         approvalPolicy: input.config.codex.approvalPolicy ?? "never",
-        sandboxPolicy: input.config.codex.turnSandboxPolicy
+        sandboxPolicy: input.config.codex.turnSandboxPolicy ?? {
+          type: "workspaceWrite",
+          writableRoots: [input.workspace.path],
+          networkAccess: true
+        }
       })) as Record<string, any>;
       turnId = String(turn.turn?.id ?? turn.turnId ?? turn.id ?? "");
 
@@ -142,6 +156,13 @@ export class CodexAppServerRunner implements AgentRunner {
         register(resolve, reject) {
           turnCompletion = resolve;
           turnFailure = reject;
+          if (bufferedTurnError) {
+            reject(bufferedTurnError);
+            bufferedTurnError = undefined;
+          } else if (bufferedTurnCompletion) {
+            resolve(bufferedTurnCompletion);
+            bufferedTurnCompletion = undefined;
+          }
         },
         cancel() {
           if (threadId && turnId) {
@@ -155,7 +176,7 @@ export class CodexAppServerRunner implements AgentRunner {
       child.kill("SIGTERM");
       const status = completion.params?.turn?.status;
       return {
-        status: status === "failed" ? "failed" : "succeeded",
+        status: status === "completed" ? "succeeded" : status === "interrupted" ? "canceled" : "failed",
         threadId,
         turnId,
         error: completion.params?.turn?.error?.message

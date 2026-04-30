@@ -1,8 +1,3 @@
-# GitHub CI Runbook
-
-AgentOS includes `.github/workflows/ci.yml`. It runs:
-
-```yaml
 name: AgentOS CI
 
 on:
@@ -22,8 +17,3 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run agent-check
-```
-
-GitHub auth used to push workflow-file changes must include the `workflow`
-scope. The merge shepherd requires at least one successful GitHub check before
-it squash-merges a PR.

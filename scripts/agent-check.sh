@@ -9,6 +9,7 @@ required=(
   "ARCHITECTURE.md"
   "WORKFLOW.md"
   "agent-os.yml"
+  ".github/workflows/ci.yml"
   "package.json"
   "tsconfig.json"
   "templates/base-harness/AGENTS.md"
@@ -23,6 +24,8 @@ required=(
   "skills/generate-exec-plan/SKILL.md"
   "skills/cleanup-tech-debt/SKILL.md"
   "bin/agent-os"
+  "src/github.ts"
+  "src/issue-state.ts"
 )
 
 missing=0

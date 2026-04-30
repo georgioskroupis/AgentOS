@@ -2,7 +2,9 @@ node_modules/
 dist/
 coverage/
 .agent-os/runs/
+.agent-os/state/
 .agent-os/workspaces/
+.agent-os/env
+.agent-os/*.env
 .DS_Store
 *.log
-

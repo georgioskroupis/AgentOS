@@ -7,6 +7,31 @@ interface GraphQLResponse<T> {
   errors?: Array<{ message: string }>;
 }
 
+interface IssueConnection {
+  issues: {
+    nodes: unknown[];
+    pageInfo?: {
+      hasNextPage?: boolean;
+      endCursor?: string | null;
+    };
+  };
+}
+
+const issueNodeSelection = `
+  id
+  identifier
+  title
+  description
+  priority
+  branchName
+  url
+  createdAt
+  updatedAt
+  state { name }
+  labels { nodes { name } }
+  relations { nodes { type relatedIssue { id identifier createdAt updatedAt state { name } } } }
+`;
+
 export interface LinearTeam {
   id: string;
   key: string;
@@ -17,6 +42,12 @@ export interface LinearState {
   id: string;
   name: string;
   type?: string;
+}
+
+export interface LinearProject {
+  id: string;
+  name: string;
+  slugId?: string;
 }
 
 export class LinearClient implements IssueTracker {
@@ -33,60 +64,20 @@ export class LinearClient implements IssueTracker {
   }
 
   async fetchCandidates(activeStates: string[]): Promise<Issue[]> {
-    const query = `
-      query AgentOSIssues($filter: IssueFilter, $first: Int!) {
-        issues(filter: $filter, first: $first) {
-          nodes {
-            id
-            identifier
-            title
-            description
-            priority
-            branchName
-            url
-            createdAt
-            updatedAt
-            state { name }
-            labels { nodes { name } }
-            relations { nodes { type relatedIssue { id identifier createdAt updatedAt state { name } } } }
-          }
-        }
-      }
-    `;
     const filter = {
-      project: { slugId: { eq: this.projectSlug } },
+      project: projectFilter(this.projectSlug),
       state: { name: { in: activeStates } }
     };
-    const data = await this.request<{ issues: { nodes: unknown[] } }>(query, { filter, first: 100 });
-    return data.issues.nodes.map(normalizeLinearIssue).sort(compareIssuesForDispatch);
+    return (await this.fetchIssues(filter)).sort(compareIssuesForDispatch);
   }
 
   async fetchIssueStates(issueIds: string[]): Promise<Map<string, Issue | null>> {
     const result = new Map<string, Issue | null>();
     if (issueIds.length === 0) return result;
-    const query = `
-      query AgentOSIssuesById($filter: IssueFilter, $first: Int!) {
-        issues(filter: $filter, first: $first) {
-          nodes {
-            id
-            identifier
-            title
-            description
-            priority
-            branchName
-            url
-            createdAt
-            updatedAt
-            state { name }
-            labels { nodes { name } }
-            relations { nodes { type relatedIssue { id identifier createdAt updatedAt state { name } } } }
-          }
-        }
-      }
-    `;
-    const data = await this.request<{ issues: { nodes: unknown[] } }>(query, {
+    const data = await this.request<IssueConnection>(issueQuery("AgentOSIssuesById"), {
       filter: { id: { in: issueIds } },
-      first: issueIds.length
+      first: issueIds.length,
+      after: null
     });
     for (const id of issueIds) result.set(id, null);
     for (const node of data.issues.nodes) {
@@ -97,34 +88,10 @@ export class LinearClient implements IssueTracker {
   }
 
   async fetchTerminalIssues(terminalStates: string[]): Promise<Issue[]> {
-    const query = `
-      query AgentOSTerminalIssues($filter: IssueFilter, $first: Int!) {
-        issues(filter: $filter, first: $first) {
-          nodes {
-            id
-            identifier
-            title
-            description
-            priority
-            branchName
-            url
-            createdAt
-            updatedAt
-            state { name }
-            labels { nodes { name } }
-            relations { nodes { type relatedIssue { id identifier createdAt updatedAt state { name } } } }
-          }
-        }
-      }
-    `;
-    const data = await this.request<{ issues: { nodes: unknown[] } }>(query, {
-      filter: {
-        project: { slugId: { eq: this.projectSlug } },
-        state: { name: { in: terminalStates } }
-      },
-      first: 100
+    return this.fetchIssues({
+      project: projectFilter(this.projectSlug),
+      state: { name: { in: terminalStates } }
     });
-    return data.issues.nodes.map(normalizeLinearIssue);
   }
 
   async listTeams(): Promise<LinearTeam[]> {
@@ -137,7 +104,7 @@ export class LinearClient implements IssueTracker {
 
   async listWorkflowStates(teamId: string): Promise<LinearState[]> {
     const data = await this.request<{ workflowStates: { nodes: LinearState[] } }>(
-      `query AgentOSStates($teamId: String!) {
+      `query AgentOSStates($teamId: ID!) {
         workflowStates(filter: { team: { id: { eq: $teamId } } }) {
           nodes { id name type }
         }
@@ -145,6 +112,20 @@ export class LinearClient implements IssueTracker {
       { teamId }
     );
     return data.workflowStates.nodes;
+  }
+
+  async findProject(slugOrName: string): Promise<LinearProject | null> {
+    const data = await this.request<{ projects: { nodes: LinearProject[] } }>(
+      `query AgentOSProjects($filter: ProjectFilter) {
+        projects(filter: $filter, first: 10) { nodes { id name slugId } }
+      }`,
+      {
+        filter: {
+          or: [{ slugId: { eq: slugOrName } }, { name: { eq: slugOrName } }]
+        }
+      }
+    );
+    return data.projects.nodes.find((project) => project.slugId === slugOrName || project.name === slugOrName) ?? null;
   }
 
   async createProject(name: string, teamId: string): Promise<{ id: string; name: string; slugId?: string }> {
@@ -181,12 +162,13 @@ export class LinearClient implements IssueTracker {
     return data.issueCreate.issue;
   }
 
-  async comment(issueId: string, body: string): Promise<void> {
+  async comment(issueIdentifierOrId: string, body: string): Promise<void> {
+    const issue = await this.findIssue(issueIdentifierOrId);
     await this.request(
       `mutation AgentOSComment($input: CommentCreateInput!) {
         commentCreate(input: $input) { success }
       }`,
-      { input: { issueId, body } }
+      { input: { issueId: issue.id, body } }
     );
   }
 
@@ -206,9 +188,8 @@ export class LinearClient implements IssueTracker {
   }
 
   private async findIssue(issueIdentifierOrId: string): Promise<{ id: string; identifier: string; team: LinearTeam }> {
-    const filter = issueIdentifierOrId.includes("-")
-      ? { identifier: { eq: issueIdentifierOrId } }
-      : { id: { eq: issueIdentifierOrId } };
+    const trimmed = issueIdentifierOrId.trim();
+    const filter = isLinearIdentifier(trimmed) ? identifierFilter(trimmed) : { id: { eq: trimmed } };
     const data = await this.request<{ issues: { nodes: Array<{ id: string; identifier: string; team: LinearTeam }> } }>(
       `query AgentOSFindIssue($filter: IssueFilter) {
         issues(filter: $filter, first: 1) { nodes { id identifier team { id key name } } }
@@ -231,7 +212,8 @@ export class LinearClient implements IssueTracker {
       body: JSON.stringify({ query, variables })
     });
     if (!response.ok) {
-      throw new Error(`linear_api_status: ${response.status}`);
+      const details = await response.text().catch(() => "");
+      throw new Error(`linear_api_status: ${response.status}${details ? ` ${details.slice(0, 300)}` : ""}`);
     }
     const payload = (await response.json()) as GraphQLResponse<T>;
     if (payload.errors?.length) {
@@ -242,6 +224,38 @@ export class LinearClient implements IssueTracker {
     }
     return payload.data;
   }
+
+  private async fetchIssues(filter: Record<string, unknown>, first = 100): Promise<Issue[]> {
+    const issues: Issue[] = [];
+    let after: string | null = null;
+    do {
+      const data: IssueConnection = await this.request<IssueConnection>(issueQuery("AgentOSIssues"), {
+        filter,
+        first,
+        after
+      });
+      issues.push(...data.issues.nodes.map(normalizeLinearIssue));
+      const pageInfo: IssueConnection["issues"]["pageInfo"] = data.issues.pageInfo;
+      if (!pageInfo?.hasNextPage) break;
+      if (!pageInfo.endCursor) {
+        throw new Error("linear_missing_end_cursor");
+      }
+      after = pageInfo.endCursor;
+    } while (after);
+    return issues;
+  }
+}
+
+export function isLinearIdentifier(value: string): boolean {
+  return /^[A-Z][A-Z0-9]*-\d+$/i.test(value.trim());
+}
+
+function identifierFilter(identifier: string): Record<string, unknown> {
+  const [teamKey, number] = identifier.trim().toUpperCase().split("-");
+  return {
+    team: { key: { eq: teamKey } },
+    number: { eq: Number.parseInt(number, 10) }
+  };
 }
 
 export function compareIssuesForDispatch(a: Issue, b: Issue): number {
@@ -261,7 +275,7 @@ function normalizeLinearIssue(node: unknown): Issue {
     : [];
   const blockedBy = Array.isArray(raw.relations?.nodes)
     ? raw.relations.nodes
-        .filter((relation: any) => String(relation.type ?? "").toLowerCase().includes("block"))
+        .filter((relation: any) => isBlockedByRelation(relation.type))
         .map((relation: any) => relation.relatedIssue)
         .filter(Boolean)
         .map((related: any) => ({
@@ -288,3 +302,29 @@ function normalizeLinearIssue(node: unknown): Issue {
   };
 }
 
+function issueQuery(operationName: string): string {
+  return `
+    query ${operationName}($filter: IssueFilter, $first: Int!, $after: String) {
+      issues(filter: $filter, first: $first, after: $after) {
+        nodes {
+          ${issueNodeSelection}
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  `;
+}
+
+function projectFilter(projectSlugOrName: string): Record<string, unknown> {
+  return {
+    or: [{ slugId: { eq: projectSlugOrName } }, { name: { eq: projectSlugOrName } }]
+  };
+}
+
+function isBlockedByRelation(type: unknown): boolean {
+  const normalized = String(type ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return normalized === "blocked_by" || normalized === "blockedby" || normalized === "is_blocked_by";
+}

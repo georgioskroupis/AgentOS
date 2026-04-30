@@ -1,7 +1,7 @@
 # AgentOS
 
 AgentOS is a small toolkit for making repositories agent-readable, agent-testable,
-and ready for orchestration.
+and ready for Linear-backed orchestration.
 
 The first milestone is intentionally modest:
 
@@ -41,11 +41,21 @@ Runs the target repository's `scripts/agent-check.sh` if present.
 Runs one Symphony-style scheduling pass:
 
 1. read `WORKFLOW.md`
-2. fetch eligible Linear issues
+2. fetch paginated eligible Linear issues
 3. create deterministic workspaces
 4. render strict prompts
 5. start Codex App Server runs
-6. write `.agent-os/runs/agent-os.jsonl`
+6. move/comment on Linear for start, retry, failure, and review handoff
+7. persist PR metadata from handoff notes
+8. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
+9. track retries, unchanged successful issues, and reconciliation
+10. write `.agent-os/runs/agent-os.jsonl`
+
+Continuous mode is:
+
+```bash
+bin/agent-os orchestrator run --repo <repo> --workflow WORKFLOW.md
+```
 
 ### `linear seed-roadmap`
 
@@ -54,12 +64,21 @@ creates the ordered AgentOS implementation roadmap.
 
 ```bash
 bin/agent-os linear teams
+bin/agent-os linear doctor --team <team-key-or-id>
 bin/agent-os linear seed-roadmap --team <team-key-or-id> --project AgentOS
 ```
 
 ## Current Integration Notes
 
-The orchestrator targets Codex App Server. Run:
+Linear is the control plane: issues in configured active states are dispatched,
+blocked issues wait for their blockers, and the orchestrator moves/comments on
+the ticket for start, retry, failure, and review handoff. Codex focuses on the
+repo work and writes `.agent-os/handoff-<issue>.md` for the final Linear
+comment. When you move an approved issue to `Merging`, AgentOS reads the stored
+PR metadata, requires green GitHub checks, squash-merges, deletes the branch,
+comments in Linear, and moves the issue to `Done`.
+
+The runner targets Codex App Server. Run:
 
 ```bash
 bin/agent-os codex-doctor

@@ -6,8 +6,11 @@ repeatable operating system:
 - project harnesses make repositories legible to agents
 - validation scripts make quality executable
 - reusable skills make good workflows portable
-- future orchestration can assign eligible issues continuously
+- Linear-backed orchestration can assign eligible issues continuously
 
-The near-term product promise is simple: any project can run `agent-os init`,
-`agent-os doctor`, and `agent-os check`.
+The product promise is simple:
 
+- Any project can run `agent-os init`, `agent-os doctor`, and `agent-os check`.
+- Any registered Linear project can be polled by the Symphony-style
+  orchestrator, worked in an isolated workspace, validated by the harness, and
+  handed back for human review.

@@ -5,11 +5,17 @@ tracker:
   api_key: $LINEAR_API_KEY
   project_slug: CHANGE_ME
   active_states:
-    - Ready
+    - Todo
+    - In Progress
   terminal_states:
+    - Closed
     - Done
     - Canceled
-    - Cancelled
+    - Duplicate
+  running_state: In Progress
+  review_state: Human Review
+  merge_state: Merging
+  needs_input_state: Human Review
 polling:
   interval_ms: 30000
 workspace:
@@ -20,49 +26,54 @@ hooks:
 agent:
   max_concurrent_agents: 1
   max_turns: 20
+  max_retry_attempts: 3
   max_retry_backoff_ms: 300000
 codex:
   command: npx -y @openai/codex@latest app-server
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
+github:
+  command: gh
+  merge_method: squash
+  require_checks: true
+  delete_branch: true
+  done_state: Done
 ---
 
 # WORKFLOW.md
 
 ## Ticket Lifecycle
 
-Eligible statuses:
+Recommended Symphony-style statuses:
 
-- Ready for Agent
-- In Progress by Agent
-- Agent Review
+- Todo
+- In Progress
 - Human Review
-- Needs Human Input
+- Merging
 - Done
+- Closed
+- Canceled
+- Duplicate
 
 ## Agent Responsibilities
 
 When assigned a ticket:
 
-1. Move the ticket to `In Progress by Agent`.
-2. Create or reuse an isolated workspace.
-3. Create a branch named `agent/<ticket-id>-short-title`.
-4. Reproduce the issue or define the target behavior.
-5. Implement the change.
-6. Run validation.
-7. Open or update a PR.
-8. Add a ticket comment with summary, validation, artifacts, risks, and links.
-9. Move the ticket to `Human Review`.
+1. Work in the isolated workspace provided by AgentOS.
+2. Reproduce the issue or define the target behavior.
+3. Implement the smallest coherent change.
+4. Run validation.
+5. Open or update a PR when validation passes.
+6. Write `.agent-os/handoff-{{ issue.identifier }}.md` with summary, validation, artifacts, risks, and links.
+7. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
 
 ## Failure Behavior
 
 If blocked:
 
-- Comment with the blocker.
-- Include attempted steps.
-- Suggest the smallest next human decision.
-- Move the ticket to `Needs Human Input`.
+- Write the blocker, attempted steps, smallest next human decision, and current validation state in the handoff file.
+- Let the AgentOS orchestrator post the handoff and move the issue to `Human Review`.
 
 ## Follow-Up Discovery
 
@@ -79,13 +90,13 @@ Issue:
 - Title: {{ issue.title }}
 - State: {{ issue.state }}
 - URL: {{ issue.url }}
+- Attempt: {{ attempt | default: 0 }}
 
 Responsibilities:
 
-1. Move the Linear issue to `In Progress` with `agent-os linear move {{ issue.identifier }} "In Progress"`.
-2. Work in the isolated workspace provided by AgentOS.
-3. Make the smallest coherent change that satisfies the issue.
-4. Run `./scripts/agent-check.sh`.
-5. Open or update a GitHub PR when validation passes.
-6. Comment on the Linear issue with summary, validation, risks, and PR link.
-7. Move the issue to `In Review`.
+1. Work in the isolated workspace provided by AgentOS.
+2. Make the smallest coherent change that satisfies the issue.
+3. Run `./scripts/agent-check.sh`.
+4. Open or update a GitHub PR when validation passes.
+5. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with summary, validation, risks, and PR link.
+6. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.

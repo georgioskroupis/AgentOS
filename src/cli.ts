@@ -2,11 +2,13 @@
 import { Command } from "commander";
 import { resolve } from "node:path";
 import { addProject, loadRegistry, removeProject } from "./registry.js";
+import { readText } from "./fs-utils.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
 import { getStatus } from "./status.js";
 import { LinearClient } from "./linear.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
+import { verifyGitHubCli } from "./github.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
 
 const program = new Command();
@@ -134,7 +136,7 @@ program
     console.log(await getStatus(options.repo, Number.parseInt(options.limit, 10)));
   });
 
-const linear = program.command("linear").description("Agent-callable Linear helpers");
+const linear = program.command("linear").description("Linear helper commands");
 
 linear
   .command("teams")
@@ -146,14 +148,57 @@ linear
   });
 
 linear
-  .command("comment")
-  .argument("<issue-id>", "Linear issue id")
-  .argument("<body...>", "comment body")
+  .command("doctor")
+  .requiredOption("--team <team>", "Linear team id or key")
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
-  .action(async (issueId, body, options) => {
+  .action(async (options) => {
+    const workflow = await loadWorkflow(options.workflow);
+    const config = resolveServiceConfig(workflow);
+    const client = new LinearClient(config.tracker);
+    const teams = await client.listTeams();
+    const team = teams.find((candidate) => candidate.id === options.team || candidate.key === options.team);
+    if (!team) throw new Error(`Linear team not found: ${options.team}`);
+
+    const project = await client.findProject(config.tracker.projectSlug);
+    if (!project) throw new Error(`Linear project not found: ${config.tracker.projectSlug}`);
+
+    const statuses = await client.listWorkflowStates(team.id);
+    const statusNames = new Set(statuses.map((status) => status.name.toLowerCase()));
+    const requiredStates = [
+      ...config.tracker.activeStates,
+      ...config.tracker.terminalStates,
+      config.tracker.runningState,
+      config.tracker.reviewState,
+      config.tracker.mergeState,
+      config.tracker.needsInputState,
+      config.github.doneState
+    ].filter((state): state is string => Boolean(state));
+    const missing = [...new Set(requiredStates)].filter((state) => !statusNames.has(state.toLowerCase()));
+    if (missing.length > 0) {
+      throw new Error(`Linear states missing in team ${team.key}: ${missing.join(", ")}`);
+    }
+
+    const candidates = await client.fetchCandidates(config.tracker.activeStates);
+    const github = await verifyGitHubCli(config.github.command, process.cwd());
+    console.log(`Linear OK: team=${team.key} project=${project.slugId ?? project.name}`);
+    console.log(`Configured active states: ${config.tracker.activeStates.join(", ")}`);
+    console.log(`Eligible candidate issues: ${candidates.length}`);
+    console.log(github.ok ? "GitHub CLI OK" : `GitHub CLI unavailable: ${github.details}`);
+    if (!github.ok) process.exitCode = 1;
+  });
+
+linear
+  .command("comment")
+  .argument("<issue>", "Linear issue id or identifier")
+  .argument("[body...]", "comment body")
+  .option("--file <path>", "read comment body from a file")
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .action(async (issue, body, options) => {
     const client = await linearClientFromWorkflow(options.workflow);
-    await client.comment(issueId, body.join(" "));
-    console.log(`commented: ${issueId}`);
+    const text = options.file ? await readText(resolve(options.file)) : (body ?? []).join(" ");
+    if (!text.trim()) throw new Error("comment body is required; pass text or --file <path>");
+    await client.comment(issue, text);
+    console.log(`commented: ${issue}`);
   });
 
 linear
@@ -245,6 +290,6 @@ function roadmapDescription(index: number): string {
     "Acceptance criteria:",
     "- Implement the behavior described in the AgentOS end-to-end implementation plan.",
     "- Run relevant tests and include validation evidence.",
-    "- Move the issue to review with a concise handoff comment."
+    "- Write a concise handoff; AgentOS moves the issue to review."
   ].join("\n");
 }

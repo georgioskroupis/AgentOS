@@ -66,6 +66,10 @@ export interface ServiceConfig {
     projectSlug: string;
     activeStates: string[];
     terminalStates: string[];
+    runningState: string | null;
+    reviewState: string | null;
+    mergeState: string | null;
+    needsInputState: string | null;
   };
   polling: {
     intervalMs: number;
@@ -83,6 +87,7 @@ export interface ServiceConfig {
   agent: {
     maxConcurrentAgents: number;
     maxTurns: number;
+    maxRetryAttempts: number;
     maxRetryBackoffMs: number;
     maxConcurrentAgentsByState: Map<string, number>;
   };
@@ -95,6 +100,13 @@ export interface ServiceConfig {
     readTimeoutMs: number;
     stallTimeoutMs: number;
     passThrough: Record<string, unknown>;
+  };
+  github: {
+    command: string;
+    mergeMethod: "squash" | "merge" | "rebase";
+    requireChecks: boolean;
+    deleteBranch: boolean;
+    doneState: string;
   };
 }
 
@@ -139,5 +151,13 @@ export interface IssueTracker {
   fetchCandidates(activeStates: string[]): Promise<Issue[]>;
   fetchIssueStates(issueIds: string[]): Promise<Map<string, Issue | null>>;
   fetchTerminalIssues?(terminalStates: string[]): Promise<Issue[]>;
+  comment?(issueIdentifierOrId: string, body: string): Promise<void>;
+  move?(issueIdentifierOrId: string, stateName: string): Promise<void>;
 }
 
+export interface IssueState {
+  issueId: string;
+  issueIdentifier: string;
+  prUrl?: string;
+  updatedAt: string;
+}

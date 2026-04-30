@@ -7,6 +7,7 @@ import type { Issue, ServiceConfig, Workspace } from "../src/types.js";
 
 const fixture = resolve("tests/fixtures/fake-app-server.mjs");
 const fixtureCommand = `node ${JSON.stringify(fixture)}`;
+const instantFixtureCommand = `node ${JSON.stringify(fixture)} --instant`;
 
 const issue: Issue = {
   id: "issue-1",
@@ -38,12 +39,16 @@ describe("CodexAppServerRunner", () => {
         apiKey: "x",
         projectSlug: "AgentOS",
         activeStates: ["Ready"],
-        terminalStates: ["Done"]
+        terminalStates: ["Done"],
+        runningState: "In Progress",
+        reviewState: "Human Review",
+        mergeState: null,
+        needsInputState: "Human Review"
       },
       polling: { intervalMs: 1000 },
       workspace: { root: workspacePath },
       hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 1000 },
-      agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
+      agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryAttempts: 3, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
       codex: {
         command: fixtureCommand,
         approvalPolicy: "never",
@@ -69,5 +74,49 @@ describe("CodexAppServerRunner", () => {
     });
     expect(result).toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
     expect(events).toContain("turn/completed");
+  });
+
+  it("handles completion events that arrive before the waiter is registered", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-instant-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config: ServiceConfig = {
+      tracker: {
+        kind: "linear",
+        endpoint: "https://api.linear.app/graphql",
+        apiKey: "x",
+        projectSlug: "AgentOS",
+        activeStates: ["Ready"],
+        terminalStates: ["Done"],
+        runningState: "In Progress",
+        reviewState: "Human Review",
+        mergeState: null,
+        needsInputState: "Human Review"
+      },
+      polling: { intervalMs: 1000 },
+      workspace: { root: workspacePath },
+      hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 1000 },
+      agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryAttempts: 3, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
+      codex: {
+        command: instantFixtureCommand,
+        approvalPolicy: "never",
+        threadSandbox: "workspaceWrite",
+        turnTimeoutMs: 5000,
+        readTimeoutMs: 1000,
+        stallTimeoutMs: 5000,
+        passThrough: {}
+      }
+    };
+
+    const runner = new CodexAppServerRunner();
+    await expect(
+      runner.run({
+        issue,
+        prompt: "Do quick work",
+        attempt: null,
+        workspace,
+        config,
+        onEvent() {}
+      })
+    ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
   });
 });

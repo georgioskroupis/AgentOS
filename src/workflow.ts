@@ -4,8 +4,8 @@ import { Liquid } from "liquidjs";
 import { exists, readText } from "./fs-utils.js";
 import type { Issue, ServiceConfig, WorkflowDefinition } from "./types.js";
 
-const defaultActiveStates = ["Todo", "In Progress", "Ready"];
-const defaultTerminalStates = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"];
+const defaultActiveStates = ["Todo", "In Progress"];
+const defaultTerminalStates = ["Closed", "Canceled", "Duplicate", "Done"];
 
 export async function loadWorkflow(workflowPath: string): Promise<WorkflowDefinition> {
   const resolved = resolve(workflowPath);
@@ -49,6 +49,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
   const hooks = objectAt(cfg, "hooks");
   const agent = objectAt(cfg, "agent");
   const codex = objectAt(cfg, "codex");
+  const github = objectAt(cfg, "github");
   const workflowDir = dirname(workflow.workflowPath);
 
   const trackerKind = stringAt(tracker, "kind", "linear");
@@ -67,7 +68,11 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       apiKey,
       projectSlug,
       activeStates: stringListAt(tracker, "active_states", defaultActiveStates),
-      terminalStates: stringListAt(tracker, "terminal_states", defaultTerminalStates)
+      terminalStates: stringListAt(tracker, "terminal_states", defaultTerminalStates),
+      runningState: nullableStringAt(tracker, "running_state") ?? "In Progress",
+      reviewState: nullableStringAt(tracker, "review_state") ?? "Human Review",
+      mergeState: nullableStringAt(tracker, "merge_state"),
+      needsInputState: nullableStringAt(tracker, "needs_input_state") ?? "Human Review"
     },
     polling: {
       intervalMs: positiveIntAt(polling, "interval_ms", 30_000)
@@ -85,6 +90,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
     agent: {
       maxConcurrentAgents: positiveIntAt(agent, "max_concurrent_agents", 10),
       maxTurns: positiveIntAt(agent, "max_turns", 20),
+      maxRetryAttempts: positiveIntAt(agent, "max_retry_attempts", 3),
       maxRetryBackoffMs: positiveIntAt(agent, "max_retry_backoff_ms", 300_000),
       maxConcurrentAgentsByState: stateConcurrencyMap(agent.max_concurrent_agents_by_state)
     },
@@ -97,6 +103,13 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       readTimeoutMs: positiveIntAt(codex, "read_timeout_ms", 5_000),
       stallTimeoutMs: intAt(codex, "stall_timeout_ms", 300_000),
       passThrough: { ...codex }
+    },
+    github: {
+      command: stringAt(github, "command", "gh"),
+      mergeMethod: mergeMethodAt(github, "merge_method", "squash"),
+      requireChecks: booleanAt(github, "require_checks", true),
+      deleteBranch: booleanAt(github, "delete_branch", true),
+      doneState: stringAt(github, "done_state", "Done")
     }
   };
 }
@@ -153,6 +166,16 @@ function intAt(value: Record<string, unknown>, key: string, fallback: number): n
   const raw = value[key];
   const num = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
   return Number.isInteger(num) ? num : fallback;
+}
+
+function booleanAt(value: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  const found = value[key];
+  return typeof found === "boolean" ? found : fallback;
+}
+
+function mergeMethodAt(value: Record<string, unknown>, key: string, fallback: "squash" | "merge" | "rebase"): "squash" | "merge" | "rebase" {
+  const found = value[key];
+  return found === "squash" || found === "merge" || found === "rebase" ? found : fallback;
 }
 
 function stateConcurrencyMap(value: unknown): Map<string, number> {

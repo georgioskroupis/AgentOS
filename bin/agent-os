@@ -3,6 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+if [[ -f "$ROOT/.agent-os/env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ROOT/.agent-os/env"
+  set +a
+fi
+
 if [[ -f "$ROOT/src/cli.ts" && -d "$ROOT/node_modules/tsx" ]]; then
   exec node --import tsx "$ROOT/src/cli.ts" "$@"
 fi

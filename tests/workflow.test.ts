@@ -33,6 +33,17 @@ describe("workflow", () => {
     const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
     expect(config.tracker.apiKey).toBe("lin_test");
     expect(config.tracker.projectSlug).toBe("AgentOS");
+    expect(config.tracker.runningState).toBe("In Progress");
+    expect(config.tracker.reviewState).toBe("Human Review");
+    expect(config.tracker.mergeState).toBeNull();
+    expect(config.agent.maxRetryAttempts).toBe(3);
+    expect(config.github).toMatchObject({
+      command: "gh",
+      mergeMethod: "squash",
+      requireChecks: true,
+      deleteBranch: true,
+      doneState: "Done"
+    });
     expect(config.workspace.root).toContain(".agent-os/workspaces");
   });
 
@@ -47,4 +58,3 @@ describe("workflow", () => {
     expect(parsed.body).toBe("Body");
   });
 });
-

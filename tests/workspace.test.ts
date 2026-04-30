@@ -20,7 +20,11 @@ describe("workspace", () => {
         apiKey: "x",
         projectSlug: "AgentOS",
         activeStates: ["Ready"],
-        terminalStates: ["Done"]
+        terminalStates: ["Done"],
+        runningState: "In Progress",
+        reviewState: "Human Review",
+        mergeState: null,
+        needsInputState: "Human Review"
       },
       polling: { intervalMs: 1000 },
       workspace: { root },
@@ -34,6 +38,7 @@ describe("workspace", () => {
       agent: {
         maxConcurrentAgents: 1,
         maxTurns: 20,
+        maxRetryAttempts: 3,
         maxRetryBackoffMs: 1000,
         maxConcurrentAgentsByState: new Map()
       },
@@ -51,4 +56,3 @@ describe("workspace", () => {
     expect(await readFile(join(workspace.path, "key.txt"), "utf8")).toBe("AG-1");
   });
 });
-

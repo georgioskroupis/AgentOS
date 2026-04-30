@@ -20,7 +20,7 @@ rl.on("line", (line) => {
     write({ id: message.id, result: { thread: { id: "thread-1" } } });
   } else if (message.method === "turn/start") {
     write({ id: message.id, result: { turn: { id: "turn-1", status: "inProgress" } } });
-    setTimeout(() => {
+    const complete = () => {
       write({
         method: "turn/completed",
         params: {
@@ -28,9 +28,10 @@ rl.on("line", (line) => {
           turn: { id: "turn-1", status: "completed" }
         }
       });
-    }, 10);
+    };
+    if (process.argv.includes("--instant")) complete();
+    else setTimeout(complete, 10);
   } else if (message.method === "turn/interrupt") {
     write({ id: message.id, result: {} });
   }
 });
-

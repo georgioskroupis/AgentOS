@@ -1,0 +1,43 @@
+import { join } from "node:path";
+import { ensureDir, exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
+import type { Issue, IssueState } from "./types.js";
+
+export class IssueStateStore {
+  constructor(private readonly repoRoot: string) {}
+
+  async read(identifier: string): Promise<IssueState | null> {
+    const path = this.pathFor(identifier);
+    if (!(await exists(path))) return null;
+    const parsed = JSON.parse(await readText(path)) as IssueState;
+    return parsed.issueIdentifier ? parsed : null;
+  }
+
+  async write(state: IssueState): Promise<void> {
+    await ensureDir(join(this.repoRoot, ".agent-os", "state", "issues"));
+    await writeTextEnsuringDir(this.pathFor(state.issueIdentifier), `${JSON.stringify(state, null, 2)}\n`);
+  }
+
+  private pathFor(identifier: string): string {
+    return join(this.repoRoot, ".agent-os", "state", "issues", `${safeFileName(identifier)}.json`);
+  }
+}
+
+export function issueStateFromHandoff(issue: Issue, handoff: string): IssueState | null {
+  const prUrl = extractPullRequestUrl(handoff);
+  if (!prUrl) return null;
+  return {
+    issueId: issue.id,
+    issueIdentifier: issue.identifier,
+    prUrl,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+export function extractPullRequestUrl(text: string): string | null {
+  const match = text.match(/https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+/);
+  return match?.[0] ?? null;
+}
+
+function safeFileName(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_");
+}

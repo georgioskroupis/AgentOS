@@ -9,6 +9,14 @@ bin/agent-os doctor ../my-project --profile typescript
 bin/agent-os check ../my-project
 ```
 
+The orchestrator owns Linear moves and comments. Codex should only change the
+repo, run the harness check, open or update a PR, and write
+`.agent-os/handoff-<issue>.md`.
+
+After human review, move the Linear issue to `Merging`. AgentOS will require a
+green GitHub check, squash-merge the PR, delete the branch, comment in Linear,
+and move the issue to `Done`.
+
 ## Register The Project
 
 ```bash
@@ -30,4 +38,3 @@ bin/agent-os orchestrator once --repo ../my-project --workflow WORKFLOW.md
 ```bash
 bin/agent-os orchestrator run --repo ../my-project --workflow WORKFLOW.md
 ```
-
