@@ -17,6 +17,8 @@ After human review, move the Linear issue to `Merging`. AgentOS will require a
 green GitHub check, squash-merge the PR, delete the branch, comment in Linear,
 and move the issue to `Done`.
 
+This flow is dogfooded by the AgentOS project before being reused elsewhere.
+
 ## Register The Project
 
 ```bash
