@@ -5,7 +5,7 @@ tracker:
   api_key: $LINEAR_API_KEY
   project_slug: AgentOS
   active_states:
-    - Ready
+    - Todo
   terminal_states:
     - Done
     - Canceled
@@ -40,12 +40,11 @@ codex:
 
 ## Target Repository Lifecycle
 
-The generated harness expects tickets to move through:
+The live AgentOS Linear project uses:
 
-- Ready for Agent
-- In Progress by Agent
-- Agent Review
-- Human Review
+- Todo
+- In Progress
+- In Review
 - Needs Human Input
 - Done
 

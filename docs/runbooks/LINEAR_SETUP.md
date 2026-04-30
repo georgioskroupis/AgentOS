@@ -16,6 +16,16 @@ bin/agent-os linear teams
 bin/agent-os linear seed-roadmap --team <team-key-or-id> --project AgentOS
 ```
 
-Only the first roadmap issue should start in `Ready`; later issues stay out of
-`Ready` until the previous item is complete.
+Only the first roadmap issue should start in the active state; later issues stay
+out of that state until the previous item is complete.
 
+## Live AgentOS Project
+
+- Workspace/team: `VerityStudio` (`VER`)
+- Project: `AgentOS`
+- URL: https://linear.app/veritystudio/project/agentos-08cea1e6f2f8
+- Active state in this workspace: `Todo`
+- Seeded roadmap: `VER-5` through `VER-21`
+
+This workspace does not currently have a `Ready` state. `WORKFLOW.md` therefore
+uses `Todo` as the active polling state for live orchestration.
