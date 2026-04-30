@@ -18,11 +18,13 @@ For every code-changing task:
 
 1. Understand the issue and restate acceptance criteria.
 2. Inspect relevant docs and code before editing.
-3. Make the smallest coherent change.
-4. Add or update tests.
-5. Run `./scripts/agent-check.sh`.
-6. Update docs if behavior, architecture, or public APIs changed.
-7. Prepare a PR summary with what changed, why, tests run, risks, and follow-ups.
+3. Audit whether the requested behavior already exists.
+4. If already satisfied, make no code changes and report validation evidence.
+5. Otherwise make the smallest coherent change.
+6. Add or update tests.
+7. Run `./scripts/agent-check.sh`.
+8. Update docs if behavior, architecture, or public APIs changed.
+9. Prepare a PR summary with what changed, why, tests run, risks, and follow-ups.
 
 ## Hard Rules
 
@@ -31,4 +33,5 @@ For every code-changing task:
 - Do not silently change public behavior.
 - Prefer fixing root causes over patching symptoms.
 - If requirements are ambiguous, create an implementation plan before coding.
-
+- Extend existing commands, states, templates, and modules instead of creating
+  duplicate implementations.

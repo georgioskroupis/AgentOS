@@ -159,5 +159,6 @@ export interface IssueState {
   issueId: string;
   issueIdentifier: string;
   prUrl?: string;
+  outcome?: "implemented" | "already_satisfied" | "partially_satisfied";
   updatedAt: string;
 }

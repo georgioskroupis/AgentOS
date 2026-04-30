@@ -46,7 +46,7 @@ Runs one Symphony-style scheduling pass:
 4. render strict prompts
 5. start Codex App Server runs
 6. move/comment on Linear for start, retry, failure, and review handoff
-7. persist PR metadata from handoff notes
+7. persist implementation outcome and PR metadata from handoff notes
 8. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
 9. track retries, unchanged successful issues, and reconciliation
 10. write `.agent-os/runs/agent-os.jsonl`
@@ -74,8 +74,10 @@ Linear is the control plane: issues in configured active states are dispatched,
 blocked issues wait for their blockers, and the orchestrator moves/comments on
 the ticket for start, retry, failure, and review handoff. Codex focuses on the
 repo work and writes `.agent-os/handoff-<issue>.md` for the final Linear
-comment. When you move an approved issue to `Merging`, AgentOS reads the stored
-PR metadata, requires green GitHub checks, squash-merges, deletes the branch,
+comment. Each handoff includes an `AgentOS-Outcome` line so already-satisfied
+issues can become no-op review handoffs instead of duplicate implementations.
+When you move an approved issue to `Merging`, AgentOS reads the stored PR
+metadata, requires green GitHub checks, squash-merges, deletes the branch,
 comments in Linear, and moves the issue to `Done`.
 
 The runner targets Codex App Server. Run:

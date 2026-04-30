@@ -24,6 +24,9 @@ It keeps orchestration logic narrow:
   and Linear lifecycle comments.
 - The agent, guided by `WORKFLOW.md`, changes the repo, validates the work, opens
   pull requests, and writes a handoff file for the orchestrator to post.
+- Every agent run starts with an implementation audit. Already-satisfied issues
+  are reported as `AgentOS-Outcome: already-satisfied`, persisted as issue
+  state, and moved to review without requiring a PR.
 - The merge shepherd watches `Merging`, validates GitHub PR checks, squash-merges
   safe PRs, and moves Linear issues to `Done`.
 - Successful unchanged issues are not re-dispatched inside the same service run;

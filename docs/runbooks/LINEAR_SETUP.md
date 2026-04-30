@@ -62,4 +62,15 @@ The orchestrator, not Codex, performs the Linear lifecycle:
 - `Merging` is the human approval signal for AgentOS to check GitHub, squash-merge, delete the branch, and move the issue to `Done`
 
 Codex writes `.agent-os/handoff-<issue>.md`; AgentOS posts that file as the
-final Linear comment before moving the issue to review.
+final Linear comment before moving the issue to review. Handoffs must include one
+machine-readable outcome line:
+
+```text
+AgentOS-Outcome: implemented
+AgentOS-Outcome: partially-satisfied
+AgentOS-Outcome: already-satisfied
+```
+
+For `already-satisfied`, Codex should make no code changes, run validation, and
+write the no-op handoff. AgentOS persists that state and moves the issue to
+`Human Review` for confirmation rather than directly marking it `Done`.

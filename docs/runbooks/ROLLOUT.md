@@ -13,6 +13,10 @@ The orchestrator owns Linear moves and comments. Codex should only change the
 repo, run the harness check, open or update a PR, and write
 `.agent-os/handoff-<issue>.md`.
 
+Every handoff starts with an implementation outcome. If the issue is already
+satisfied, Codex writes `AgentOS-Outcome: already-satisfied`, makes no code
+changes, and AgentOS moves the issue to `Human Review` with validation evidence.
+
 After human review, move the Linear issue to `Merging`. AgentOS will require a
 green GitHub check, squash-merge the PR, delete the branch, comment in Linear,
 and move the issue to `Done`.

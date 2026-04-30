@@ -73,6 +73,20 @@ If a task is blocked, the agent should report:
 - smallest next human decision
 - current validation state
 
+## Implementation Audit
+
+Before changing code, the agent must compare the issue acceptance criteria with
+the current repository implementation.
+
+- If the work is already satisfied, make no code changes, run validation, write
+  `AgentOS-Outcome: already-satisfied` in the handoff file, and let AgentOS move
+  the issue to `Human Review`.
+- If the work is partially satisfied, document what already exists, implement
+  only the missing delta, and write `AgentOS-Outcome: partially-satisfied`.
+- If implementation work was required, write `AgentOS-Outcome: implemented`.
+- Do not create duplicate modules, commands, states, or workflow concepts when an
+  existing path can be extended.
+
 ## Agent Prompt
 
 You are implementing Linear issue {{ issue.identifier }} in AgentOS.
@@ -88,8 +102,12 @@ Issue:
 Responsibilities:
 
 1. Work in the isolated workspace provided by AgentOS.
-2. Make the smallest coherent change that satisfies the issue.
-3. Run `npm run agent-check`.
-4. Open or update a GitHub PR when validation passes.
-5. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with summary, validation, risks, and PR link.
-6. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
+2. Audit whether the acceptance criteria are already satisfied before editing.
+3. If already satisfied, make no code changes, run `npm run agent-check`, and
+   write a handoff with `AgentOS-Outcome: already-satisfied`.
+4. If partially satisfied, preserve the existing implementation and change only
+   the missing delta.
+5. Run `npm run agent-check`.
+6. Open or update a GitHub PR when code or docs changed and validation passes.
+7. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, plus summary, validation, risks, and PR link when a PR exists.
+8. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.

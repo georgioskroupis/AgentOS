@@ -342,12 +342,21 @@ export class Orchestrator {
       if (state) {
         await new IssueStateStore(resolve(this.options.repoRoot)).write(state);
         await this.logger.write({
-          type: "pr_metadata_persisted",
+          type: state.prUrl ? "pr_metadata_persisted" : "issue_state_persisted",
           issueId: issue.id,
           issueIdentifier: issue.identifier,
-          message: state.prUrl,
+          message: state.prUrl ?? state.outcome,
           payload: state
         });
+        if (state.outcome === "already_satisfied") {
+          await this.logger.write({
+            type: "issue_already_satisfied",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: "agent reported acceptance criteria were already satisfied",
+            payload: state
+          });
+        }
       }
     }
     await this.commentIssue(

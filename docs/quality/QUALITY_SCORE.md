@@ -9,7 +9,7 @@ Use this as a lightweight rubric for harnessed repositories.
 | Workflow | Ticket lifecycle and handoff expectations are documented |
 | Skills | Common workflows are reusable and versioned |
 | Safety | Public behavior, dependencies, and security changes require justification |
-| Orchestration | Linear polling, lifecycle comments, retries, workspace isolation, handoff, and merge shepherding are executable |
+| Orchestration | Linear polling, lifecycle comments, retries, workspace isolation, audit/no-op handoff, and merge shepherding are executable |
 
 ## Minimum Passing Harness
 
@@ -32,5 +32,7 @@ Use this as a lightweight rubric for harnessed repositories.
 - `agent-os orchestrator once --repo <repo> --workflow WORKFLOW.md` can dispatch
   an eligible issue into a deterministic workspace, post Linear progress, and
   move the issue to review after handoff.
+- Already-satisfied issues can produce an `AgentOS-Outcome: already-satisfied`
+  no-op handoff that is persisted and moved to review without a PR.
 - GitHub CI exists and the merge shepherd requires at least one successful check
   before moving `Merging` issues to `Done`.

@@ -61,12 +61,16 @@ Recommended Symphony-style statuses:
 When assigned a ticket:
 
 1. Work in the isolated workspace provided by AgentOS.
-2. Reproduce the issue or define the target behavior.
-3. Implement the smallest coherent change.
-4. Run validation.
-5. Open or update a PR when validation passes.
-6. Write `.agent-os/handoff-{{ issue.identifier }}.md` with summary, validation, artifacts, risks, and links.
-7. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
+2. Audit whether the acceptance criteria are already satisfied before editing.
+3. If already satisfied, make no code changes, run validation, and write
+   `AgentOS-Outcome: already-satisfied` in the handoff file.
+4. If partially satisfied, preserve the existing implementation and change only
+   the missing delta.
+5. Implement the smallest coherent change only when work is still needed.
+6. Run validation.
+7. Open or update a PR when code or docs changed and validation passes.
+8. Write `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, plus summary, validation, artifacts, risks, and links.
+9. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
 
 ## Failure Behavior
 
@@ -79,6 +83,16 @@ If blocked:
 
 If the agent finds work outside scope, file a follow-up issue and link it from
 the current ticket.
+
+## Duplicate-Work Guardrail
+
+The first step of every run is an implementation audit:
+
+- Search for existing commands, modules, states, docs, tests, and workflow
+  concepts before adding new ones.
+- Prefer extending the established path over creating a parallel one.
+- Treat already-satisfied acceptance criteria as a no-op handoff, not an
+  invitation to rewrite.
 
 ## Agent Prompt
 
@@ -95,8 +109,12 @@ Issue:
 Responsibilities:
 
 1. Work in the isolated workspace provided by AgentOS.
-2. Make the smallest coherent change that satisfies the issue.
-3. Run `./scripts/agent-check.sh`.
-4. Open or update a GitHub PR when validation passes.
-5. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with summary, validation, risks, and PR link.
-6. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
+2. Audit whether the acceptance criteria are already satisfied before editing.
+3. If already satisfied, make no code changes, run `./scripts/agent-check.sh`,
+   and write a handoff with `AgentOS-Outcome: already-satisfied`.
+4. If partially satisfied, preserve the existing implementation and change only
+   the missing delta.
+5. Run `./scripts/agent-check.sh`.
+6. Open or update a GitHub PR when code or docs changed and validation passes.
+7. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, plus summary, validation, risks, and PR link when a PR exists.
+8. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
