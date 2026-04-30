@@ -109,7 +109,16 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       mergeMethod: mergeMethodAt(github, "merge_method", "squash"),
       requireChecks: booleanAt(github, "require_checks", true),
       deleteBranch: booleanAt(github, "delete_branch", true),
-      doneState: stringAt(github, "done_state", "Done")
+      doneState: stringAt(github, "done_state", "Done"),
+      allowHumanMergeOverride: booleanAt(github, "allow_human_merge_override", true)
+    },
+    review: {
+      enabled: booleanAt(objectAt(cfg, "review"), "enabled", true),
+      maxIterations: positiveIntAt(objectAt(cfg, "review"), "max_iterations", 3),
+      requiredReviewers: stringListAt(objectAt(cfg, "review"), "required_reviewers", ["self", "correctness", "tests", "architecture"]),
+      optionalReviewers: stringListAt(objectAt(cfg, "review"), "optional_reviewers", ["security"]),
+      requireAllBlockingResolved: booleanAt(objectAt(cfg, "review"), "require_all_blocking_resolved", true),
+      blockingSeverities: blockingSeveritiesAt(objectAt(cfg, "review"), "blocking_severities", ["P0", "P1", "P2"])
     }
   };
 }
@@ -176,6 +185,13 @@ function booleanAt(value: Record<string, unknown>, key: string, fallback: boolea
 function mergeMethodAt(value: Record<string, unknown>, key: string, fallback: "squash" | "merge" | "rebase"): "squash" | "merge" | "rebase" {
   const found = value[key];
   return found === "squash" || found === "merge" || found === "rebase" ? found : fallback;
+}
+
+function blockingSeveritiesAt(value: Record<string, unknown>, key: string, fallback: Array<"P0" | "P1" | "P2">): Array<"P0" | "P1" | "P2"> {
+  const found = value[key];
+  if (!Array.isArray(found)) return fallback;
+  const severities = found.filter((item): item is "P0" | "P1" | "P2" => item === "P0" || item === "P1" || item === "P2");
+  return severities.length > 0 ? severities : fallback;
 }
 
 function stateConcurrencyMap(value: unknown): Map<string, number> {

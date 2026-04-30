@@ -42,7 +42,16 @@ describe("workflow", () => {
       mergeMethod: "squash",
       requireChecks: true,
       deleteBranch: true,
-      doneState: "Done"
+      doneState: "Done",
+      allowHumanMergeOverride: true
+    });
+    expect(config.review).toMatchObject({
+      enabled: true,
+      maxIterations: 3,
+      requiredReviewers: ["self", "correctness", "tests", "architecture"],
+      optionalReviewers: ["security"],
+      requireAllBlockingResolved: true,
+      blockingSeverities: ["P0", "P1", "P2"]
     });
     expect(config.workspace.root).toContain(".agent-os/workspaces");
   });

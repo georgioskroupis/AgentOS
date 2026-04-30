@@ -138,6 +138,40 @@ export class LinearClient implements IssueTracker {
     return data.projectCreate.project;
   }
 
+  async createWorkflowState(input: {
+    teamId: string;
+    name: string;
+    type: "backlog" | "unstarted" | "started" | "completed" | "canceled";
+  }): Promise<LinearState> {
+    const data = await this.request<{ workflowStateCreate: { success: boolean; workflowState: LinearState } }>(
+      `mutation AgentOSWorkflowStateCreate($input: WorkflowStateCreateInput!) {
+        workflowStateCreate(input: $input) { success workflowState { id name type } }
+      }`,
+      { input: { teamId: input.teamId, name: input.name, type: input.type } }
+    );
+    return data.workflowStateCreate.workflowState;
+  }
+
+  async ensureWorkflowStates(
+    teamId: string,
+    required: Array<{ name: string; type: "backlog" | "unstarted" | "started" | "completed" | "canceled" }>
+  ): Promise<{ states: LinearState[]; created: LinearState[]; missing: Array<{ name: string; type: string }> }> {
+    const states = await this.listWorkflowStates(teamId);
+    const created: LinearState[] = [];
+    const missing: Array<{ name: string; type: string }> = [];
+    for (const item of required) {
+      if (states.some((state) => state.name.toLowerCase() === item.name.toLowerCase())) continue;
+      try {
+        const state = await this.createWorkflowState({ teamId, name: item.name, type: item.type });
+        states.push(state);
+        created.push(state);
+      } catch {
+        missing.push(item);
+      }
+    }
+    return { states, created, missing };
+  }
+
   async createIssue(input: {
     teamId: string;
     title: string;

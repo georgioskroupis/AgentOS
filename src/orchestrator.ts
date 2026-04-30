@@ -1,13 +1,15 @@
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
-import { evaluateMergeReadiness, GitHubClient } from "./github.js";
+import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
 import { issueStateFromHandoff, IssueStateStore } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
+import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, readReviewArtifact, repeatedBlockingHashes, reviewArtifactPath, reviewerPrompt } from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { WorkspaceManager } from "./workspace.js";
-import type { AgentRunner, Issue, IssueTracker, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentRunResult, AgentRunner, Issue, IssueState, IssueTracker, ReviewFinding, ReviewStateReviewer, ReviewStatus, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { ReviewerArtifact } from "./review.js";
 
 export interface OrchestratorOptions {
   repoRoot: string;
@@ -45,6 +47,7 @@ export class Orchestrator {
   private retries = new Map<string, RetryEntry>();
   private completedMarkers = new Map<string, string>();
   private mergeWaitingMarkers = new Map<string, string>();
+  private startupCleanupDone = false;
 
   constructor(private readonly options: OrchestratorOptions) {
     this.logger = options.logger ?? new JsonlLogger(resolve(options.repoRoot));
@@ -59,6 +62,7 @@ export class Orchestrator {
 
   async runOnce(waitForWorkers = true): Promise<void> {
     await this.reload();
+    await this.cleanupTerminalWorkspaces();
     await this.reconcile();
     validateDispatchConfig(this.config);
     await this.dispatchDueRetries();
@@ -115,21 +119,14 @@ export class Orchestrator {
       issueIdentifier: issue.identifier,
       message: issue.title
     });
+    const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
+    await this.recordIssueState(issue, { phase: "workspace" });
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     const workspace = await workspaceManager.createOrReuse(issue.identifier);
     try {
       await this.markLinearStarted(issue, workspace, attempt);
       await workspaceManager.beforeRun(workspace);
-      const prompt = await renderPrompt(this.workflow.prompt_template, issue, attempt);
-      const result = await this.runner.run({
-        issue,
-        prompt,
-        attempt,
-        workspace,
-        config: this.config,
-        signal: abortController.signal,
-        onEvent: (event) => void this.logger.write(event)
-      });
+      const result = await this.runImplementationTurns(issue, attempt, workspace, abortController.signal);
       await this.logger.write({
         type: `run_${result.status}`,
         issueId: issue.id,
@@ -141,7 +138,29 @@ export class Orchestrator {
         await this.handleFailedRun(issue, workspace, attempt, result.error ?? result.status);
       } else {
         this.completedMarkers.set(issue.id, completionMarker(issue));
-        await this.markLinearSucceeded(issue, workspace);
+        const handoff = await readHandoff(workspace.path, issue.identifier);
+        const stateFromHandoff = handoff ? issueStateFromHandoff(issue, handoff) : null;
+        const persistedState = stateFromHandoff ? await stateStore.merge(issue.identifier, stateFromHandoff) : await stateStore.read(issue.identifier);
+        if (stateFromHandoff) {
+          await this.logger.write({
+            type: stateFromHandoff.prUrl ? "pr_metadata_persisted" : "issue_state_persisted",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: stateFromHandoff.prUrl ?? stateFromHandoff.outcome,
+            payload: stateFromHandoff
+          });
+          if (stateFromHandoff.outcome === "already_satisfied") {
+            await this.logger.write({
+              type: "issue_already_satisfied",
+              issueId: issue.id,
+              issueIdentifier: issue.identifier,
+              message: "agent reported acceptance criteria were already satisfied",
+              payload: stateFromHandoff
+            });
+          }
+        }
+        const reviewedState = await this.reviewIfNeeded(issue, workspace, persistedState, attempt, abortController.signal);
+        await this.markLinearSucceeded(issue, workspace, handoff, reviewedState ?? persistedState ?? undefined);
       }
     } catch (error) {
       await this.handleFailedRun(issue, workspace, attempt, error instanceof Error ? error.message : String(error));
@@ -151,9 +170,91 @@ export class Orchestrator {
         issueIdentifier: issue.identifier,
         message: error instanceof Error ? error.message : String(error)
       });
+      await this.recordIssueState(issue, {
+        errorCategory: categorizeRunError(error instanceof Error ? error.message : String(error)),
+        lastError: error instanceof Error ? error.message : String(error)
+      });
     } finally {
       await workspaceManager.afterRun(workspace);
     }
+  }
+
+  private async runImplementationTurns(issue: Issue, attempt: number | null, workspace: Workspace, signal?: AbortSignal): Promise<AgentRunResult> {
+    let result: AgentRunResult = { status: "failed", error: "no_turn_started" };
+    for (let turnNumber = 1; turnNumber <= this.config.agent.maxTurns; turnNumber += 1) {
+      await this.recordIssueState(issue, { phase: "prompt" });
+      const prompt = await this.implementationPrompt(issue, attempt, turnNumber);
+      await this.recordIssueState(issue, { phase: "streaming-turn" });
+      result = await this.runner.run({
+        issue,
+        prompt,
+        attempt,
+        workspace,
+        config: this.config,
+        signal,
+        onEvent: (event) => void this.logger.write(event)
+      });
+      await this.logger.write({
+        type: "turn_completed",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: `turn ${turnNumber} ${result.status}`,
+        payload: { turnNumber, maxTurns: this.config.agent.maxTurns, result }
+      });
+      if (result.status !== "succeeded") return result;
+      if (await readHandoff(workspace.path, issue.identifier)) return result;
+
+      const current = await this.tracker.fetchIssueStates([issue.id]).then((states) => states.get(issue.id)).catch(() => null);
+      if (current && !isStateIn(current.state, runningAllowedStates(this.config))) return result;
+      if (turnNumber < this.config.agent.maxTurns) {
+        await this.logger.write({
+          type: "turn_continued",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: "successful turn ended without a handoff; continuing within max_turns",
+          payload: { turnNumber, maxTurns: this.config.agent.maxTurns }
+        });
+      }
+    }
+    return result;
+  }
+
+  private async implementationPrompt(issue: Issue, attempt: number | null, turnNumber: number): Promise<string> {
+    const base = await renderPrompt(this.workflow.prompt_template, issue, attempt);
+    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
+    const continuation = turnNumber > 1
+      ? [
+          "",
+          "## AgentOS Continuation",
+          "",
+          `This is turn ${turnNumber} of ${this.config.agent.maxTurns}. The previous turn completed without writing the required handoff file.`,
+          "Continue the same issue in this workspace and write the required `.agent-os/handoff-<issue>.md` before finishing."
+        ].join("\n")
+      : "";
+    if (!state?.prUrl || issue.state.toLowerCase() !== "todo") return `${base}${continuation}`;
+
+    const feedback = await this.githubFeedbackSummary(state.prUrl).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
+    return [
+      base,
+      continuation,
+      "",
+      "## Existing PR Feedback Re-entry",
+      "",
+      "AgentOS found an existing pull request for this issue. Treat this run as a feedback-fix/update pass, not a fresh implementation.",
+      "",
+      `Existing PR: ${state.prUrl}`,
+      "",
+      feedback || "No recent feedback was found.",
+      "",
+      "Update the existing branch and PR, rerun validation, and refresh the handoff file."
+    ].join("\n");
+  }
+
+  private async githubFeedbackSummary(prUrl: string): Promise<string> {
+    const github = new GitHubClient(this.config.github.command);
+    const status = await github.getPullRequest(prUrl, resolve(this.options.repoRoot));
+    const threads = await github.getPullRequestReviewThreads(prUrl, resolve(this.options.repoRoot)).catch(() => []);
+    return summarizeFeedback(status, threads);
   }
 
   private async dispatchDueRetries(): Promise<void> {
@@ -178,6 +279,30 @@ export class Orchestrator {
       }
       if (!this.hasSlot(issue.state)) continue;
       this.dispatch(issue, retry.attempt);
+    }
+  }
+
+  private async cleanupTerminalWorkspaces(): Promise<void> {
+    if (this.startupCleanupDone) return;
+    this.startupCleanupDone = true;
+    if (!this.tracker.fetchTerminalIssues) return;
+    try {
+      const issues = await this.tracker.fetchTerminalIssues(this.config.tracker.terminalStates);
+      const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
+      for (const issue of issues) {
+        await workspaceManager.remove(issue.identifier);
+        await this.logger.write({
+          type: "workspace_cleaned",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: "terminal issue workspace removed at startup"
+        });
+      }
+    } catch (error) {
+      await this.logger.write({
+        type: "workspace_cleanup_warning",
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 
@@ -219,6 +344,291 @@ export class Orchestrator {
     }
   }
 
+  private async reviewIfNeeded(issue: Issue, workspace: Workspace, state: IssueState | null, attempt: number | null, signal?: AbortSignal): Promise<IssueState | null> {
+    if (!this.config.review.enabled) return state;
+    if (!state?.prUrl || state.outcome === "already_satisfied") return state;
+
+    await this.commentIssue(
+      issue,
+      [
+        "### AgentOS automated review started",
+        "",
+        "The Ralph Wiggum loop is reviewing this PR before moving the issue to Human Review.",
+        "",
+        `- PR: ${state.prUrl}`,
+        `- Required reviewers: ${this.config.review.requiredReviewers.join(", ")}`,
+        `- Max iterations: ${this.config.review.maxIterations}`
+      ].join("\n")
+    );
+
+    let previousFindings = state.findings ?? [];
+    let latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "pending", reviewIteration: state.reviewIteration ?? 0 });
+    for (let iteration = (state.reviewIteration ?? 0) + 1; iteration <= this.config.review.maxIterations; iteration += 1) {
+      await ensureReviewIterationDir(resolve(this.options.repoRoot), issue.identifier, iteration);
+      const githubContext = await this.githubReviewContext(state.prUrl).catch(async (error: Error) => {
+        latestState = await this.recordIssueState(issue, {
+          phase: "review",
+          reviewStatus: "human_required",
+          lastError: error.message,
+          errorCategory: "review"
+        });
+        await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nAgentOS could not read the pull request for review.\n\n- PR: ${state.prUrl}\n- Error: ${error.message}`);
+        await this.logger.write({
+          type: "review_human_required",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: error.message,
+          payload: { prUrl: state.prUrl }
+        });
+        return null;
+      });
+      if (!githubContext) return latestState;
+      if (githubContext.status.state && githubContext.status.state.toUpperCase() !== "OPEN") {
+        latestState = await this.recordIssueState(issue, {
+          phase: "review",
+          reviewStatus: "human_required",
+          lastError: `pull request is ${githubContext.status.state}`,
+          errorCategory: "review"
+        });
+        await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nPull request is not open.\n\n- PR: ${state.prUrl}\n- State: ${githubContext.status.state}`);
+        return latestState;
+      }
+      const reviewers = this.reviewersFor(githubContext.status.changedFiles);
+      const artifacts: Array<{ artifact: ReviewerArtifact; path: string }> = [];
+
+      await this.logger.write({
+        type: "review_started",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: `iteration ${iteration}`,
+        payload: { prUrl: state.prUrl, reviewers }
+      });
+
+      for (const reviewer of reviewers) {
+        const artifactPath = reviewArtifactPath(resolve(this.options.repoRoot), issue.identifier, iteration, reviewer);
+        const prompt = reviewerPrompt({
+          issue,
+          prUrl: state.prUrl,
+          iteration,
+          reviewer,
+          artifactPath,
+          githubSummary: githubContext.summary,
+          feedbackSummary: githubContext.feedback
+        });
+        const result = await this.runner.run({
+          issue,
+          prompt,
+          attempt,
+          workspace,
+          config: readOnlyReviewConfig(this.config, resolve(this.options.repoRoot)),
+          signal,
+          onEvent: (event) => void this.logger.write({ ...event, type: `review_${event.type}` })
+        });
+        if (result.status !== "succeeded") {
+          await this.logger.write({
+            type: "review_runner_failed",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: `${reviewer}: ${result.error ?? result.status}`
+          });
+        }
+        const artifact = await readReviewArtifact(artifactPath, reviewer);
+        artifacts.push({ artifact, path: artifactPath });
+        for (const finding of artifact.findings) {
+          await this.logger.write({
+            type: "review_finding",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: finding.body,
+            payload: finding
+          });
+        }
+      }
+
+      const findings = [...artifacts.flatMap((entry) => entry.artifact.findings), ...reviewCheckFindings(githubContext.status, this.config)];
+      for (const finding of findings.filter((finding) => finding.reviewer === "checks")) {
+        await this.logger.write({
+          type: "review_finding",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: finding.body,
+          payload: finding
+        });
+      }
+      const blocking = blockingFindings(findings, this.config);
+      const currentBlockingHashes = new Set(blocking.map((finding) => finding.findingHash));
+      const resolvedFindingHashes = [
+        ...(latestState?.resolvedFindingHashes ?? []),
+        ...blockingFindings(previousFindings, this.config)
+          .map((finding) => finding.findingHash)
+          .filter((hash) => !currentBlockingHashes.has(hash))
+      ];
+      const reviewerStates: ReviewStateReviewer[] = artifacts.map((entry) => ({
+        name: entry.artifact.reviewer,
+        decision: entry.artifact.decision,
+        iteration,
+        artifactPath: entry.path
+      }));
+      const humanRequired = artifacts.some((entry) => entry.artifact.decision === "human_required");
+      const allRequiredApproved = this.config.review.requiredReviewers.every((reviewer) =>
+        artifacts.some((entry) => entry.artifact.reviewer === reviewer && entry.artifact.decision === "approved")
+      );
+      const repeated = repeatedBlockingHashes(previousFindings, findings, this.config);
+      const status: ReviewStatus = humanRequired ? "human_required" : blocking.length > 0 || !allRequiredApproved ? "changes_requested" : "approved";
+
+      latestState = await this.recordIssueState(issue, {
+        phase: "review",
+        reviewIteration: iteration,
+        reviewStatus: status,
+        reviewers: reviewerStates,
+        findings,
+        resolvedFindingHashes: [...new Set(resolvedFindingHashes)],
+        headSha: githubContext.status.headSha,
+        lastReviewedSha: githubContext.status.headSha
+      });
+
+      await this.logger.write({
+        type: status === "approved" ? "review_approved" : "review_iteration_complete",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: `iteration ${iteration}: ${status}`,
+        payload: { blocking: blocking.length, repeated }
+      });
+
+      if (status === "approved") {
+        await this.commentIssue(
+          issue,
+          [
+            "### AgentOS automated review approved",
+            "",
+            "Required Wiggum reviewers approved this PR.",
+            "",
+            `- PR: ${state.prUrl}`,
+            `- Iteration: ${iteration}`,
+            `- Reviewers: ${reviewerStates.map((reviewer) => `${reviewer.name}=${reviewer.decision}`).join(", ")}`
+          ].join("\n")
+        );
+        return latestState;
+      }
+
+      if (humanRequired || repeated.length > 0 || iteration >= this.config.review.maxIterations) {
+        const reason = humanRequired
+          ? "a reviewer requested human judgment"
+          : repeated.length > 0
+            ? "the same blocking finding repeated after a fix"
+            : "maximum review iterations reached";
+        latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", findings });
+        await this.commentIssue(
+          issue,
+          [
+            "### AgentOS automated review needs human judgment",
+            "",
+            `The Wiggum loop stopped because ${reason}.`,
+            "",
+            `- PR: ${state.prUrl}`,
+            `- Iteration: ${iteration}`,
+            "",
+            "Blocking findings:",
+            formatFindings(blocking, resolve(this.options.repoRoot))
+          ].join("\n")
+        );
+        await this.logger.write({
+          type: "review_human_required",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: reason,
+          payload: { findings: blocking, repeated }
+        });
+        return latestState;
+      }
+
+      await this.logger.write({
+        type: "review_fix_started",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: `iteration ${iteration}`,
+        payload: { findings: blocking }
+      });
+      await this.commentIssue(
+        issue,
+        [
+          "### AgentOS automated review requested fixes",
+          "",
+          "Blocking findings were found. AgentOS is running a focused fix turn on the existing PR.",
+          "",
+          `- PR: ${state.prUrl}`,
+          `- Iteration: ${iteration}`,
+          "",
+          formatFindings(blocking, resolve(this.options.repoRoot))
+        ].join("\n")
+      );
+      await this.recordIssueState(issue, { phase: "fix", reviewStatus: "changes_requested" });
+      const fixResult = await this.runner.run({
+        issue,
+        prompt: fixPrompt({
+          issue,
+          prUrl: state.prUrl,
+          iteration,
+          findings: blocking,
+          handoffPath: join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
+          feedbackSummary: githubContext.feedback
+        }),
+        attempt,
+        workspace,
+        config: this.config,
+        signal,
+        onEvent: (event) => void this.logger.write({ ...event, type: `review_fix_${event.type}` })
+      });
+      if (fixResult.status !== "succeeded") {
+        latestState = await this.recordIssueState(issue, {
+          phase: "fix",
+          reviewStatus: "human_required",
+          lastError: fixResult.error ?? fixResult.status,
+          errorCategory: "fix"
+        });
+        await this.commentIssue(issue, `### AgentOS review fix failed\n\nThe fixer turn did not complete successfully.\n\n- PR: ${state.prUrl}\n- Error: ${fixResult.error ?? fixResult.status}`);
+        return latestState;
+      }
+      const updatedHandoff = await readHandoff(workspace.path, issue.identifier);
+      if (updatedHandoff) {
+        const updated = issueStateFromHandoff(issue, updatedHandoff);
+        if (updated) {
+          latestState = await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
+            ...updated,
+            phase: "fix",
+            reviewIteration: iteration,
+            lastFixedSha: githubContext.status.headSha
+          });
+        }
+      }
+      previousFindings = findings;
+    }
+    return latestState;
+  }
+
+  private reviewersFor(changedFiles: string[]): string[] {
+    const reviewers = [...this.config.review.requiredReviewers];
+    const securityNeeded = changedFiles.some((file) => /(^|\/)(auth|security|secrets?|config|env|api|github|linear|runner|orchestrator)/i.test(file));
+    for (const reviewer of this.config.review.optionalReviewers) {
+      if (reviewer === "security" && !securityNeeded) continue;
+      if (!reviewers.includes(reviewer)) reviewers.push(reviewer);
+    }
+    return reviewers;
+  }
+
+  private async githubReviewContext(prUrl: string): Promise<{ status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>; summary: string; feedback: string }> {
+    const github = new GitHubClient(this.config.github.command);
+    const cwd = resolve(this.options.repoRoot);
+    const status = await github.getPullRequest(prUrl, cwd);
+    const diff = await github.getPullRequestDiff(prUrl, cwd).catch((error: Error) => `Could not fetch diff: ${error.message}`);
+    const threads = await github.getPullRequestReviewThreads(prUrl, cwd).catch(() => []);
+    return {
+      status,
+      summary: summarizePullRequestForPrompt(status, diff, threads),
+      feedback: summarizeFeedback(status, threads)
+    };
+  }
+
   private async shepherdMergeIssue(issue: Issue): Promise<void> {
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
     const state = await stateStore.read(issue.identifier);
@@ -241,6 +651,39 @@ export class Orchestrator {
         await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged: ${state.prUrl}`);
         await this.moveIssue(issue, this.config.github.doneState);
         return;
+      }
+
+      if (this.config.review.enabled && state.reviewStatus !== "approved") {
+        if (!this.config.github.allowHumanMergeOverride) {
+          await this.markMergeFailed(issue, `automated review is not approved (reviewStatus=${state.reviewStatus ?? "missing"})`, state.prUrl);
+          return;
+        }
+        if (!state.humanOverrideAt) {
+          const overrideAt = new Date().toISOString();
+          await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
+            ...state,
+            humanOverrideAt: overrideAt,
+            updatedAt: overrideAt
+          });
+          await this.commentIssue(
+            issue,
+            [
+              "### AgentOS review override recorded",
+              "",
+              "This issue is in `Merging` before automated review approval. Treating the Linear status move as explicit human approval for this merge attempt.",
+              "",
+              `- PR: ${state.prUrl}`,
+              `- Previous reviewStatus: ${state.reviewStatus ?? "missing"}`
+            ].join("\n")
+          );
+          await this.logger.write({
+            type: "review_human_override",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: state.reviewStatus ?? "missing",
+            payload: { prUrl: state.prUrl }
+          });
+        }
       }
 
       const readiness = evaluateMergeReadiness(pr, this.config.github.requireChecks);
@@ -296,10 +739,19 @@ export class Orchestrator {
   private async handleFailedRun(issue: Issue, workspace: Workspace, previousAttempt: number | null, error: string): Promise<void> {
     const nextAttempt = previousAttempt == null ? 1 : previousAttempt + 1;
     if (nextAttempt > this.config.agent.maxRetryAttempts) {
+      await this.recordIssueState(issue, {
+        lastError: error,
+        errorCategory: categorizeRunError(error)
+      });
       await this.markLinearFailed(issue, workspace, previousAttempt, error);
       return;
     }
     const retry = this.scheduleRetry(issue, previousAttempt, error);
+    await this.recordIssueState(issue, {
+      lastError: error,
+      errorCategory: categorizeRunError(error),
+      nextRetryAt: new Date(retry.dueAtMs).toISOString()
+    });
     await this.markLinearRetryScheduled(issue, workspace, retry);
   }
 
@@ -335,41 +787,24 @@ export class Orchestrator {
     );
   }
 
-  private async markLinearSucceeded(issue: Issue, workspace: Workspace): Promise<void> {
-    const handoff = await readHandoff(workspace.path, issue.identifier);
-    if (handoff) {
-      const state = issueStateFromHandoff(issue, handoff);
-      if (state) {
-        await new IssueStateStore(resolve(this.options.repoRoot)).write(state);
-        await this.logger.write({
-          type: state.prUrl ? "pr_metadata_persisted" : "issue_state_persisted",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          message: state.prUrl ?? state.outcome,
-          payload: state
-        });
-        if (state.outcome === "already_satisfied") {
-          await this.logger.write({
-            type: "issue_already_satisfied",
-            issueId: issue.id,
-            issueIdentifier: issue.identifier,
-            message: "agent reported acceptance criteria were already satisfied",
-            payload: state
-          });
-        }
-      }
-    }
+  private async markLinearSucceeded(issue: Issue, workspace: Workspace, handoff: string | null, state?: IssueState): Promise<void> {
+    await this.recordIssueState(issue, { phase: "completed" });
+    const reviewLine = state?.reviewStatus
+      ? `\n\nAutomated review status: \`${state.reviewStatus}\`${state.reviewIteration ? ` after iteration ${state.reviewIteration}` : ""}.`
+      : "";
     await this.commentIssue(
       issue,
-      handoff ??
-        [
-          "### AgentOS handoff",
-          "",
-          "Codex completed this run successfully, but no handoff file was found.",
-          "",
-          `- Workspace: \`${workspace.path}\``,
-          "- Expected validation: project harness check"
-        ].join("\n")
+      handoff
+        ? `${handoff}${reviewLine}`
+        : [
+            "### AgentOS handoff",
+            "",
+            "Codex completed this run successfully, but no handoff file was found.",
+            "",
+            `- Workspace: \`${workspace.path}\``,
+            "- Expected validation: project harness check",
+            reviewLine.trim()
+          ].join("\n")
     );
     await this.moveIssue(issue, this.config.tracker.reviewState);
   }
@@ -458,6 +893,14 @@ export class Orchestrator {
     });
   }
 
+  private async recordIssueState(issue: Issue, patch: Partial<IssueState>): Promise<IssueState> {
+    return new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      ...patch
+    });
+  }
+
   private async moveIssue(issue: Issue, stateName: string | null): Promise<void> {
     if (!stateName || !this.tracker.move) return;
     await this.tracker.move(issue.identifier, stateName).catch((error: Error) =>
@@ -512,6 +955,69 @@ function isStateIn(state: string, states: string[]): boolean {
 
 function runningAllowedStates(config: ServiceConfig): string[] {
   return [...config.tracker.activeStates, config.tracker.runningState].filter((state): state is string => Boolean(state));
+}
+
+function readOnlyReviewConfig(config: ServiceConfig, repoRoot: string): ServiceConfig {
+  return {
+    ...config,
+    codex: {
+      ...config.codex,
+      threadSandbox: config.codex.threadSandbox ?? "workspace-write",
+      turnSandboxPolicy: config.codex.turnSandboxPolicy ?? { type: "workspaceWrite", writableRoots: [config.workspace.root, join(repoRoot, ".agent-os", "reviews")], networkAccess: true }
+    }
+  };
+}
+
+function reviewCheckFindings(status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>, config: ServiceConfig): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  if (status.checkSummary.failing > 0) {
+    findings.push({
+      reviewer: "checks",
+      decision: "changes_requested" as const,
+      severity: "P1" as const,
+      file: null,
+      line: null,
+      body: `${status.checkSummary.failing} GitHub check(s) failed. Fix CI before Human Review.`,
+      findingHash: `checks-failing-${status.checkSummary.failing}`
+    });
+  }
+  if (config.github.requireChecks && status.checkSummary.total === 0) {
+    findings.push({
+      reviewer: "checks",
+      decision: "changes_requested" as const,
+      severity: "P1" as const,
+      file: null,
+      line: null,
+      body: "No GitHub checks are present. The Wiggum loop requires at least one successful check or a human escalation.",
+      findingHash: "checks-missing"
+    });
+  }
+  if (config.github.requireChecks && status.checkSummary.total > 0 && status.checkSummary.successful === 0 && status.checkSummary.pending === 0) {
+    findings.push({
+      reviewer: "checks",
+      decision: "changes_requested" as const,
+      severity: "P1" as const,
+      file: null,
+      line: null,
+      body: "No successful GitHub checks are present.",
+      findingHash: "checks-no-success"
+    });
+  }
+  return findings;
+}
+
+function categorizeRunError(message: string): RunErrorCategory {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("timeout")) return "timeout";
+  if (normalized.includes("stall")) return "stall";
+  if (normalized.includes("cancel")) return "canceled";
+  if (normalized.includes("workspace") || normalized.includes("worktree")) return "workspace";
+  if (normalized.includes("prompt") || normalized.includes("liquid")) return "prompt";
+  if (normalized.includes("app_server") || normalized.includes("app-server") || normalized.includes("initialize")) return "app-server-init";
+  if (normalized.includes("review")) return "review";
+  if (normalized.includes("fix")) return "fix";
+  if (normalized.includes("validation") || normalized.includes("test") || normalized.includes("check")) return "validation";
+  return "streaming-turn";
 }
 
 async function readHandoff(workspacePath: string, identifier: string): Promise<string | null> {

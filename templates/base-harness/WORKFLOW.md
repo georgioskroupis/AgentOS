@@ -39,6 +39,22 @@ github:
   require_checks: true
   delete_branch: true
   done_state: Done
+  allow_human_merge_override: true
+review:
+  enabled: true
+  max_iterations: 3
+  required_reviewers:
+    - self
+    - correctness
+    - tests
+    - architecture
+  optional_reviewers:
+    - security
+  require_all_blocking_resolved: true
+  blocking_severities:
+    - P0
+    - P1
+    - P2
 ---
 
 # WORKFLOW.md
@@ -93,6 +109,23 @@ The first step of every run is an implementation audit:
 - Prefer extending the established path over creating a parallel one.
 - Treat already-satisfied acceptance criteria as a no-op handoff, not an
   invitation to rewrite.
+
+## Ralph Wiggum Review Loop
+
+After a run opens or updates a PR, AgentOS keeps the issue in `In Progress` and
+runs automated reviewer turns before moving it to `Human Review`.
+
+- Required reviewers: `self`, `correctness`, `tests`, `architecture`.
+- Optional reviewer: `security` when touched files involve auth, secrets,
+  external APIs, config, runners, GitHub, Linear, or orchestration.
+- Blocking findings use severity `P0`, `P1`, or `P2`; `P3` findings are
+  suggestions and do not force another fix iteration.
+- Reviewers write machine-readable artifacts under
+  `.agent-os/reviews/<issue>/iteration-<n>/`.
+- If blocking findings remain, AgentOS runs a focused fixer turn on the same PR
+  and repeats review up to `review.max_iterations`.
+- If review cannot converge, AgentOS moves to `Human Review` with
+  `reviewStatus: human_required` and a Linear comment explaining why.
 
 ## Agent Prompt
 

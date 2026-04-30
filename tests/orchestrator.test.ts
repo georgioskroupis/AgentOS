@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
 import type { AgentRunResult, AgentRunner, Issue, IssueTracker } from "../src/types.js";
 import { JsonlLogger } from "../src/logging.js";
+import { writeReviewArtifact } from "../src/review.js";
 
 const readyIssue: Issue = {
   id: "issue-1",
@@ -35,7 +36,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\n---\nDo {{ issue.identifier }}`,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
 
@@ -76,7 +77,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\n---\nDo {{ issue.identifier }}`,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
 
@@ -131,7 +132,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\n---\nAttempt {{ attempt | default: 0 }} for {{ issue.identifier }}`,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nAttempt {{ attempt | default: 0 }} for {{ issue.identifier }}`,
       "utf8"
     );
 
@@ -168,12 +169,61 @@ describe("orchestrator", () => {
     expect(prompts).toEqual(["Attempt 0 for AG-1", "Attempt 1 for AG-1"]);
   });
 
+  it("continues successful turns up to max_turns until a handoff exists", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-max-turns-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nagent:\n  max_turns: 2\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const prompts: string[] = [];
+    const moves: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([["issue-1", readyIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment() {}
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        prompts.push(input.prompt);
+        if (prompts.length === 2) {
+          await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
+          await writeFile(join(input.workspace.path, ".agent-os", "handoff-AG-1.md"), "AgentOS-Outcome: already-satisfied", "utf8");
+        }
+        return { status: "succeeded" };
+      }
+    };
+
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("AgentOS Continuation");
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+  });
+
   it("records already-satisfied no-op handoffs without requiring a PR", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-noop-"));
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\n---\nAudit {{ issue.identifier }}`,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nAudit {{ issue.identifier }}`,
       "utf8"
     );
 
@@ -366,5 +416,158 @@ describe("orchestrator", () => {
 
     expect(moves).toEqual(["AG-1 -> Human Review"]);
     expect(comments.join("\n")).toContain("no GitHub checks are present");
+  });
+
+  it("runs automated reviewers before moving an implemented PR to Human Review", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 1\n  required_reviewers: [self, correctness, tests, architecture]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          files: [{ path: "src/orchestrator.ts" }]
+        }
+      }),
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([["issue-1", readyIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
+          await writeFile(
+            join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
+            "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1\n\nValidation passed.",
+            "utf8"
+          );
+          return { status: "succeeded" };
+        }
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        const reviewer = input.prompt.match(/You are the (.+) automated reviewer/)?.[1] ?? "self";
+        await writeReviewArtifact(artifactPath, {
+          reviewer,
+          decision: "approved",
+          summary: "approved",
+          findings: []
+        });
+        return { status: "succeeded" };
+      }
+    };
+
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("automated review approved");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("approved");
+  });
+
+  it("blocks unapproved merge state when human override is disabled", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-gate-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        prUrl: "https://github.com/o/r/pull/1",
+        reviewStatus: "changes_requested",
+        updatedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(): Promise<AgentRunResult> {
+        throw new Error("runner should not be called for Merging issues");
+      }
+    };
+
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("automated review is not approved");
   });
 });

@@ -14,3 +14,13 @@ The product promise is simple:
 - Any registered Linear project can be polled by the Symphony-style
   orchestrator, worked in an isolated workspace, validated by the harness, and
   handed back for human review.
+
+<!-- AGENTOS:BEGIN -->
+## AgentOS Product Context
+
+Project: agent-os.
+
+Product context was inferred from the existing repository. Refine this section as product decisions become clearer.
+
+Known validation gaps: No npm lint script found. No dedicated coverage script found. No explicit formatting check script found. agent-check skips npm typecheck, tests, and build when node_modules is not installed.
+<!-- AGENTOS:END -->

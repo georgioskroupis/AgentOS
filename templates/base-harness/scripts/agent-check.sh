@@ -17,6 +17,8 @@ required=(
   ".agents/skills/fix-bug/SKILL.md"
   ".agents/skills/implement-feature/SKILL.md"
   ".agents/skills/review-pr/SKILL.md"
+  ".agents/skills/ci-diagnostics/SKILL.md"
+  ".agents/skills/qa-smoke-test/SKILL.md"
   ".agents/skills/write-tests/SKILL.md"
   ".agents/skills/update-docs/SKILL.md"
   ".agents/skills/generate-exec-plan/SKILL.md"

@@ -19,6 +19,17 @@ export class IssueStateStore {
     await writeTextEnsuringDir(this.pathFor(state.issueIdentifier), `${JSON.stringify(state, null, 2)}\n`);
   }
 
+  async merge(identifier: string, patch: Partial<IssueState> & Pick<IssueState, "issueId" | "issueIdentifier">): Promise<IssueState> {
+    const current = await this.read(identifier);
+    const next: IssueState = {
+      ...(current ?? { issueId: patch.issueId, issueIdentifier: patch.issueIdentifier, updatedAt: new Date().toISOString() }),
+      ...patch,
+      updatedAt: new Date().toISOString()
+    };
+    await this.write(next);
+    return next;
+  }
+
   private pathFor(identifier: string): string {
     return join(this.repoRoot, ".agent-os", "state", "issues", `${safeFileName(identifier)}.json`);
   }
@@ -33,6 +44,7 @@ export function issueStateFromHandoff(issue: Issue, handoff: string): IssueState
     issueIdentifier: issue.identifier,
     ...(prUrl ? { prUrl } : {}),
     ...(outcome ? { outcome } : {}),
+    ...(prUrl ? { reviewStatus: "pending" as const, reviewIteration: 0 } : {}),
     updatedAt: new Date().toISOString()
   };
 }

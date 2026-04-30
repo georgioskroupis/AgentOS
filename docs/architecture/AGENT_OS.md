@@ -5,6 +5,11 @@
 Templates install `AGENTS.md`, workflow docs, skills, validation scripts, and
 quality/security guidance into target repositories.
 
+The base skill pack teaches the workflows AgentOS expects agents to perform
+without human babysitting: planning, feature implementation, bug fixing, PR
+review, CI diagnostics, QA smoke validation, docs updates, test writing, and
+small cleanup.
+
 ## Enforcement Layer
 
 `scripts/agent-check.sh` is the one command agents must run before handoff.
@@ -27,12 +32,26 @@ It keeps orchestration logic narrow:
 - Every agent run starts with an implementation audit. Already-satisfied issues
   are reported as `AgentOS-Outcome: already-satisfied`, persisted as issue
   state, and moved to review without requiring a PR.
+- Implemented PRs run through the Ralph Wiggum loop while Linear remains
+  `In Progress`: self, correctness, tests, architecture, and conditional
+  security reviewers write machine-readable findings; blocking findings trigger
+  focused fixer turns on the same PR; non-converging reviews escalate to
+  `Human Review` with `reviewStatus: human_required`.
 - The merge shepherd watches `Merging`, validates GitHub PR checks, squash-merges
-  safe PRs, and moves Linear issues to `Done`.
+  safe PRs, respects Wiggum review state or an explicit Linear `Merging` human
+  override, and moves Linear issues to `Done`.
 - Successful unchanged issues are not re-dispatched inside the same service run;
   a Linear update or state transition is the signal for fresh work.
+- `agent-os inspect <issue>` reads durable state, recent logs, PR metadata, and
+  review artifacts so Linear comments remain high-level while the harness keeps
+  detailed evidence locally.
 
 ## Replication Layer
 
 `agent-os init`, `agent-os doctor`, `agent-os check`, and `agent-os.yml` make the
 same operating model portable to current and future projects.
+
+`agent-os setup <project-path>` is the friendly single-project path. It profiles
+the selected folder, chooses a harness profile, creates or validates the Linear
+project/workflow states, writes a tailored workflow, and prints the one
+orchestrator command needed for the solo polling loop.

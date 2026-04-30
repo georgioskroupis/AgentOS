@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { readdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { exists, readText } from "./fs-utils.js";
 import { JsonlLogger } from "./logging.js";
 
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
@@ -16,3 +18,47 @@ export async function getStatus(repo = process.cwd(), limit = 20): Promise<strin
     .join("\n");
 }
 
+export async function inspectIssue(repo = process.cwd(), identifier: string, limit = 30): Promise<string> {
+  const root = resolve(repo);
+  const statePath = join(root, ".agent-os", "state", "issues", `${safeFileName(identifier)}.json`);
+  const logger = new JsonlLogger(root);
+  const entries = (await logger.tail(500))
+    .filter((entry) => entry.issueIdentifier?.toLowerCase() === identifier.toLowerCase())
+    .slice(-limit);
+  const state = (await exists(statePath)) ? JSON.parse(await readText(statePath)) : null;
+  const reviewRoot = join(root, ".agent-os", "reviews", safeFileName(identifier));
+  const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot) : [];
+  const lines = [
+    `Issue: ${identifier}`,
+    state ? `Phase: ${state.phase ?? "unknown"}` : "Phase: unknown",
+    state?.prUrl ? `PR: ${state.prUrl}` : "PR: none recorded",
+    state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
+    state?.lastError ? `Last error: ${state.lastError}` : null,
+    state?.nextRetryAt ? `Next retry: ${state.nextRetryAt}` : null,
+    reviewArtifacts.length ? `Review artifacts:\n${reviewArtifacts.map((path) => `- ${path}`).join("\n")}` : "Review artifacts: none",
+    "",
+    "Recent events:",
+    entries.length
+      ? entries.map((entry) => `${entry.timestamp} ${entry.type}${entry.message ? ` - ${entry.message}` : ""}`).join("\n")
+      : "No recent events for this issue."
+  ].filter((line): line is string => line !== null);
+  return lines.join("\n");
+}
+
+async function listReviewArtifacts(root: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile() && entry.name.endsWith(".json")) out.push(path);
+    }
+  }
+  await walk(root);
+  return out.sort();
+}
+
+function safeFileName(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_");
+}

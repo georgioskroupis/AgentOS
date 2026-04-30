@@ -20,8 +20,13 @@ describe("GitHubClient", () => {
           mergeable: "MERGEABLE",
           baseRefName: "main",
           headRefName: "agent/AG-1",
+          headRefOid: "abc123",
           mergedAt: null,
-          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          files: [{ path: "src/github.ts" }],
+          reviewDecision: "APPROVED",
+          latestReviews: [{ author: { login: "bot" }, state: "APPROVED", body: "Looks good", submittedAt: "2026-01-01T00:00:00Z" }],
+          comments: [{ author: { login: "human" }, body: "Thanks", createdAt: "2026-01-01T00:00:00Z" }]
         }
       }),
       "utf8"
@@ -33,7 +38,7 @@ describe("GitHubClient", () => {
 
     await client.mergePullRequest(
       status.url,
-      { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done" },
+      { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
       dir
     );
 
@@ -52,8 +57,14 @@ describe("GitHubClient", () => {
           mergeable: "MERGEABLE",
           baseRefName: "main",
           headRefName: "agent/AG-2",
+          headSha: null,
           merged: false,
-          checkSummary: summarizeChecks([])
+          checkSummary: summarizeChecks([]),
+          checkDetails: [],
+          changedFiles: [],
+          reviewDecision: null,
+          latestReviews: [],
+          comments: []
         },
         true
       )
@@ -73,6 +84,7 @@ describe("GitHubClient", () => {
           mergeable: null,
           baseRefName: "main",
           headRefName: "agent/AG-3",
+          headRefOid: "def456",
           mergedAt: "2026-04-30T10:00:00Z",
           statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
         }

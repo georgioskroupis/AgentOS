@@ -15,17 +15,26 @@ required=(
   "templates/base-harness/AGENTS.md"
   "templates/base-harness/ARCHITECTURE.md"
   "templates/base-harness/WORKFLOW.md"
+  "templates/base-harness/.gitignore"
   "templates/base-harness/scripts/agent-check.sh"
   "skills/fix-bug/SKILL.md"
   "skills/implement-feature/SKILL.md"
   "skills/review-pr/SKILL.md"
+  "skills/ci-diagnostics/SKILL.md"
+  "skills/qa-smoke-test/SKILL.md"
   "skills/write-tests/SKILL.md"
   "skills/update-docs/SKILL.md"
   "skills/generate-exec-plan/SKILL.md"
   "skills/cleanup-tech-debt/SKILL.md"
+  "templates/base-harness/.agents/skills/ci-diagnostics/SKILL.md"
+  "templates/base-harness/.agents/skills/qa-smoke-test/SKILL.md"
   "bin/agent-os"
   "src/github.ts"
   "src/issue-state.ts"
+  "src/project-profiler.ts"
+  "src/review.ts"
+  "src/setup-wizard.ts"
+  "scripts/check-harness-contract.mjs"
 )
 
 missing=0
@@ -46,6 +55,7 @@ bash -n "$root/scripts/agent-check.sh"
 bash -n "$root/templates/base-harness/scripts/agent-check.sh"
 bash -n "$root/scripts/agent-bootstrap-worktree.sh"
 bash -n "$root/templates/base-harness/scripts/agent-bootstrap-worktree.sh"
+node "$root/scripts/check-harness-contract.mjs"
 
 if [[ -d "$root/node_modules" ]]; then
   npm --prefix "$root" run typecheck

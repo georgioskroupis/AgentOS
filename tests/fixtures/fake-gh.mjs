@@ -21,6 +21,11 @@ if (args[0] === "pr" && args[1] === "view") {
   process.exit(0);
 }
 
+if (args[0] === "pr" && args[1] === "diff") {
+  console.log(state.diff ?? "diff --git a/src/example.ts b/src/example.ts\n+example");
+  process.exit(0);
+}
+
 if (args[0] === "pr" && args[1] === "merge") {
   if (state.mergeError) {
     console.error(state.mergeError);
@@ -29,6 +34,11 @@ if (args[0] === "pr" && args[1] === "merge") {
   state.mergedWith = args.slice(2);
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
   console.log("Merged");
+  process.exit(0);
+}
+
+if (args[0] === "api" && args[1] === "graphql") {
+  console.log(JSON.stringify(state.graphql ?? { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }));
   process.exit(0);
 }
 

@@ -38,3 +38,23 @@ layers:
   to `Human Review`.
 - Linear pagination, dependency blocking, retries, and successful unchanged
   issue suppression are code paths, not prose-only policy.
+
+<!-- AGENTOS:BEGIN -->
+## AgentOS Architecture Notes
+
+Repository implements reusable harness and orchestration tooling for agent-assisted software projects.
+Architecture is organized into harness, enforcement, orchestration, and replication layers.
+Primary TypeScript source is under src/.
+bin/agent-os is the CLI entrypoint and runs via tsx when available, otherwise dist/cli.js.
+templates/base-harness contains reusable repository harness files copied into target projects.
+templates/profiles contains profile-specific additions for api, web, python, and typescript projects.
+skills contains reusable agent workflows for planning, implementation, bug fixing, PR review, CI diagnostics, QA smoke validation, docs, tests, and cleanup.
+src/linear.ts integrates with Linear GraphQL.
+src/github.ts shells through gh for PR status and squash merge workflows.
+src/runner/app-server.ts targets Codex App Server through JSON-RPC.
+src/orchestrator.ts schedules Linear issues, runs Codex agents, reconciles state, records events, runs automated review, and shepherds merges.
+scripts/agent-check.sh is the primary project harness check and validates required files, shell syntax, harness contract, typecheck, tests, and build when node_modules exists.
+GitHub Actions CI is present and documented as running npm ci followed by npm run agent-check.
+
+Public surfaces: package.json scripts, package.json bin entrypoint agent-os, bin/agent-os CLI commands, src/ modules and exported TypeScript APIs, templates/base-harness/ installed harness files, templates/profiles/ profile-specific docs and quality guidance, skills/*/SKILL.md reusable workflows, scripts/agent-check.sh, scripts/check-harness-contract.mjs, scripts/agent-smoke-test.sh, scripts/agent-quality-report.sh, scripts/agent-capture-logs.sh, WORKFLOW.md orchestration configuration and prompt contract, ARCHITECTURE.md repository architecture contract, docs/ product, architecture, runbook, decision, security, generated, and quality documentation, .github/workflows/ci.yml.
+<!-- AGENTOS:END -->

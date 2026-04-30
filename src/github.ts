@@ -8,8 +8,14 @@ export interface PullRequestStatus {
   mergeable: string | null;
   baseRefName: string | null;
   headRefName: string | null;
+  headSha: string | null;
   merged: boolean;
   checkSummary: CheckSummary;
+  checkDetails: CheckDetail[];
+  changedFiles: string[];
+  reviewDecision: string | null;
+  latestReviews: PullRequestReview[];
+  comments: PullRequestComment[];
 }
 
 export interface CheckSummary {
@@ -17,6 +23,33 @@ export interface CheckSummary {
   successful: number;
   pending: number;
   failing: number;
+}
+
+export interface CheckDetail {
+  name: string;
+  status: string | null;
+  conclusion: string | null;
+  url: string | null;
+}
+
+export interface PullRequestReview {
+  author: string | null;
+  state: string;
+  body: string | null;
+  submittedAt: string | null;
+}
+
+export interface PullRequestComment {
+  author: string | null;
+  body: string;
+  createdAt: string | null;
+}
+
+export interface ReviewThread {
+  path: string | null;
+  line: number | null;
+  isResolved: boolean;
+  comments: PullRequestComment[];
 }
 
 export interface MergeReadiness {
@@ -29,10 +62,11 @@ export class GitHubClient {
 
   async getPullRequest(url: string, cwd: string): Promise<PullRequestStatus> {
     const raw = await runShell(
-      `${this.command} pr view ${shellQuote(url)} --json url,state,isDraft,mergeable,baseRefName,headRefName,mergedAt,statusCheckRollup`,
+      `${this.command} pr view ${shellQuote(url)} --json url,state,isDraft,mergeable,baseRefName,headRefName,headRefOid,mergedAt,statusCheckRollup,changedFiles,files,reviewDecision,latestReviews,reviews,comments`,
       cwd
     );
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const rollup = Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup : [];
     return {
       url: String(parsed.url ?? url),
       state: String(parsed.state ?? ""),
@@ -40,8 +74,14 @@ export class GitHubClient {
       mergeable: typeof parsed.mergeable === "string" ? parsed.mergeable : null,
       baseRefName: typeof parsed.baseRefName === "string" ? parsed.baseRefName : null,
       headRefName: typeof parsed.headRefName === "string" ? parsed.headRefName : null,
+      headSha: typeof parsed.headRefOid === "string" ? parsed.headRefOid : null,
       merged: Boolean(parsed.mergedAt) || String(parsed.state ?? "").toUpperCase() === "MERGED",
-      checkSummary: summarizeChecks(Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup : [])
+      checkSummary: summarizeChecks(rollup),
+      checkDetails: summarizeCheckDetails(rollup),
+      changedFiles: changedFileNames(parsed.files),
+      reviewDecision: typeof parsed.reviewDecision === "string" ? parsed.reviewDecision : null,
+      latestReviews: pullRequestReviews(Array.isArray(parsed.latestReviews) ? parsed.latestReviews : Array.isArray(parsed.reviews) ? parsed.reviews : []),
+      comments: pullRequestComments(Array.isArray(parsed.comments) ? parsed.comments : [])
     };
   }
 
@@ -49,6 +89,51 @@ export class GitHubClient {
     const methodFlag = config.mergeMethod === "merge" ? "--merge" : config.mergeMethod === "rebase" ? "--rebase" : "--squash";
     const deleteFlag = config.deleteBranch ? " --delete-branch" : "";
     await runShell(`${this.command} pr merge ${shellQuote(url)} ${methodFlag}${deleteFlag}`, cwd);
+  }
+
+  async getPullRequestDiff(url: string, cwd: string): Promise<string> {
+    return runShell(`${this.command} pr diff ${shellQuote(url)}`, cwd);
+  }
+
+  async getPullRequestReviewThreads(url: string, cwd: string): Promise<ReviewThread[]> {
+    const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+    if (!match) return [];
+    const [, owner, repo, number] = match;
+    const query = `
+      query AgentOSReviewThreads($owner: String!, $repo: String!, $number: Int!) {
+        repository(owner: $owner, name: $repo) {
+          pullRequest(number: $number) {
+            reviewThreads(first: 100) {
+              nodes {
+                isResolved
+                path
+                line
+                comments(first: 20) {
+                  nodes {
+                    body
+                    createdAt
+                    author { login }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    const raw = await runShell(
+      `${this.command} api graphql -f query=${shellQuote(query)} -F owner=${shellQuote(owner)} -F repo=${shellQuote(repo)} -F number=${shellQuote(number)}`,
+      cwd
+    );
+    const parsed = JSON.parse(raw) as Record<string, any>;
+    const nodes = parsed.data?.repository?.pullRequest?.reviewThreads?.nodes;
+    if (!Array.isArray(nodes)) return [];
+    return nodes.map((node: Record<string, any>) => ({
+      path: typeof node.path === "string" ? node.path : null,
+      line: typeof node.line === "number" ? node.line : null,
+      isResolved: Boolean(node.isResolved),
+      comments: pullRequestComments(Array.isArray(node.comments?.nodes) ? node.comments.nodes : [])
+    }));
   }
 }
 
@@ -100,6 +185,105 @@ export function summarizeChecks(items: unknown[]): CheckSummary {
     }
   }
   return summary;
+}
+
+export function summarizeCheckDetails(items: unknown[]): CheckDetail[] {
+  return items.map((item) => {
+    const raw = item as Record<string, any>;
+    return {
+      name: String(raw.name ?? raw.context ?? raw.workflowName ?? "unknown"),
+      status: raw.status == null ? null : String(raw.status),
+      conclusion: raw.conclusion == null ? null : String(raw.conclusion),
+      url: typeof raw.detailsUrl === "string" ? raw.detailsUrl : typeof raw.url === "string" ? raw.url : null
+    };
+  });
+}
+
+export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: string, threads: ReviewThread[] = []): string {
+  const checks = status.checkDetails.length
+    ? status.checkDetails.map((check) => `- ${check.name}: ${check.status ?? "unknown"} / ${check.conclusion ?? "unknown"}${check.url ? ` (${check.url})` : ""}`).join("\n")
+    : "- No checks reported.";
+  const reviews = status.latestReviews.length
+    ? status.latestReviews.map((review) => `- ${review.author ?? "unknown"}: ${review.state}${review.body ? ` - ${firstLine(review.body)}` : ""}`).join("\n")
+    : "- No reviews reported.";
+  const comments = status.comments.length
+    ? status.comments.slice(-10).map((comment) => `- ${comment.author ?? "unknown"}: ${firstLine(comment.body)}`).join("\n")
+    : "- No PR comments reported.";
+  const unresolved = threads.filter((thread) => !thread.isResolved);
+  const threadSummary = unresolved.length
+    ? unresolved.map((thread) => `- ${thread.path ?? "unknown"}${thread.line ? `:${thread.line}` : ""}: ${thread.comments.map((comment) => firstLine(comment.body)).join(" | ")}`).join("\n")
+    : "- No unresolved review threads reported.";
+  return [
+    `State: ${status.state}`,
+    `Draft: ${status.isDraft ? "yes" : "no"}`,
+    `Mergeable: ${status.mergeable ?? "unknown"}`,
+    `Base: ${status.baseRefName ?? "unknown"}`,
+    `Head: ${status.headRefName ?? "unknown"} ${status.headSha ?? ""}`.trim(),
+    `Review decision: ${status.reviewDecision ?? "unknown"}`,
+    `Changed files: ${status.changedFiles.length ? status.changedFiles.join(", ") : "unknown"}`,
+    "",
+    "Checks:",
+    checks,
+    "",
+    "Latest reviews:",
+    reviews,
+    "",
+    "PR comments:",
+    comments,
+    "",
+    "Unresolved review threads:",
+    threadSummary,
+    "",
+    "Diff:",
+    diff.slice(0, 60_000)
+  ].join("\n");
+}
+
+export function summarizeFeedback(status: PullRequestStatus, threads: ReviewThread[] = []): string {
+  const comments = status.comments.map((comment) => `PR comment by ${comment.author ?? "unknown"}: ${firstLine(comment.body)}`);
+  const reviews = status.latestReviews.map((review) => `Review by ${review.author ?? "unknown"} (${review.state}): ${review.body ? firstLine(review.body) : "no body"}`);
+  const unresolved = threads
+    .filter((thread) => !thread.isResolved)
+    .flatMap((thread) => thread.comments.map((comment) => `Unresolved ${thread.path ?? "unknown"}${thread.line ? `:${thread.line}` : ""}: ${firstLine(comment.body)}`));
+  return [...reviews, ...comments, ...unresolved].slice(-30).join("\n");
+}
+
+function changedFileNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item;
+      const raw = item as Record<string, unknown>;
+      return typeof raw.path === "string" ? raw.path : typeof raw.filename === "string" ? raw.filename : null;
+    })
+    .filter((item): item is string => Boolean(item));
+}
+
+function pullRequestReviews(items: unknown[]): PullRequestReview[] {
+  return items.map((item) => {
+    const raw = item as Record<string, any>;
+    return {
+      author: typeof raw.author?.login === "string" ? raw.author.login : typeof raw.author === "string" ? raw.author : null,
+      state: String(raw.state ?? ""),
+      body: typeof raw.body === "string" ? raw.body : null,
+      submittedAt: typeof raw.submittedAt === "string" ? raw.submittedAt : null
+    };
+  });
+}
+
+function pullRequestComments(items: unknown[]): PullRequestComment[] {
+  return items.map((item) => {
+    const raw = item as Record<string, any>;
+    return {
+      author: typeof raw.author?.login === "string" ? raw.author.login : typeof raw.author === "string" ? raw.author : null,
+      body: String(raw.body ?? ""),
+      createdAt: typeof raw.createdAt === "string" ? raw.createdAt : null
+    };
+  });
+}
+
+function firstLine(value: string): string {
+  return value.trim().split(/\r?\n/)[0]?.slice(0, 240) ?? "";
 }
 
 function runShell(command: string, cwd: string): Promise<string> {

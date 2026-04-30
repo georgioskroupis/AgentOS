@@ -7,7 +7,7 @@ interface PendingRequest {
   timer: NodeJS.Timeout;
 }
 
-export async function verifyCodexAppServer(command = "codex app-server"): Promise<{ ok: boolean; details: string }> {
+export async function verifyCodexAppServer(command = "npx -y @openai/codex@latest app-server"): Promise<{ ok: boolean; details: string }> {
   const output = await captureShell(`${command} --help`, 5_000).catch((error: Error) => error.message);
   const ok = /app server|app-server protocol|json-rpc/i.test(output) && !/Commands:\s+exec\s+Run Codex non-interactively/i.test(output);
   return { ok, details: output.trim() };

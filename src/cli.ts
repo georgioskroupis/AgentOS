@@ -4,12 +4,13 @@ import { resolve } from "node:path";
 import { addProject, loadRegistry, removeProject } from "./registry.js";
 import { readText } from "./fs-utils.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
-import { getStatus } from "./status.js";
+import { getStatus, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
+import { formatSetupReport, runSetupWizard } from "./setup-wizard.js";
 
 const program = new Command();
 
@@ -41,14 +42,44 @@ program
   .command("doctor")
   .argument("<repo>", "repository path to inspect")
   .option("--profile <profile>", "harness profile to validate", "base")
+  .option("--workflow <path>", "workflow path to validate", "WORKFLOW.md")
   .action(async (repo, options) => {
     const profile = assertHarnessProfile(options.profile);
-    const changes = await doctorHarness({ repo, profile });
-    const missing = changes.filter((change) => change.action === "missing");
+    const changes = await doctorHarness({ repo, profile, workflowPath: options.workflow });
+    const failing = changes.filter((change) => change.action === "missing" || change.action === "invalid");
     for (const change of changes) {
-      console.log(`${change.action}: ${change.path}`);
+      console.log(`${change.action}: ${change.path}${change.message ? ` - ${change.message}` : ""}`);
     }
-    if (missing.length > 0) process.exitCode = 1;
+    if (failing.length > 0) process.exitCode = 1;
+  });
+
+program
+  .command("setup")
+  .argument("<project-path>", "project folder to initialize for AgentOS")
+  .option("--dry-run", "show what setup would do without writing files or mutating Linear")
+  .option("--profile <profile>", "harness profile: auto, base, typescript, python, web, api", "auto")
+  .option("--greenfield", "force greenfield setup mode")
+  .option("--existing", "force existing-project setup mode")
+  .option("--team <team>", "Linear team id or key")
+  .option("--project <project>", "Linear project name or slug")
+  .option("--no-linear", "skip Linear project and workflow-state setup")
+  .option("--no-codex-summary", "skip Codex project summary and use static scan only")
+  .option("--no-commit", "do not offer or create the baseline commit")
+  .action(async (projectPath, options) => {
+    const mode = options.greenfield ? "greenfield" : options.existing ? "existing" : "auto";
+    const profile = options.profile === "auto" ? "auto" : assertHarnessProfile(options.profile);
+    const report = await runSetupWizard({
+      projectPath,
+      dryRun: Boolean(options.dryRun),
+      profile,
+      mode,
+      team: options.team,
+      project: options.project,
+      linear: options.linear !== false,
+      useCodexSummary: options.codexSummary !== false,
+      commit: options.commit === false ? false : undefined
+    });
+    console.log(formatSetupReport(report));
   });
 
 program
@@ -136,6 +167,15 @@ program
     console.log(await getStatus(options.repo, Number.parseInt(options.limit, 10)));
   });
 
+program
+  .command("inspect")
+  .argument("<issue>", "Linear issue identifier, for example VER-28")
+  .option("--repo <path>", "repository path", process.cwd())
+  .option("--limit <number>", "number of recent issue events", "30")
+  .action(async (issue, options) => {
+    console.log(await inspectIssue(options.repo, issue, Number.parseInt(options.limit, 10)));
+  });
+
 const linear = program.command("linear").description("Linear helper commands");
 
 linear
@@ -182,6 +222,9 @@ linear
     const github = await verifyGitHubCli(config.github.command, process.cwd());
     console.log(`Linear OK: team=${team.key} project=${project.slugId ?? project.name}`);
     console.log(`Configured active states: ${config.tracker.activeStates.join(", ")}`);
+    console.log(`Configured merge state: ${config.tracker.mergeState ?? "(none)"}`);
+    console.log(`Configured done state: ${config.github.doneState}`);
+    console.log(`Wiggum review: ${config.review.enabled ? `enabled (${config.review.requiredReviewers.join(", ")})` : "disabled"}`);
     console.log(`Eligible candidate issues: ${candidates.length}`);
     console.log(github.ok ? "GitHub CLI OK" : `GitHub CLI unavailable: ${github.details}`);
     if (!github.ok) process.exitCode = 1;
@@ -237,9 +280,36 @@ linear
     }
   });
 
+linear
+  .command("seed-maintenance")
+  .requiredOption("--team <team>", "Linear team id or key")
+  .option("--project <name>", "Linear project name", "AgentOS")
+  .option("--state <name>", "Linear state for generated maintenance issues", "Backlog")
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .action(async (options) => {
+    const client = await linearClientFromWorkflow(options.workflow);
+    const teams = await client.listTeams();
+    const team = teams.find((candidate) => candidate.id === options.team || candidate.key === options.team);
+    if (!team) throw new Error(`Linear team not found: ${options.team}`);
+    const states = await client.listWorkflowStates(team.id);
+    const state = states.find((candidate) => candidate.name.toLowerCase() === String(options.state).toLowerCase());
+    if (!state) throw new Error(`Linear state not found for team ${team.key}: ${options.state}`);
+    const project = (await client.findProject(options.project)) ?? (await client.createProject(options.project, team.id));
+    for (const item of maintenanceIssues) {
+      const issue = await client.createIssue({
+        teamId: team.id,
+        title: item.title,
+        description: item.description,
+        projectId: project.id,
+        stateId: state.id
+      });
+      console.log(`created maintenance issue: ${issue.identifier} ${issue.title}`);
+    }
+  });
+
 program
   .command("codex-doctor")
-  .option("--command <command>", "Codex app-server command", "npx codex app-server")
+  .option("--command <command>", "Codex app-server command", "npx -y @openai/codex@latest app-server")
   .action(async (options) => {
     const result = await verifyCodexAppServer(options.command);
     console.log(result.ok ? "codex app-server available" : "codex app-server unavailable");
@@ -280,6 +350,55 @@ const roadmapTitles = [
   "Implement observability",
   "Dogfood AgentOS on its own Linear issues",
   "Write rollout docs"
+];
+
+const maintenanceIssues = [
+  {
+    title: "Doc-gardening pass",
+    description: [
+      "Goal: scan repository docs for stale workflow, command, architecture, and product guidance.",
+      "",
+      "Acceptance criteria:",
+      "- Compare docs against current code behavior.",
+      "- Update only stale or missing source-of-truth docs.",
+      "- Run `npm run agent-check`.",
+      "- Handoff includes changed docs, validation, and follow-up issues."
+    ].join("\n")
+  },
+  {
+    title: "Refresh quality score",
+    description: [
+      "Goal: refresh `docs/quality/QUALITY_SCORE.md` against current harness capabilities.",
+      "",
+      "Acceptance criteria:",
+      "- Review context, validation, workflow, skills, safety, and orchestration rows.",
+      "- Add concrete gaps as follow-up Linear issues instead of expanding scope.",
+      "- Run `npm run agent-check`."
+    ].join("\n")
+  },
+  {
+    title: "Detect workflow naming drift",
+    description: [
+      "Goal: find stale state names, canceled spelling variants, and duplicate workflow concepts.",
+      "",
+      "Acceptance criteria:",
+      "- Run or improve executable drift checks.",
+      "- Remove stale `Ready` wording from docs/templates if found.",
+      "- Preserve `Canceled` as the only spelling.",
+      "- Run `npm run agent-check`."
+    ].join("\n")
+  },
+  {
+    title: "Scan for small refactor candidates",
+    description: [
+      "Goal: identify duplicate helpers, stale adapters, or small code paths that harm agent legibility.",
+      "",
+      "Acceptance criteria:",
+      "- Keep any implementation changes small and behavior-preserving.",
+      "- File follow-up issues for broad refactors.",
+      "- Run `npm run agent-check`."
+    ].join("\n")
+  }
 ];
 
 function roadmapDescription(index: number): string {

@@ -58,7 +58,9 @@ describe("CodexAppServerRunner", () => {
         readTimeoutMs: 1000,
         stallTimeoutMs: 5000,
         passThrough: {}
-      }
+      },
+      github: { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
+      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"] }
     };
 
     const events: string[] = [];
@@ -105,7 +107,9 @@ describe("CodexAppServerRunner", () => {
         readTimeoutMs: 1000,
         stallTimeoutMs: 5000,
         passThrough: {}
-      }
+      },
+      github: { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
+      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"] }
     };
 
     const runner = new CodexAppServerRunner();
@@ -147,7 +151,9 @@ describe("CodexAppServerRunner", () => {
         readTimeoutMs: 1000,
         stallTimeoutMs: 5000,
         passThrough: {}
-      }
+      },
+      github: { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
+      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"] }
     };
 
     const runner = new CodexAppServerRunner();

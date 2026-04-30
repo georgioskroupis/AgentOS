@@ -45,7 +45,9 @@ describe("issue state handoff parsing", () => {
 
     expect(state).toMatchObject({
       prUrl: "https://github.com/o/r/pull/1",
-      outcome: "implemented"
+      outcome: "implemented",
+      reviewStatus: "pending",
+      reviewIteration: 0
     });
   });
 });

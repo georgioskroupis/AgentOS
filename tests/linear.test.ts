@@ -82,6 +82,23 @@ describe("LinearClient", () => {
     expect(requests[2].variables).toEqual({ id: issueId, input: { stateId: "state-review" } });
   });
 
+  it("creates missing workflow states for setup", async () => {
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      { data: { workflowStates: { nodes: [{ id: "state-todo", name: "Todo", type: "unstarted" }] } } },
+      { data: { workflowStateCreate: { success: true, workflowState: { id: "state-review", name: "Human Review", type: "started" } } } }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    const result = await client.ensureWorkflowStates("team-1", [
+      { name: "Todo", type: "unstarted" },
+      { name: "Human Review", type: "started" }
+    ]);
+
+    expect(result.created).toEqual([{ id: "state-review", name: "Human Review", type: "started" }]);
+    expect(requests[1].variables.input).toEqual({ teamId: "team-1", name: "Human Review", type: "started" });
+  });
+
   it("recognizes Linear issue identifiers", () => {
     expect(isLinearIdentifier("VER-21")).toBe(true);
     expect(isLinearIdentifier("01974a5a-40bb-7bf1-b09f-b6d1f18d1234")).toBe(false);

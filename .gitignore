@@ -8,3 +8,4 @@ coverage/
 .agent-os/*.env
 .DS_Store
 *.log
+.agent-os/

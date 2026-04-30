@@ -3,9 +3,10 @@ export const harnessProfiles = ["base", "typescript", "python", "web", "api"] as
 export type HarnessProfile = (typeof harnessProfiles)[number];
 
 export interface HarnessChange {
-  action: "add" | "overwrite" | "exists" | "missing";
+  action: "add" | "overwrite" | "exists" | "missing" | "invalid";
   path: string;
   source?: string;
+  message?: string;
 }
 
 export interface ProjectRegistry {
@@ -107,6 +108,15 @@ export interface ServiceConfig {
     requireChecks: boolean;
     deleteBranch: boolean;
     doneState: string;
+    allowHumanMergeOverride: boolean;
+  };
+  review: {
+    enabled: boolean;
+    maxIterations: number;
+    requiredReviewers: string[];
+    optionalReviewers: string[];
+    requireAllBlockingResolved: boolean;
+    blockingSeverities: Array<"P0" | "P1" | "P2">;
   };
 }
 
@@ -160,5 +170,61 @@ export interface IssueState {
   issueIdentifier: string;
   prUrl?: string;
   outcome?: "implemented" | "already_satisfied" | "partially_satisfied";
+  phase?: RunPhase;
+  errorCategory?: RunErrorCategory;
+  lastError?: string;
+  nextRetryAt?: string;
+  headSha?: string | null;
+  reviewIteration?: number;
+  reviewStatus?: ReviewStatus;
+  reviewers?: ReviewStateReviewer[];
+  findings?: ReviewFinding[];
+  resolvedFindingHashes?: string[];
+  lastReviewedSha?: string | null;
+  lastFixedSha?: string | null;
+  lastHumanFeedbackAt?: string | null;
+  humanOverrideAt?: string | null;
   updatedAt: string;
+}
+
+export type RunPhase =
+  | "workspace"
+  | "prompt"
+  | "app-server-init"
+  | "streaming-turn"
+  | "validation"
+  | "review"
+  | "fix"
+  | "merge"
+  | "completed";
+
+export type RunErrorCategory =
+  | "workspace"
+  | "prompt"
+  | "app-server-init"
+  | "streaming-turn"
+  | "timeout"
+  | "stall"
+  | "canceled"
+  | "validation"
+  | "review"
+  | "fix";
+
+export type ReviewStatus = "pending" | "approved" | "changes_requested" | "human_required";
+
+export interface ReviewStateReviewer {
+  name: string;
+  decision: ReviewStatus;
+  iteration: number;
+  artifactPath?: string;
+}
+
+export interface ReviewFinding {
+  reviewer: string;
+  decision: "approved" | "changes_requested" | "human_required";
+  severity: "P0" | "P1" | "P2" | "P3";
+  file?: string | null;
+  line?: number | null;
+  body: string;
+  findingHash: string;
 }

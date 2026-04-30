@@ -34,3 +34,13 @@ For code-changing tasks:
 - Keep generated project harness files concise and easy to customize.
 - Extend existing commands, states, templates, and modules instead of creating
   duplicate implementations.
+
+<!-- AGENTOS:BEGIN -->
+## AgentOS Project Context
+
+AgentOS detected this as a `existing` project using the `api` profile.
+
+Detected stack: Node.js, TypeScript, API, Commander CLI, Vitest, Linear GraphQL integration, GitHub CLI integration, Codex App Server JSON-RPC, YAML/Liquid template rendering.
+
+Agents should audit existing behavior before editing, avoid duplicate implementations, and run the project harness before handoff.
+<!-- AGENTOS:END -->
