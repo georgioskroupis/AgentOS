@@ -223,7 +223,7 @@ linear
     const team = teams.find((candidate) => candidate.id === options.team || candidate.key === options.team);
     if (!team) throw new Error(`Linear team not found: ${options.team}`);
     const states = await client.listWorkflowStates(team.id);
-    const ready = states.find((state) => ["ready", "todo", "backlog"].includes(state.name.toLowerCase()));
+    const startState = states.find((state) => ["todo", "ready", "backlog"].includes(state.name.toLowerCase()));
     const project = await client.createProject(options.project, team.id);
     for (const [index, title] of roadmapTitles.entries()) {
       await client.createIssue({
@@ -231,7 +231,7 @@ linear
         title,
         description: roadmapDescription(index),
         projectId: project.id,
-        stateId: index === 0 ? ready?.id : undefined
+        stateId: index === 0 ? startState?.id : undefined
       });
       console.log(`created issue ${index + 1}: ${title}`);
     }
@@ -283,7 +283,7 @@ const roadmapTitles = [
 ];
 
 function roadmapDescription(index: number): string {
-  const gate = index === 0 ? "This is the only issue that should start in Ready." : "Keep this issue out of Ready until the previous roadmap issue is complete.";
+  const gate = index === 0 ? "This is the only issue that should start in Todo." : "Keep this issue out of Todo until the previous roadmap issue is complete.";
   return [
     gate,
     "",

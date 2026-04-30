@@ -48,8 +48,8 @@ out of that state until the previous item is complete.
 - Terminal states: `Done`, `Closed`, `Canceled`, `Duplicate`
 - Seeded roadmap: `VER-5` through `VER-21`
 
-This workspace intentionally uses `Canceled` only. Do not add a separate
-`Cancelled` state.
+This workspace intentionally uses `Canceled` only. Do not add spelling variants
+for the same state.
 
 ## Linear Lifecycle
 
