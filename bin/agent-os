@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -f "$ROOT/src/cli.ts" && -d "$ROOT/node_modules/tsx" ]]; then
+  exec node --import tsx "$ROOT/src/cli.ts" "$@"
+fi
+
+exec node "$ROOT/dist/cli.js" "$@"

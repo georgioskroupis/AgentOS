@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.agent-os/runs/
+.agent-os/workspaces/
+.DS_Store
+*.log
+

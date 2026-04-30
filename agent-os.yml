@@ -1,0 +1,14 @@
+version: 1
+defaults:
+  prProvider: github
+  workspaceRoot: .agent-os/workspaces
+projects:
+  - name: AgentOS
+    repo: .
+    workflow: WORKFLOW.md
+    harnessProfile: typescript
+    tracker:
+      kind: linear
+      projectSlug: AgentOS
+    maxConcurrency: 1
+

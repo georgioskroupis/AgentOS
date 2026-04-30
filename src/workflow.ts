@@ -1,0 +1,179 @@
+import { dirname, resolve } from "node:path";
+import YAML from "yaml";
+import { Liquid } from "liquidjs";
+import { exists, readText } from "./fs-utils.js";
+import type { Issue, ServiceConfig, WorkflowDefinition } from "./types.js";
+
+const defaultActiveStates = ["Todo", "In Progress", "Ready"];
+const defaultTerminalStates = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"];
+
+export async function loadWorkflow(workflowPath: string): Promise<WorkflowDefinition> {
+  const resolved = resolve(workflowPath);
+  if (!(await exists(resolved))) {
+    throw new Error(`missing_workflow_file: ${resolved}`);
+  }
+  const text = await readText(resolved);
+  const { config, body } = parseWorkflowText(text);
+  return {
+    config,
+    prompt_template: body.trim(),
+    workflowPath: resolved
+  };
+}
+
+export function parseWorkflowText(text: string): { config: Record<string, unknown>; body: string } {
+  if (!text.startsWith("---\n")) {
+    return { config: {}, body: text };
+  }
+  const end = text.indexOf("\n---", 4);
+  if (end === -1) {
+    throw new Error("workflow_parse_error: missing closing front matter marker");
+  }
+  const rawFrontMatter = text.slice(4, end);
+  const body = text.slice(end + 4);
+  const parsed = YAML.parse(rawFrontMatter) as unknown;
+  if (parsed == null) {
+    return { config: {}, body };
+  }
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("workflow_front_matter_not_a_map");
+  }
+  return { config: parsed as Record<string, unknown>, body };
+}
+
+export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.ProcessEnv = process.env): ServiceConfig {
+  const cfg = workflow.config;
+  const tracker = objectAt(cfg, "tracker");
+  const polling = objectAt(cfg, "polling");
+  const workspace = objectAt(cfg, "workspace");
+  const hooks = objectAt(cfg, "hooks");
+  const agent = objectAt(cfg, "agent");
+  const codex = objectAt(cfg, "codex");
+  const workflowDir = dirname(workflow.workflowPath);
+
+  const trackerKind = stringAt(tracker, "kind", "linear");
+  if (trackerKind !== "linear") {
+    throw new Error(`unsupported_tracker_kind: ${trackerKind}`);
+  }
+
+  const apiKeyRaw = stringAt(tracker, "api_key", "$LINEAR_API_KEY");
+  const apiKey = resolveEnvReference(apiKeyRaw, env);
+  const projectSlug = stringAt(tracker, "project_slug", stringAt(tracker, "projectSlug", ""));
+
+  return {
+    tracker: {
+      kind: "linear",
+      endpoint: stringAt(tracker, "endpoint", "https://api.linear.app/graphql"),
+      apiKey,
+      projectSlug,
+      activeStates: stringListAt(tracker, "active_states", defaultActiveStates),
+      terminalStates: stringListAt(tracker, "terminal_states", defaultTerminalStates)
+    },
+    polling: {
+      intervalMs: positiveIntAt(polling, "interval_ms", 30_000)
+    },
+    workspace: {
+      root: resolveLocalPath(stringAt(workspace, "root", ".agent-os/workspaces"), workflowDir, env)
+    },
+    hooks: {
+      afterCreate: nullableStringAt(hooks, "after_create"),
+      beforeRun: nullableStringAt(hooks, "before_run"),
+      afterRun: nullableStringAt(hooks, "after_run"),
+      beforeRemove: nullableStringAt(hooks, "before_remove"),
+      timeoutMs: positiveIntAt(hooks, "timeout_ms", 60_000)
+    },
+    agent: {
+      maxConcurrentAgents: positiveIntAt(agent, "max_concurrent_agents", 10),
+      maxTurns: positiveIntAt(agent, "max_turns", 20),
+      maxRetryBackoffMs: positiveIntAt(agent, "max_retry_backoff_ms", 300_000),
+      maxConcurrentAgentsByState: stateConcurrencyMap(agent.max_concurrent_agents_by_state)
+    },
+    codex: {
+      command: stringAt(codex, "command", "npx -y @openai/codex@latest app-server"),
+      approvalPolicy: codex.approval_policy,
+      threadSandbox: codex.thread_sandbox,
+      turnSandboxPolicy: codex.turn_sandbox_policy,
+      turnTimeoutMs: positiveIntAt(codex, "turn_timeout_ms", 3_600_000),
+      readTimeoutMs: positiveIntAt(codex, "read_timeout_ms", 5_000),
+      stallTimeoutMs: intAt(codex, "stall_timeout_ms", 300_000),
+      passThrough: { ...codex }
+    }
+  };
+}
+
+export function validateDispatchConfig(config: ServiceConfig): void {
+  if (!config.tracker.kind) throw new Error("tracker.kind is required");
+  if (!config.tracker.apiKey) throw new Error("tracker.api_key is required after environment resolution");
+  if (!config.tracker.projectSlug) throw new Error("tracker.project_slug is required");
+  if (!config.codex.command) throw new Error("codex.command is required");
+}
+
+export async function renderPrompt(template: string, issue: Issue, attempt: number | null): Promise<string> {
+  if (!template.trim()) {
+    return "You are working on an issue from Linear.";
+  }
+  const liquid = new Liquid({
+    strictVariables: true,
+    strictFilters: true,
+    lenientIf: false
+  });
+  return liquid.parseAndRender(template, { issue, attempt });
+}
+
+function objectAt(value: Record<string, unknown>, key: string): Record<string, unknown> {
+  const found = value[key];
+  if (!found || typeof found !== "object" || Array.isArray(found)) {
+    return {};
+  }
+  return found as Record<string, unknown>;
+}
+
+function stringAt(value: Record<string, unknown>, key: string, fallback: string): string {
+  const found = value[key];
+  return typeof found === "string" ? found : fallback;
+}
+
+function nullableStringAt(value: Record<string, unknown>, key: string): string | null {
+  const found = value[key];
+  return typeof found === "string" && found.trim() ? found : null;
+}
+
+function stringListAt(value: Record<string, unknown>, key: string, fallback: string[]): string[] {
+  const found = value[key];
+  return Array.isArray(found) && found.every((item) => typeof item === "string") ? found : fallback;
+}
+
+function positiveIntAt(value: Record<string, unknown>, key: string, fallback: number): number {
+  const raw = value[key];
+  const num = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
+  return Number.isInteger(num) && num > 0 ? num : fallback;
+}
+
+function intAt(value: Record<string, unknown>, key: string, fallback: number): number {
+  const raw = value[key];
+  const num = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
+  return Number.isInteger(num) ? num : fallback;
+}
+
+function stateConcurrencyMap(value: unknown): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  for (const [state, raw] of Object.entries(value)) {
+    const num = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
+    if (Number.isInteger(num) && num > 0) {
+      out.set(state.toLowerCase(), num);
+    }
+  }
+  return out;
+}
+
+function resolveEnvReference(value: string, env: NodeJS.ProcessEnv): string {
+  if (!value.startsWith("$")) return value;
+  return env[value.slice(1)] ?? "";
+}
+
+function resolveLocalPath(value: string, baseDir: string, env: NodeJS.ProcessEnv): string {
+  let expanded = value.replace(/^~(?=$|\/)/, env.HOME ?? "");
+  expanded = expanded.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, name: string) => env[name] ?? "");
+  return resolve(baseDir, expanded);
+}

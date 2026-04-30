@@ -1,0 +1,30 @@
+{
+  "name": "agent-os",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "agent-os": "./bin/agent-os"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "agent-check": "bash scripts/agent-check.sh"
+  },
+  "dependencies": {
+    "commander": "^14.0.2",
+    "liquidjs": "^10.24.0",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@openai/codex": "^0.125.0",
+    "@types/node": "^24.10.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
