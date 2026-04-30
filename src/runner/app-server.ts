@@ -132,7 +132,7 @@ export class CodexAppServerRunner implements AgentRunner {
       const thread = (await send("thread/start", {
         cwd: input.workspace.path,
         approvalPolicy: input.config.codex.approvalPolicy ?? "never",
-        sandbox: input.config.codex.threadSandbox ?? "workspaceWrite",
+        sandbox: normalizeSandbox(input.config.codex.threadSandbox ?? "workspace-write"),
         experimentalRawEvents: false,
         persistExtendedHistory: true
       })) as Record<string, any>;
@@ -142,11 +142,7 @@ export class CodexAppServerRunner implements AgentRunner {
         input: [{ type: "text", text: input.prompt }],
         cwd: input.workspace.path,
         approvalPolicy: input.config.codex.approvalPolicy ?? "never",
-        sandboxPolicy: input.config.codex.turnSandboxPolicy ?? {
-          type: "workspaceWrite",
-          writableRoots: [input.workspace.path],
-          networkAccess: true
-        }
+        sandboxPolicy: normalizeSandboxPolicy(input.config.codex.turnSandboxPolicy, input.workspace.path)
       })) as Record<string, any>;
       turnId = String(turn.turn?.id ?? turn.turnId ?? turn.id ?? "");
 
@@ -207,6 +203,26 @@ export class CodexAppServerRunner implements AgentRunner {
       }
     }
   }
+}
+
+function normalizeSandbox(value: unknown): unknown {
+  if (value === "workspaceWrite") return "workspace-write";
+  if (value === "readOnly") return "read-only";
+  if (value === "dangerFullAccess") return "danger-full-access";
+  return value;
+}
+
+function normalizeSandboxPolicy(policy: unknown, workspacePath: string): unknown {
+  if (policy && typeof policy === "object" && !Array.isArray(policy)) {
+    const normalized = { ...(policy as Record<string, unknown>) };
+    normalized.type = normalizeSandbox(normalized.type);
+    return normalized;
+  }
+  return {
+    type: "workspace-write",
+    writableRoots: [workspacePath],
+    networkAccess: true
+  };
 }
 
 function captureShell(command: string, timeoutMs: number): Promise<string> {

@@ -8,6 +8,7 @@ import type { Issue, ServiceConfig, Workspace } from "../src/types.js";
 const fixture = resolve("tests/fixtures/fake-app-server.mjs");
 const fixtureCommand = `node ${JSON.stringify(fixture)}`;
 const instantFixtureCommand = `node ${JSON.stringify(fixture)} --instant`;
+const strictSandboxFixtureCommand = `node ${JSON.stringify(fixture)} --strict-sandbox`;
 
 const issue: Issue = {
   id: "issue-1",
@@ -112,6 +113,48 @@ describe("CodexAppServerRunner", () => {
       runner.run({
         issue,
         prompt: "Do quick work",
+        attempt: null,
+        workspace,
+        config,
+        onEvent() {}
+      })
+    ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+  });
+
+  it("uses current app-server sandbox names by default", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-sandbox-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config: ServiceConfig = {
+      tracker: {
+        kind: "linear",
+        endpoint: "https://api.linear.app/graphql",
+        apiKey: "x",
+        projectSlug: "AgentOS",
+        activeStates: ["Ready"],
+        terminalStates: ["Done"],
+        runningState: "In Progress",
+        reviewState: "Human Review",
+        mergeState: null,
+        needsInputState: "Human Review"
+      },
+      polling: { intervalMs: 1000 },
+      workspace: { root: workspacePath },
+      hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 1000 },
+      agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryAttempts: 3, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
+      codex: {
+        command: strictSandboxFixtureCommand,
+        turnTimeoutMs: 5000,
+        readTimeoutMs: 1000,
+        stallTimeoutMs: 5000,
+        passThrough: {}
+      }
+    };
+
+    const runner = new CodexAppServerRunner();
+    await expect(
+      runner.run({
+        issue,
+        prompt: "Do sandboxed work",
         attempt: null,
         workspace,
         config,
