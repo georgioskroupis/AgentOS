@@ -13,6 +13,8 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   primary-PR compatibility mirror while downstream code moves to `prs[]`.
 - Run summaries live under `.agent-os/runs/<run-id>/summary.json`, include
   `schemaVersion`, and record hashes for prompt/event/handoff artifacts.
+- Workspace locks live under `.agent-os/workspaces/.agent-os/locks/workspaces`
+  with schema-versioned owners and are recovered when stale.
 
 ## Validation
 

@@ -131,6 +131,7 @@ export interface Workspace {
   path: string;
   workspaceKey: string;
   createdNow: boolean;
+  lockPath?: string;
 }
 
 export interface AgentEvent {

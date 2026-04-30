@@ -1,9 +1,9 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { WorkspaceManager, workspaceKey } from "../src/workspace.js";
+import { acquireWorkspaceLock, releaseWorkspaceLock, WorkspaceManager, workspaceKey } from "../src/workspace.js";
 import type { ServiceConfig } from "../src/types.js";
 
 describe("workspace", () => {
@@ -60,6 +60,43 @@ describe("workspace", () => {
     const manager = new WorkspaceManager(config, source);
     const workspace = await manager.createOrReuse("AG-1");
     expect(await readFile(join(workspace.path, "key.txt"), "utf8")).toBe("AG-1");
+    expect(workspace.lockPath).toBeTruthy();
+    await expect(stat(workspace.lockPath!)).resolves.toBeTruthy();
+    await manager.afterRun(workspace);
+    await expect(stat(workspace.lockPath!)).rejects.toThrow();
+  });
+
+  it("refuses a workspace with a live lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-lock-live-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-lock-live-"));
+    const config = serviceConfig(root);
+    const lockPath = await acquireWorkspaceLock(root, "AG-1", join(root, "AG-1"));
+
+    await expect(new WorkspaceManager(config, source).createOrReuse("AG-1")).rejects.toThrow("workspace_locked: AG-1");
+    await releaseWorkspaceLock(lockPath);
+  });
+
+  it("recovers a stale workspace lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-lock-stale-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-lock-stale-"));
+    const key = "AG-1";
+    const lockPath = join(root, ".agent-os", "locks", "workspaces", `${key}.lock`);
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        workspaceKey: key,
+        workspacePath: join(root, key),
+        pid: process.pid,
+        createdAt: "2000-01-01T00:00:00.000Z"
+      }),
+      "utf8"
+    );
+
+    const workspace = await new WorkspaceManager(serviceConfig(root), source).createOrReuse(key);
+    expect(workspace.lockPath).toBe(lockPath);
+    await releaseWorkspaceLock(lockPath);
   });
 
   it("refuses to bootstrap a worktree from a dirty source repo", async () => {
@@ -84,6 +121,45 @@ describe("workspace", () => {
     expect(result.stderr).toContain("dirty source worktree");
   });
 });
+
+function serviceConfig(root: string): ServiceConfig {
+  return {
+    trustMode: "ci-locked",
+    tracker: {
+      kind: "linear",
+      endpoint: "https://api.linear.app/graphql",
+      apiKey: "x",
+      projectSlug: "AgentOS",
+      activeStates: ["Ready"],
+      terminalStates: ["Done"],
+      runningState: "In Progress",
+      reviewState: "Human Review",
+      mergeState: null,
+      needsInputState: "Human Review"
+    },
+    polling: { intervalMs: 1000 },
+    workspace: { root },
+    hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 5000 },
+    agent: {
+      maxConcurrentAgents: 1,
+      maxTurns: 20,
+      maxRetryAttempts: 3,
+      maxRetryBackoffMs: 1000,
+      maxConcurrentAgentsByState: new Map()
+    },
+    codex: {
+      command: "codex app-server",
+      approvalEventPolicy: "deny",
+      userInputPolicy: "deny",
+      turnTimeoutMs: 1000,
+      readTimeoutMs: 1000,
+      stallTimeoutMs: 1000,
+      passThrough: {}
+    },
+    github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
+    review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"] }
+  };
+}
 
 function run(
   command: string,
