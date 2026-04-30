@@ -29,7 +29,7 @@ export class GitHubClient {
 
   async getPullRequest(url: string, cwd: string): Promise<PullRequestStatus> {
     const raw = await runShell(
-      `${this.command} pr view ${shellQuote(url)} --json url,state,isDraft,mergeable,baseRefName,headRefName,merged,statusCheckRollup`,
+      `${this.command} pr view ${shellQuote(url)} --json url,state,isDraft,mergeable,baseRefName,headRefName,mergedAt,statusCheckRollup`,
       cwd
     );
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -40,7 +40,7 @@ export class GitHubClient {
       mergeable: typeof parsed.mergeable === "string" ? parsed.mergeable : null,
       baseRefName: typeof parsed.baseRefName === "string" ? parsed.baseRefName : null,
       headRefName: typeof parsed.headRefName === "string" ? parsed.headRefName : null,
-      merged: Boolean(parsed.merged),
+      merged: Boolean(parsed.mergedAt) || String(parsed.state ?? "").toUpperCase() === "MERGED",
       checkSummary: summarizeChecks(Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup : [])
     };
   }

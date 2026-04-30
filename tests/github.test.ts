@@ -20,7 +20,7 @@ describe("GitHubClient", () => {
           mergeable: "MERGEABLE",
           baseRefName: "main",
           headRefName: "agent/AG-1",
-          merged: false,
+          mergedAt: null,
           statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
         }
       }),
@@ -58,6 +58,33 @@ describe("GitHubClient", () => {
         true
       )
     ).toEqual({ ready: false, reason: "no GitHub checks are present" });
+  });
+
+  it("treats mergedAt from gh as merged", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/3",
+          state: "MERGED",
+          isDraft: false,
+          mergeable: null,
+          baseRefName: "main",
+          headRefName: "agent/AG-3",
+          mergedAt: "2026-04-30T10:00:00Z",
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/3", dir);
+
+    expect(status.merged).toBe(true);
+    expect(evaluateMergeReadiness(status, true)).toEqual({ ready: false, reason: "pull request is already merged" });
   });
 
   it("summarizes failing and pending checks", () => {
