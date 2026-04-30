@@ -47,6 +47,8 @@ export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): Servi
     },
     codex: {
       command: "node tests/fixtures/fake-app-server.mjs",
+      approvalEventPolicy: "deny",
+      userInputPolicy: "deny",
       turnTimeoutMs: 1000,
       readTimeoutMs: 1000,
       stallTimeoutMs: 1000,

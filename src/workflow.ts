@@ -3,8 +3,8 @@ import YAML from "yaml";
 import { Liquid } from "liquidjs";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, readText } from "./fs-utils.js";
-import { defaultThreadSandboxForTrustMode, defaultTurnSandboxPolicyForTrustMode, parseGitHubMergeMode, parseTrustMode, validateTrustCompatibility } from "./trust.js";
-import type { Issue, ServiceConfig, WorkflowDefinition } from "./types.js";
+import { defaultThreadSandboxForTrustMode, defaultTurnSandboxPolicyForTrustMode, parseGitHubMergeMode, parseTrustMode, trustCapabilities, validateTrustCompatibility } from "./trust.js";
+import type { CodexEventPolicy, Issue, ServiceConfig, WorkflowDefinition } from "./types.js";
 
 const defaultActiveStates = ["Todo", "In Progress"];
 const defaultTerminalStates = ["Closed", "Canceled", "Duplicate", "Done"];
@@ -101,6 +101,8 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
     codex: {
       command: stringAt(codex, "command", DEFAULT_CODEX_APP_SERVER_COMMAND),
       approvalPolicy: codex.approval_policy,
+      approvalEventPolicy: codexEventPolicyAt(codex, "approval_event_policy", "deny"),
+      userInputPolicy: codexEventPolicyAt(codex, "user_input_policy", trustCapabilities(trustMode).codexUserInput),
       threadSandbox: codex.thread_sandbox ?? defaultThreadSandboxForTrustMode(trustMode),
       turnSandboxPolicy: codex.turn_sandbox_policy ?? defaultTurnSandboxPolicyForTrustMode(trustMode),
       turnTimeoutMs: positiveIntAt(codex, "turn_timeout_ms", 3_600_000),
@@ -161,7 +163,9 @@ export function validateWorkflowDefinition(workflow: WorkflowDefinition, env: No
     trustMode: config.trustMode,
     githubMergeMode: config.github.mergeMode,
     turnSandboxPolicy: config.codex.turnSandboxPolicy,
-    reviewEnabled: config.review.enabled
+    reviewEnabled: config.review.enabled,
+    approvalEventPolicy: config.codex.approvalEventPolicy,
+    userInputPolicy: config.codex.userInputPolicy
   });
   errors.push(...trust.errors);
   warnings.push(...trust.warnings);
@@ -230,6 +234,13 @@ function intAt(value: Record<string, unknown>, key: string, fallback: number): n
 function booleanAt(value: Record<string, unknown>, key: string, fallback: boolean): boolean {
   const found = value[key];
   return typeof found === "boolean" ? found : fallback;
+}
+
+function codexEventPolicyAt(value: Record<string, unknown>, key: string, fallback: CodexEventPolicy): CodexEventPolicy {
+  const found = value[key];
+  if (found === "deny" || found === "allow") return found;
+  if (found != null) throw new Error(`unsupported_codex_event_policy: ${key}=${String(found)}`);
+  return fallback;
 }
 
 function mergeMethodAt(value: Record<string, unknown>, key: string, fallback: "squash" | "merge" | "rebase"): "squash" | "merge" | "rebase" {

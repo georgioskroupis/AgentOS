@@ -53,4 +53,19 @@ describe("trust modes", () => {
       warnings: ["trust_mode=ci-locked disables PR/network access; automated PR review context may be unavailable"]
     });
   });
+
+  it("blocks interactive Codex event policies outside danger mode", () => {
+    expect(
+      validateTrustCompatibility({
+        trustMode: "local-trusted",
+        githubMergeMode: "manual",
+        turnSandboxPolicy: { type: "workspaceWrite", networkAccess: true },
+        approvalEventPolicy: "allow",
+        userInputPolicy: "allow"
+      }).errors
+    ).toEqual([
+      "codex.approval_event_policy=allow requires trust_mode=danger",
+      "codex.user_input_policy=allow requires a trust mode with Codex user input capability"
+    ]);
+  });
 });

@@ -28,6 +28,9 @@ capability the selected trust mode does not allow:
   capability.
 - `trust_mode: review-only` cannot run repository-writing implementation
   turns.
+- `codex.approval_event_policy: allow` requires `trust_mode: danger`.
+- `codex.user_input_policy: allow` requires a mode with Codex user-input
+  capability.
 
 `github.merge_mode: manual` is the public default. In that mode AgentOS can
 prepare review handoffs, but it will not shepherd or merge PRs automatically.
@@ -39,9 +42,15 @@ AgentOS pins the Codex App Server command by default:
 ```yaml
 codex:
   command: npx -y @openai/codex@0.125.0 app-server
+  approval_event_policy: deny
+  user_input_policy: deny
 ```
 
 The default `ci-locked` turn sandbox uses workspace write access with network
 disabled. Projects that need dependency installation, browser access, or GitHub
 PR operations should explicitly opt into `local-trusted` and explain that choice
 in the PR.
+
+If the Codex App Server emits an approval or user-input request while those
+policies are `deny`, AgentOS records a `codex_event_policy_denied` event and
+fails the run instead of waiting for interactive input.

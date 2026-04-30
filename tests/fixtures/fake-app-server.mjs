@@ -29,6 +29,14 @@ rl.on("line", (line) => {
       return;
     }
     write({ id: message.id, result: { turn: { id: "turn-1", status: "inProgress" } } });
+    if (process.argv.includes("--approval-request")) {
+      write({ method: "approval/requested", params: { turnId: "turn-1", reason: "fixture" } });
+      return;
+    }
+    if (process.argv.includes("--input-request")) {
+      write({ method: "turn/input_required", params: { turnId: "turn-1", type: "user_input" } });
+      return;
+    }
     const complete = () => {
       write({
         method: "turn/completed",

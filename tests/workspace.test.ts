@@ -46,6 +46,8 @@ describe("workspace", () => {
       },
       codex: {
         command: "codex app-server",
+        approvalEventPolicy: "deny",
+        userInputPolicy: "deny",
         turnTimeoutMs: 1000,
         readTimeoutMs: 1000,
         stallTimeoutMs: 1000,

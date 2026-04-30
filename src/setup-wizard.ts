@@ -264,6 +264,8 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
     codex: {
       ...codex,
       command: DEFAULT_CODEX_APP_SERVER_COMMAND,
+      approval_event_policy: codex.approval_event_policy === "allow" ? "allow" : "deny",
+      user_input_policy: codex.user_input_policy === "allow" ? "allow" : "deny",
       turn_timeout_ms: typeof codex.turn_timeout_ms === "number" ? codex.turn_timeout_ms : 3_600_000,
       read_timeout_ms: typeof codex.read_timeout_ms === "number" ? codex.read_timeout_ms : 5_000,
       stall_timeout_ms: typeof codex.stall_timeout_ms === "number" ? codex.stall_timeout_ms : 300_000

@@ -328,9 +328,25 @@ linear
 
 program
   .command("codex-doctor")
-  .option("--command <command>", "Codex app-server command", DEFAULT_CODEX_APP_SERVER_COMMAND)
+  .option("--command <command>", "Codex app-server command")
+  .option("--workflow <path>", "workflow path to read Codex policy from")
+  .option("--strict", "require pinned, non-latest Codex command")
   .action(async (options) => {
-    const result = await verifyCodexAppServer(options.command);
+    let command = options.command ?? DEFAULT_CODEX_APP_SERVER_COMMAND;
+    if (options.workflow) {
+      const workflow = await loadWorkflow(options.workflow);
+      const config = resolveServiceConfig(workflow);
+      command = options.command ?? config.codex.command;
+      console.log(`codex approval events: ${config.codex.approvalEventPolicy}`);
+      console.log(`codex user input events: ${config.codex.userInputPolicy}`);
+    }
+    if (options.strict && /@latest\b/.test(command)) {
+      console.log("codex app-server unavailable");
+      console.log("strict mode requires a pinned Codex command");
+      process.exitCode = 1;
+      return;
+    }
+    const result = await verifyCodexAppServer(command);
     console.log(result.ok ? "codex app-server available" : "codex app-server unavailable");
     if (!result.ok) {
       console.log(result.details);

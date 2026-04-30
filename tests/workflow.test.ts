@@ -38,6 +38,8 @@ describe("workflow", () => {
     expect(config.tracker.mergeState).toBeNull();
     expect(config.trustMode).toBe("ci-locked");
     expect(config.codex.command).toBe("npx -y @openai/codex@0.125.0 app-server");
+    expect(config.codex.approvalEventPolicy).toBe("deny");
+    expect(config.codex.userInputPolicy).toBe("deny");
     expect(config.codex.turnSandboxPolicy).toMatchObject({ type: "workspaceWrite", networkAccess: false });
     expect(config.agent.maxRetryAttempts).toBe(3);
     expect(config.github).toMatchObject({
@@ -119,6 +121,8 @@ describe("workflow", () => {
         "  turn_sandbox_policy:",
         "    type: workspaceWrite",
         "    networkAccess: true",
+        "  approval_event_policy: allow",
+        "  user_input_policy: allow",
         "github:",
         "  merge_mode: shepherd",
         "---",
@@ -132,5 +136,7 @@ describe("workflow", () => {
     expect(result.errors).toContain("codex.turn_sandbox_policy.networkAccess=true is incompatible with trust_mode=ci-locked");
     expect(result.errors).toContain("github.merge_mode=shepherd requires a trust mode with GitHub merge capability");
     expect(result.errors).toContain("github.merge_mode=shepherd requires PR/network capability");
+    expect(result.errors).toContain("codex.approval_event_policy=allow requires trust_mode=danger");
+    expect(result.errors).toContain("codex.user_input_policy=allow requires a trust mode with Codex user input capability");
   });
 });

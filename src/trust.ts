@@ -1,4 +1,4 @@
-import type { GitHubMergeMode, TrustMode } from "./types.js";
+import type { CodexEventPolicy, GitHubMergeMode, TrustMode } from "./types.js";
 
 export const trustModes = ["review-only", "ci-locked", "local-trusted", "danger"] as const;
 
@@ -97,6 +97,8 @@ export function validateTrustCompatibility(input: {
   githubMergeMode: GitHubMergeMode;
   turnSandboxPolicy?: unknown;
   reviewEnabled?: boolean;
+  approvalEventPolicy?: CodexEventPolicy;
+  userInputPolicy?: CodexEventPolicy;
 }): TrustCompatibilityResult {
   const capabilities = trustCapabilities(input.trustMode);
   const errors: string[] = [];
@@ -120,6 +122,12 @@ export function validateTrustCompatibility(input: {
   }
   if (input.githubMergeMode === "auto") {
     warnings.push("github.merge_mode=auto currently uses the same merge-state shepherd path as shepherd");
+  }
+  if (input.approvalEventPolicy === "allow" && input.trustMode !== "danger") {
+    errors.push(`codex.approval_event_policy=allow requires trust_mode=danger`);
+  }
+  if (input.userInputPolicy === "allow" && capabilities.codexUserInput !== "allow") {
+    errors.push(`codex.user_input_policy=allow requires a trust mode with Codex user input capability`);
   }
 
   return { errors, warnings };
