@@ -24,7 +24,7 @@ rl.on("line", (line) => {
     }
     write({ id: message.id, result: { thread: { id: "thread-1" } } });
   } else if (message.method === "turn/start") {
-    if (strictSandbox && message.params?.sandboxPolicy?.type !== "workspace-write") {
+    if (strictSandbox && message.params?.sandboxPolicy?.type !== "workspaceWrite") {
       write({ id: message.id, error: { message: `bad turn sandbox: ${message.params?.sandboxPolicy?.type}` } });
       return;
     }

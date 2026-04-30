@@ -121,7 +121,7 @@ describe("CodexAppServerRunner", () => {
     ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
   });
 
-  it("uses current app-server sandbox names by default", async () => {
+  it("uses app-server sandbox names expected by thread and turn start", async () => {
     const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-sandbox-"));
     const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
     const config: ServiceConfig = {
