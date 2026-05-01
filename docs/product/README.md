@@ -22,5 +22,5 @@ Project: agent-os.
 
 Product context was inferred from the existing repository. Refine this section as product decisions become clearer.
 
-Known validation gaps: No npm lint script found. No dedicated coverage script found. No explicit formatting check script found. agent-check skips npm typecheck, tests, and build when node_modules is not installed.
+RC1 validation is executable through `npm run agent-check`, the repository harness check used before handoff.
 <!-- AGENTOS:END -->
