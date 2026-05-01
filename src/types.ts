@@ -173,8 +173,11 @@ export interface IssueTracker {
 }
 
 export interface IssueState {
+  schemaVersion: 1;
   issueId: string;
   issueIdentifier: string;
+  prs?: PullRequestRef[];
+  /** @deprecated Use prs[0].url. Preserved for lazy migration compatibility. */
   prUrl?: string;
   outcome?: "implemented" | "already_satisfied" | "partially_satisfied";
   phase?: RunPhase;
@@ -193,6 +196,12 @@ export interface IssueState {
   humanOverrideAt?: string | null;
   validation?: ValidationState;
   updatedAt: string;
+}
+
+export interface PullRequestRef {
+  url: string;
+  discoveredAt: string;
+  source: "handoff" | "legacy" | "manual";
 }
 
 export interface ValidationState {

@@ -28,7 +28,7 @@ describe("current AgentOS characterization", () => {
     expect(config.github.requireChecks).toBe(true);
   });
 
-  it("captures current single-PR handoff parsing behavior", () => {
+  it("captures multi-PR handoff parsing behavior", () => {
     const issue = fakeIssue({ state: "Human Review" });
     const state = issueStateFromHandoff(
       issue,
@@ -41,12 +41,15 @@ describe("current AgentOS characterization", () => {
     );
 
     expect(state).toMatchObject({
+      schemaVersion: 1,
       issueIdentifier: "AG-1",
       prUrl: "https://github.com/o/r/pull/1",
+      prs: [
+        { url: "https://github.com/o/r/pull/1", source: "handoff" },
+        { url: "https://github.com/o/r/pull/2", source: "handoff" }
+      ],
       reviewStatus: "pending"
     });
-    expect(state).not.toHaveProperty("prs");
-    expect(state).not.toHaveProperty("schemaVersion");
   });
 
   it("captures current orchestrator global event log shape", async () => {
