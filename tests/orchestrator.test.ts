@@ -571,6 +571,8 @@ describe("orchestrator", () => {
 
     const moves: string[] = [];
     const comments: string[] = [];
+    const reviewArtifactPrompts: string[] = [];
+    const reviewSandboxPolicies: unknown[] = [];
     const tracker: IssueTracker = {
       async fetchCandidates() {
         return [readyIssue];
@@ -608,8 +610,10 @@ describe("orchestrator", () => {
         }
         const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
         if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        reviewArtifactPrompts.push(artifactPath);
+        reviewSandboxPolicies.push(input.config.codex.turnSandboxPolicy);
         const reviewer = input.prompt.match(/You are the (.+) automated reviewer/)?.[1] ?? "self";
-        await writeReviewArtifact(artifactPath, {
+        await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer,
           decision: "approved",
           summary: "approved",
@@ -632,8 +636,101 @@ describe("orchestrator", () => {
 
     expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
     expect(comments.join("\n")).toContain("automated review approved");
+    expect(reviewArtifactPrompts).toHaveLength(4);
+    expect(reviewArtifactPrompts.every((path) => path.startsWith(join(".agent-os", "reviews", "AG-1", "iteration-1")))).toBe(true);
+    expect(reviewArtifactPrompts.every((path) => !path.includes(repo))).toBe(true);
+    for (const policy of reviewSandboxPolicies) {
+      expect(policy).toEqual({
+        type: "workspaceWrite",
+        writableRoots: [join(repo, ".agent-os", "workspaces", "AG-1", ".agent-os", "reviews", "AG-1", "iteration-1")],
+        networkAccess: false
+      });
+    }
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.reviewStatus).toBe("approved");
+  });
+
+  it("escalates malformed review artifacts to human_required", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-malformed-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 1\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          files: [{ path: "src/orchestrator.ts" }]
+        }
+      }),
+      "utf8"
+    );
+
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([["issue-1", readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          const runId = input.prompt.match(/Run ID: (run_[A-Za-z0-9._-]+)/)?.[1];
+          expect(runId).toBeTruthy();
+          await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
+          await writeFile(
+            join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
+            "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1\n\nValidation-JSON: .agent-os/validation/AG-1.json",
+            "utf8"
+          );
+          const now = new Date().toISOString();
+          await writeValidationEvidence(join(input.workspace.path, ".agent-os", "validation", "AG-1.json"), {
+            schemaVersion: 1,
+            issueIdentifier: "AG-1",
+            runId,
+            status: "passed",
+            commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+          });
+          return { status: "succeeded" };
+        }
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        await writeFile(join(input.workspace.path, artifactPath), "{ this is not json", "utf8");
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(comments.join("\n")).toContain("automated review needs human judgment");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("human_required");
+    expect(state.findings[0].body).toContain("invalid review JSON");
+    const canonicalArtifact = JSON.parse(await readFile(join(repo, ".agent-os", "reviews", "AG-1", "iteration-1", "self.json"), "utf8"));
+    expect(canonicalArtifact.decision).toBe("human_required");
   });
 
   it("blocks unapproved merge state when human override is disabled", async () => {

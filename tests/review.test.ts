@@ -1,6 +1,6 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findingHash, readReviewArtifact, repeatedBlockingHashes, reviewArtifactPath, writeReviewArtifact } from "../src/review.js";
 import type { ReviewFinding, ServiceConfig } from "../src/types.js";
@@ -58,5 +58,36 @@ describe("review artifacts", () => {
     };
 
     expect(repeatedBlockingHashes([finding], [finding], config)).toEqual(["repeat"]);
+  });
+
+  it("treats malformed or mismatched artifacts as human_required", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-review-malformed-"));
+    const invalidJsonPath = reviewArtifactPath(repo, "AG-1", 1, "self");
+    await mkdir(dirname(invalidJsonPath), { recursive: true });
+    await writeFile(invalidJsonPath, "{not-json", "utf8");
+
+    await expect(readReviewArtifact(invalidJsonPath, "self")).resolves.toMatchObject({
+      reviewer: "self",
+      decision: "human_required",
+      findings: [expect.objectContaining({ body: expect.stringContaining("invalid review JSON") })]
+    });
+
+    const mismatchedPath = reviewArtifactPath(repo, "AG-1", 1, "tests");
+    await writeFile(
+      mismatchedPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        reviewer: "architecture",
+        decision: "approved",
+        findings: []
+      }),
+      "utf8"
+    );
+
+    await expect(readReviewArtifact(mismatchedPath, "tests")).resolves.toMatchObject({
+      reviewer: "tests",
+      decision: "human_required",
+      findings: [expect.objectContaining({ body: expect.stringContaining("reviewer=architecture") })]
+    });
   });
 });

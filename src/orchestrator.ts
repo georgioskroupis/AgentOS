@@ -5,7 +5,18 @@ import { issueStateFromHandoff, IssueStateStore } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
 import { redactText } from "./redaction.js";
-import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, readReviewArtifact, repeatedBlockingHashes, reviewArtifactPath, reviewerPrompt } from "./review.js";
+import {
+  blockingFindings,
+  ensureReviewIterationDir,
+  fixPrompt,
+  formatFindings,
+  readReviewArtifact,
+  repeatedBlockingHashes,
+  reviewArtifactPath,
+  reviewArtifactRelativePath,
+  reviewerPrompt,
+  writeReviewArtifact
+} from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore } from "./runs.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
@@ -395,10 +406,11 @@ export class Orchestrator {
       ].join("\n")
     );
 
+    const repoRoot = resolve(this.options.repoRoot);
     let previousFindings = state.findings ?? [];
     let latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "pending", reviewIteration: state.reviewIteration ?? 0 });
     for (let iteration = (state.reviewIteration ?? 0) + 1; iteration <= this.config.review.maxIterations; iteration += 1) {
-      await ensureReviewIterationDir(resolve(this.options.repoRoot), issue.identifier, iteration);
+      const workspaceReviewDir = await ensureReviewIterationDir(workspace.path, issue.identifier, iteration);
       const githubContext = await this.githubReviewContext(state.prUrl).catch(async (error: Error) => {
         latestState = await this.recordIssueState(issue, {
           phase: "review",
@@ -439,13 +451,15 @@ export class Orchestrator {
       });
 
       for (const reviewer of reviewers) {
-        const artifactPath = reviewArtifactPath(resolve(this.options.repoRoot), issue.identifier, iteration, reviewer);
+        const artifactRelativePath = reviewArtifactRelativePath(issue.identifier, iteration, reviewer);
+        const workspaceArtifactPath = join(workspace.path, artifactRelativePath);
+        const canonicalArtifactPath = reviewArtifactPath(repoRoot, issue.identifier, iteration, reviewer);
         const prompt = reviewerPrompt({
           issue,
           prUrl: state.prUrl,
           iteration,
           reviewer,
-          artifactPath,
+          artifactPath: artifactRelativePath,
           githubSummary: githubContext.summary,
           feedbackSummary: githubContext.feedback
         });
@@ -454,7 +468,7 @@ export class Orchestrator {
           prompt,
           attempt,
           workspace,
-          config: readOnlyReviewConfig(this.config, resolve(this.options.repoRoot)),
+          config: readOnlyReviewConfig(this.config, workspaceReviewDir),
           signal,
           onEvent: (event) => void this.logger.write({ ...event, type: `review_${event.type}` })
         });
@@ -466,8 +480,9 @@ export class Orchestrator {
             message: `${reviewer}: ${result.error ?? result.status}`
           });
         }
-        const artifact = await readReviewArtifact(artifactPath, reviewer);
-        artifacts.push({ artifact, path: artifactPath });
+        const artifact = await readReviewArtifact(workspaceArtifactPath, reviewer);
+        await writeReviewArtifact(canonicalArtifactPath, artifact);
+        artifacts.push({ artifact, path: canonicalArtifactPath });
         for (const finding of artifact.findings) {
           await this.logger.write({
             type: "review_finding",
@@ -1051,13 +1066,15 @@ function runningAllowedStates(config: ServiceConfig): string[] {
   return [...config.tracker.activeStates, config.tracker.runningState].filter((state): state is string => Boolean(state));
 }
 
-function readOnlyReviewConfig(config: ServiceConfig, repoRoot: string): ServiceConfig {
+function readOnlyReviewConfig(config: ServiceConfig, reviewWritableRoot: string): ServiceConfig {
   return {
     ...config,
     codex: {
       ...config.codex,
-      threadSandbox: config.codex.threadSandbox ?? "workspace-write",
-      turnSandboxPolicy: config.codex.turnSandboxPolicy ?? { type: "workspaceWrite", writableRoots: [config.workspace.root, join(repoRoot, ".agent-os", "reviews")], networkAccess: true }
+      approvalEventPolicy: "deny",
+      userInputPolicy: "deny",
+      threadSandbox: "workspace-write",
+      turnSandboxPolicy: { type: "workspaceWrite", writableRoots: [reviewWritableRoot], networkAccess: false }
     }
   };
 }

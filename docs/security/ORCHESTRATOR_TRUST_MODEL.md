@@ -51,6 +51,12 @@ disabled. Projects that need dependency installation, browser access, or GitHub
 PR operations should explicitly opt into `local-trusted` and explain that choice
 in the PR.
 
+Automated review turns are narrower than implementation turns: AgentOS gives
+reviewers a workspace-local `.agent-os/reviews/...` artifact destination, no
+network by default, and only that review artifact directory as a writable root.
+The orchestrator validates the JSON before copying it into the canonical runtime
+review store.
+
 If the Codex App Server emits an approval or user-input request while those
 policies are `deny`, AgentOS records a `codex_event_policy_denied` event and
 fails the run instead of waiting for interactive input.

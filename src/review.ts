@@ -70,43 +70,54 @@ export async function writeReviewArtifact(path: string, artifact: ReviewerArtifa
 
 export async function readReviewArtifact(path: string, reviewer: string): Promise<ReviewerArtifact> {
   if (!(await exists(path))) {
-    return {
-      schemaVersion: REVIEW_ARTIFACT_SCHEMA_VERSION,
-      reviewer,
-      decision: "human_required",
-      summary: "Reviewer did not produce the required machine-readable artifact.",
-      findings: [
-        {
-          reviewer,
-          decision: "human_required",
-          severity: "P1",
-          file: null,
-          line: null,
-          body: `Reviewer ${reviewer} did not write ${path}.`,
-          findingHash: findingHash({
-            reviewer,
-            decision: "human_required",
-            severity: "P1",
-            file: null,
-            line: null,
-            body: `Reviewer ${reviewer} did not write ${path}.`
-          })
-        }
-      ]
-    };
+    return humanRequiredReviewArtifact(reviewer, "Reviewer did not produce the required machine-readable artifact.", `Reviewer ${reviewer} did not write ${path}.`);
   }
-  const parsed = JSON.parse(await readText(path)) as Record<string, unknown>;
-  const decision = parsed.decision === "approved" || parsed.decision === "changes_requested" || parsed.decision === "human_required" ? parsed.decision : "human_required";
-  const findings = Array.isArray(parsed.findings)
-    ? parsed.findings.map((finding) => normalizeFinding(finding, reviewer, decision)).filter((finding): finding is ReviewFinding => Boolean(finding))
-    : [];
+  let parsed: Record<string, unknown>;
+  try {
+    const raw = JSON.parse(await readText(path)) as unknown;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return humanRequiredReviewArtifact(reviewer, "Reviewer artifact was not a JSON object.", `Reviewer ${reviewer} wrote malformed review JSON at ${path}.`);
+    }
+    parsed = raw as Record<string, unknown>;
+  } catch {
+    return humanRequiredReviewArtifact(reviewer, "Reviewer artifact was not valid JSON.", `Reviewer ${reviewer} wrote invalid review JSON at ${path}.`);
+  }
+  if (parsed.schemaVersion !== REVIEW_ARTIFACT_SCHEMA_VERSION) {
+    return humanRequiredReviewArtifact(
+      reviewer,
+      "Reviewer artifact schema version was missing or unsupported.",
+      `Reviewer ${reviewer} wrote a review artifact with unsupported schemaVersion at ${path}.`
+    );
+  }
+  if (parsed.reviewer !== reviewer) {
+    return humanRequiredReviewArtifact(
+      reviewer,
+      "Reviewer artifact did not match the requested reviewer.",
+      `Reviewer ${reviewer} wrote an artifact with reviewer=${String(parsed.reviewer ?? "missing")} at ${path}.`
+    );
+  }
+  if (parsed.decision !== "approved" && parsed.decision !== "changes_requested" && parsed.decision !== "human_required") {
+    return humanRequiredReviewArtifact(reviewer, "Reviewer artifact had an unsupported decision.", `Reviewer ${reviewer} wrote an unsupported review decision at ${path}.`);
+  }
+  if (!Array.isArray(parsed.findings)) {
+    return humanRequiredReviewArtifact(reviewer, "Reviewer artifact findings were missing or malformed.", `Reviewer ${reviewer} wrote malformed findings at ${path}.`);
+  }
+  const decision = parsed.decision;
+  const findings = parsed.findings.map((finding) => normalizeFinding(finding, reviewer, decision));
+  if (findings.some((finding) => !finding)) {
+    return humanRequiredReviewArtifact(reviewer, "Reviewer artifact contained malformed findings.", `Reviewer ${reviewer} wrote malformed findings at ${path}.`);
+  }
   return {
     schemaVersion: REVIEW_ARTIFACT_SCHEMA_VERSION,
-    reviewer: typeof parsed.reviewer === "string" ? parsed.reviewer : reviewer,
+    reviewer,
     decision,
-    findings,
+    findings: findings as ReviewFinding[],
     summary: typeof parsed.summary === "string" ? parsed.summary : undefined
   };
+}
+
+export function reviewArtifactRelativePath(issueIdentifier: string, iteration: number, reviewer: string): string {
+  return join(".agent-os", "reviews", safeFileName(issueIdentifier), `iteration-${iteration}`, `${safeFileName(reviewer)}.json`);
 }
 
 export function reviewArtifactPath(repoRoot: string, issueIdentifier: string, iteration: number, reviewer: string): string {
@@ -249,6 +260,33 @@ function reviewerFocus(reviewer: string): string {
     default:
       return "Check for blocking defects and actionable improvements in your named area.";
   }
+}
+
+function humanRequiredReviewArtifact(reviewer: string, summary: string, body: string): ReviewerArtifact {
+  return {
+    schemaVersion: REVIEW_ARTIFACT_SCHEMA_VERSION,
+    reviewer,
+    decision: "human_required",
+    summary,
+    findings: [
+      {
+        reviewer,
+        decision: "human_required",
+        severity: "P1",
+        file: null,
+        line: null,
+        body,
+        findingHash: findingHash({
+          reviewer,
+          decision: "human_required",
+          severity: "P1",
+          file: null,
+          line: null,
+          body
+        })
+      }
+    ]
+  };
 }
 
 function safeFileName(value: string): string {
