@@ -1,5 +1,8 @@
 # Security
 
+See `docs/security/ORCHESTRATOR_TRUST_MODEL.md` for the orchestration trust-mode
+capability matrix and PR/network compatibility rules.
+
 ## Defaults
 
 - Do not commit secrets, tokens, private keys, or local credentials.

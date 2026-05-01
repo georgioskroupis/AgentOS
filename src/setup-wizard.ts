@@ -3,6 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { join, relative, resolve } from "node:path";
 import YAML from "yaml";
+import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, ensureDir, packageRoot, readText, writeTextEnsuringDir } from "./fs-utils.js";
 import { applyHarness, doctorHarness, runHarnessCheck } from "./harness.js";
 import { LinearClient, type LinearProject, type LinearState, type LinearTeam } from "./linear.js";
@@ -232,6 +233,7 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
   const review = objectRecord(config.review);
   return {
     ...config,
+    trust_mode: typeof config.trust_mode === "string" ? config.trust_mode : "ci-locked",
     tracker: {
       ...tracker,
       kind: "linear",
@@ -261,7 +263,7 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
     },
     codex: {
       ...codex,
-      command: "npx -y @openai/codex@latest app-server",
+      command: DEFAULT_CODEX_APP_SERVER_COMMAND,
       turn_timeout_ms: typeof codex.turn_timeout_ms === "number" ? codex.turn_timeout_ms : 3_600_000,
       read_timeout_ms: typeof codex.read_timeout_ms === "number" ? codex.read_timeout_ms : 5_000,
       stall_timeout_ms: typeof codex.stall_timeout_ms === "number" ? codex.stall_timeout_ms : 300_000
@@ -270,10 +272,11 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
       ...github,
       command: typeof github.command === "string" ? github.command : "gh",
       merge_method: github.merge_method === "merge" || github.merge_method === "rebase" ? github.merge_method : "squash",
+      merge_mode: github.merge_mode === "shepherd" || github.merge_mode === "auto" ? github.merge_mode : "manual",
       require_checks: typeof github.require_checks === "boolean" ? github.require_checks : true,
       delete_branch: typeof github.delete_branch === "boolean" ? github.delete_branch : true,
       done_state: typeof github.done_state === "string" ? github.done_state : "Done",
-      allow_human_merge_override: typeof github.allow_human_merge_override === "boolean" ? github.allow_human_merge_override : true
+      allow_human_merge_override: typeof github.allow_human_merge_override === "boolean" ? github.allow_human_merge_override : false
     },
     review: {
       ...review,

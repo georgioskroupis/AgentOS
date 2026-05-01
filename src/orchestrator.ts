@@ -68,7 +68,9 @@ export class Orchestrator {
     await this.reconcile();
     validateDispatchConfig(this.config);
     await this.dispatchDueRetries();
-    await this.shepherdMergingIssues();
+    if (this.config.github.mergeMode !== "manual") {
+      await this.shepherdMergingIssues();
+    }
     const candidates = await this.tracker.fetchCandidates(this.config.tracker.activeStates);
     for (const issue of candidates) {
       if (!this.isEligible(issue)) continue;

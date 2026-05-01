@@ -1,4 +1,5 @@
 ---
+trust_mode: ci-locked
 tracker:
   kind: linear
   endpoint: https://api.linear.app/graphql
@@ -29,17 +30,18 @@ agent:
   max_retry_attempts: 3
   max_retry_backoff_ms: 300000
 codex:
-  command: npx -y @openai/codex@latest app-server
+  command: npx -y @openai/codex@0.125.0 app-server
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
 github:
   command: gh
+  merge_mode: manual
   merge_method: squash
   require_checks: true
   delete_branch: true
   done_state: Done
-  allow_human_merge_override: true
+  allow_human_merge_override: false
 review:
   enabled: true
   max_iterations: 3

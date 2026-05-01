@@ -38,7 +38,7 @@ describe("GitHubClient", () => {
 
     await client.mergePullRequest(
       status.url,
-      { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
+      { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
       dir
     );
 

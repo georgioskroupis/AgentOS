@@ -36,6 +36,10 @@ function checkWorkflow(path) {
   for (const snippet of ["review:", "max_iterations", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing Wiggum review config ${snippet}`);
   }
+  for (const snippet of ["trust_mode:", "merge_mode:", "allow_human_merge_override: false", "@openai/codex@0.125.0 app-server"]) {
+    if (!text.includes(snippet)) failures.push(`${path} missing hardened workflow config ${snippet}`);
+  }
+  if (/@openai\/codex@latest\b/.test(text)) failures.push(`${path} contains unpinned Codex command`);
   for (const block of ["active_states", "terminal_states"]) {
     const configuredStates = stateBlock(text, block);
     const duplicates = configuredStates.filter((state, index) => configuredStates.indexOf(state) !== index);

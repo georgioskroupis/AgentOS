@@ -36,14 +36,18 @@ describe("workflow", () => {
     expect(config.tracker.runningState).toBe("In Progress");
     expect(config.tracker.reviewState).toBe("Human Review");
     expect(config.tracker.mergeState).toBeNull();
+    expect(config.trustMode).toBe("ci-locked");
+    expect(config.codex.command).toBe("npx -y @openai/codex@0.125.0 app-server");
+    expect(config.codex.turnSandboxPolicy).toMatchObject({ type: "workspaceWrite", networkAccess: false });
     expect(config.agent.maxRetryAttempts).toBe(3);
     expect(config.github).toMatchObject({
       command: "gh",
+      mergeMode: "manual",
       mergeMethod: "squash",
       requireChecks: true,
       deleteBranch: true,
       doneState: "Done",
-      allowHumanMergeOverride: true
+      allowHumanMergeOverride: false
     });
     expect(config.review).toMatchObject({
       enabled: true,
@@ -81,6 +85,7 @@ describe("workflow", () => {
         "codex:",
         "  command: npx -y @openai/codex@0.125.0 app-server",
         "github:",
+        "  merge_mode: manual",
         "  allow_human_merge_override: false",
         "---",
         "Hello {{ issue.identifier }}"
@@ -97,5 +102,35 @@ describe("workflow", () => {
     const loose = await loadWorkflow(join(repo, "WORKFLOW.md"));
     loose.config = { tracker: { api_key: "$LINEAR_API_KEY", project_slug: "AgentOS" } };
     expect(validateWorkflowDefinition(loose, { LINEAR_API_KEY: "", HOME: "/tmp" }, true).errors).toContain("tracker.api_key did not resolve from the environment");
+  });
+
+  it("validates trust-mode PR and network compatibility", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-trust-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "trust_mode: ci-locked",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "codex:",
+        "  turn_sandbox_policy:",
+        "    type: workspaceWrite",
+        "    networkAccess: true",
+        "github:",
+        "  merge_mode: shepherd",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const workflow = await loadWorkflow(workflowPath);
+    const result = validateWorkflowDefinition(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true);
+    expect(result.errors).toContain("codex.turn_sandbox_policy.networkAccess=true is incompatible with trust_mode=ci-locked");
+    expect(result.errors).toContain("github.merge_mode=shepherd requires a trust mode with GitHub merge capability");
+    expect(result.errors).toContain("github.merge_mode=shepherd requires PR/network capability");
   });
 });

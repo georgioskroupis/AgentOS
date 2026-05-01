@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { resolve } from "node:path";
+import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { addProject, loadRegistry, removeProject } from "./registry.js";
 import { readText } from "./fs-utils.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
@@ -327,7 +328,7 @@ linear
 
 program
   .command("codex-doctor")
-  .option("--command <command>", "Codex app-server command", "npx -y @openai/codex@latest app-server")
+  .option("--command <command>", "Codex app-server command", DEFAULT_CODEX_APP_SERVER_COMMAND)
   .action(async (options) => {
     const result = await verifyCodexAppServer(options.command);
     console.log(result.ok ? "codex app-server available" : "codex app-server unavailable");

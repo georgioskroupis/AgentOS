@@ -17,8 +17,11 @@ describe("current AgentOS characterization", () => {
     const workflow = await loadWorkflow(workflowPath);
     const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
 
-    expect(config.codex.command).toBe("npx -y @openai/codex@latest app-server");
-    expect(config.github.allowHumanMergeOverride).toBe(true);
+    expect(config.trustMode).toBe("ci-locked");
+    expect(config.codex.command).toBe("npx -y @openai/codex@0.125.0 app-server");
+    expect(config.codex.turnSandboxPolicy).toMatchObject({ type: "workspaceWrite", networkAccess: false });
+    expect(config.github.mergeMode).toBe("manual");
+    expect(config.github.allowHumanMergeOverride).toBe(false);
     expect(config.github.mergeMethod).toBe("squash");
     expect(config.github.requireChecks).toBe(true);
   });

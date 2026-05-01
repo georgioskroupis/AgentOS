@@ -15,6 +15,7 @@ describe("workspace", () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-ws-"));
     const source = await mkdtemp(join(tmpdir(), "agent-os-src-"));
     const config: ServiceConfig = {
+      trustMode: "ci-locked",
       tracker: {
         kind: "linear",
         endpoint: "https://api.linear.app/graphql",
@@ -50,7 +51,7 @@ describe("workspace", () => {
         stallTimeoutMs: 1000,
         passThrough: {}
       },
-      github: { command: "gh", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: true },
+      github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
       review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"] }
     };
 
