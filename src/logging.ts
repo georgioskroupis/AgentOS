@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { appendFile, readFile } from "node:fs/promises";
 import { ensureDir, exists } from "./fs-utils.js";
+import { redactValue } from "./redaction.js";
 import type { AgentEvent } from "./types.js";
 
 export interface AgentOSLogEntry extends AgentEvent {
@@ -20,7 +21,7 @@ export class JsonlLogger {
       timestamp: entry.timestamp ?? new Date().toISOString(),
       ...entry
     };
-    await appendFile(this.logPath, `${JSON.stringify(payload)}\n`, "utf8");
+    await appendFile(this.logPath, `${JSON.stringify(redactValue(payload))}\n`, "utf8");
   }
 
   async tail(limit = 20): Promise<AgentOSLogEntry[]> {

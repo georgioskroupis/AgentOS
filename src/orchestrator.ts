@@ -4,6 +4,7 @@ import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, summarizePullR
 import { issueStateFromHandoff, IssueStateStore } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
+import { redactText } from "./redaction.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, readReviewArtifact, repeatedBlockingHashes, reviewArtifactPath, reviewerPrompt } from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
@@ -927,7 +928,7 @@ export class Orchestrator {
 
   private async commentIssue(issue: Issue, body: string): Promise<void> {
     if (!this.tracker.comment) return;
-    await this.tracker.comment(issue.identifier, body).catch((error: Error) =>
+    await this.tracker.comment(issue.identifier, redactText(body)).catch((error: Error) =>
       this.logger.write({
         type: "linear_update_failed",
         issueId: issue.id,

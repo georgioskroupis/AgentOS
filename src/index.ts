@@ -8,4 +8,5 @@ export * from "./issue-state.js";
 export * from "./workspace.js";
 export * from "./orchestrator.js";
 export * from "./status.js";
+export * from "./redaction.js";
 export * from "./validation.js";
