@@ -11,7 +11,7 @@ import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "
 import { Orchestrator } from "./orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
-import { formatRunInspect, RunArtifactStore } from "./runs.js";
+import { formatRunInspect, formatRunReplay, RunArtifactStore } from "./runs.js";
 import { formatSetupReport, runSetupWizard } from "./setup-wizard.js";
 
 const program = new Command();
@@ -217,6 +217,27 @@ runs
     }
   });
 
+runs
+  .command("simulate")
+  .option("--repo <path>", "repository path", process.cwd())
+  .option("--issue <identifier>", "simulated issue identifier", "SIM-1")
+  .option("--status <status>", "simulated result status", "succeeded")
+  .action(async (options) => {
+    const store = new RunArtifactStore(resolve(options.repo));
+    const status = parseSimulationStatus(options.status);
+    const summary = await store.simulateRun({ issueIdentifier: options.issue, status });
+    console.log(`simulated run: ${summary.runId}`);
+  });
+
+runs
+  .command("replay")
+  .argument("<run-id>", "run identifier")
+  .option("--repo <path>", "repository path", process.cwd())
+  .action(async (runId, options) => {
+    const store = new RunArtifactStore(resolve(options.repo));
+    console.log(formatRunReplay(runId, await store.replay(runId)));
+  });
+
 const linear = program.command("linear").description("Linear helper commands");
 
 linear
@@ -381,6 +402,11 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
+}
+
+function parseSimulationStatus(value: string): "succeeded" | "failed" | "timed_out" | "stalled" | "canceled" {
+  if (value === "succeeded" || value === "failed" || value === "timed_out" || value === "stalled" || value === "canceled") return value;
+  throw new Error(`unsupported simulation status: ${value}`);
 }
 
 async function linearClientFromWorkflow(workflowPath: string): Promise<LinearClient> {

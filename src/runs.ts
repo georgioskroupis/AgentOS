@@ -129,6 +129,55 @@ export class RunArtifactStore {
     return summaries.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   }
 
+  async replay(runId: string): Promise<AgentEvent[]> {
+    const path = this.pathFor(runId, "events.jsonl");
+    if (!(await exists(path))) return [];
+    return (await readFile(path, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as AgentEvent);
+  }
+
+  async simulateRun(input: { issueIdentifier: string; status?: AgentRunResult["status"] }): Promise<RunSummary> {
+    const issue: Issue = {
+      id: `simulation-${input.issueIdentifier}`,
+      identifier: input.issueIdentifier,
+      title: `Simulated run for ${input.issueIdentifier}`,
+      description: null,
+      priority: null,
+      state: "Simulation",
+      branch_name: null,
+      url: null,
+      labels: ["simulation"],
+      blocked_by: [],
+      created_at: null,
+      updated_at: null
+    };
+    const summary = await this.startRun({
+      issue,
+      attempt: null,
+      workspace: { path: join(this.repoRoot, ".agent-os", "simulation", input.issueIdentifier), workspaceKey: input.issueIdentifier, createdNow: true }
+    });
+    await this.writePrompt(summary.runId, "AgentOS simulation run. No Linear, GitHub, or Codex calls are made.");
+    await this.writeEvent(summary.runId, {
+      type: "simulation_started",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: "local simulation",
+      timestamp: new Date().toISOString()
+    });
+    await this.writeHandoff(summary.runId, "AgentOS-Outcome: already-satisfied\n\nSimulation: local artifact-only run.");
+    await this.writeEvent(summary.runId, {
+      type: `run_${input.status ?? "succeeded"}`,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: "simulation complete",
+      timestamp: new Date().toISOString()
+    });
+    return this.completeRun(summary.runId, { status: input.status ?? "succeeded" });
+  }
+
   private async readSummary(runId: string): Promise<RunSummary> {
     return JSON.parse(await readFile(this.pathFor(runId, "summary.json"), "utf8")) as RunSummary;
   }
@@ -172,6 +221,11 @@ export function formatRunInspect(result: { summary: RunSummary; warnings: string
     warnings.length ? `Warnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}` : "Warnings: none"
   ].filter((line): line is string => line !== null);
   return lines.join("\n");
+}
+
+export function formatRunReplay(runId: string, events: AgentEvent[]): string {
+  if (events.length === 0) return `Run: ${runId}\nReplay: no events recorded`;
+  return [`Run: ${runId}`, "Replay:", ...events.map((event) => `${event.timestamp} ${event.type}${event.message ? ` - ${event.message}` : ""}`)].join("\n");
 }
 
 function tokenLine(summary: RunSummary): string {
