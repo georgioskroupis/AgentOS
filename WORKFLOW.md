@@ -110,8 +110,8 @@ review:
 `lifecycle.mode: orchestrator-owned` is the current safe AgentOS default and an
 intentional bounded deviation from Symphony's usual tracker-write boundary. In
 this mode the orchestrator owns idempotent Linear lifecycle comments and state
-moves while Codex changes the repo, opens or updates PRs when needed, and writes
-handoff/validation artifacts.
+moves while Codex changes the repo, opens or updates PRs only when the issue
+needs one, and writes handoff/validation artifacts.
 
 Future source-aligned modes are separate from `trust_mode` and automation repair
 policy:
@@ -168,6 +168,26 @@ If a task is blocked, the agent should report:
 - smallest next human decision
 - current validation state
 
+## Issue Outcomes
+
+Issues are the unit of work. A run may produce zero, one, or many pull requests:
+
+- `already-satisfied` no-op: no repo changes, validation evidence, handoff-only
+  result, and no PR.
+- Investigation-only: findings, risks, and follow-up recommendations in the
+  handoff; no PR unless the issue explicitly asks for a versioned artifact.
+- Planning-only: plan or decision artifact in the handoff or repo when requested;
+  no PR unless the workflow expects the plan to be committed.
+- Docs/code change with one PR: open or update a PR after validation passes.
+- Larger issue with multiple PRs: list every PR URL in the handoff so AgentOS
+  records them in `prs[]`.
+- Follow-up discovery: file or recommend follow-up issues and link them from the
+  handoff.
+
+`prs[]` is the optional, authoritative list of PR outputs for an issue and may be
+empty, contain one PR, or contain multiple PRs. Legacy `prUrl` is only a
+compatibility mirror of the first PR.
+
 ## PR Creation Contract
 
 When code or docs changed and the issue expects a pull request, use the
@@ -207,8 +227,9 @@ the current repository implementation.
 
 ## Ralph Wiggum Review Loop
 
-After a run opens or updates a PR, AgentOS keeps the issue in `In Progress` and
-runs automated reviewer turns before moving it to `Human Review`.
+After a PR-producing run opens or updates a PR, AgentOS keeps the issue in
+`In Progress` and runs automated reviewer turns before moving it to
+`Human Review`.
 
 - Required reviewers: `self`, `correctness`, `tests`, `architecture`.
 - Optional reviewer: `security` when touched files involve auth, secrets,
@@ -245,9 +266,10 @@ Responsibilities:
 4. If partially satisfied, preserve the existing implementation and change only
    the missing delta.
 5. Run `npm run agent-check`.
-6. Open or update a GitHub PR when code or docs changed and validation passes,
-   using `scripts/agent-create-pr.sh` or an explicit non-interactive
-   `gh pr create` command. Do not use GitHub app/MCP PR creation tools.
+6. Open or update a GitHub PR only when the issue produced repo changes and the
+   workflow expects a PR, using `scripts/agent-create-pr.sh` or an explicit
+   non-interactive `gh pr create` command. Do not use GitHub app/MCP PR creation
+   tools.
 7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, final authoritative `status`, and command entries for every `npm run agent-check` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
 8. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`.
 9. Follow `lifecycle.mode`: in the current `orchestrator-owned` mode, do not

@@ -77,3 +77,8 @@ AgentOS-Outcome: already-satisfied
 For `already-satisfied`, Codex should make no code changes, run validation, and
 write the no-op handoff. AgentOS persists that state and moves the issue to
 `Human Review` for confirmation rather than directly marking it `Done`.
+
+Issues do not always need PRs. Investigation-only and planning-only issues may
+finish with a handoff-only result, while code/docs issues may list one or many
+PR URLs. AgentOS records PR outputs in optional `prs[]`; legacy `prUrl` is only
+the first-PR compatibility mirror.

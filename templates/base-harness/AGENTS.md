@@ -26,8 +26,8 @@ For every code-changing task:
 8. Update docs if behavior, architecture, or public APIs changed.
 9. When a PR is needed, use `scripts/agent-create-pr.sh` or explicit
    non-interactive `gh pr create` arguments.
-10. Prepare a PR summary with what changed, why, tests run, risks, and
-    follow-ups.
+10. Prepare a handoff with what changed or why no change was needed, tests run,
+    risks, PR links when they exist, and follow-ups.
 
 ## Hard Rules
 

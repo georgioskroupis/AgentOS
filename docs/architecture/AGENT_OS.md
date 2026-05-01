@@ -31,18 +31,23 @@ It keeps orchestration logic narrow:
   safety/bookkeeping moves and markers while leaving substantive update content
   to agent artifacts/tools. `agent-owned` is experimental and strict-validation
   gated.
-- The agent, guided by `WORKFLOW.md`, changes the repo, validates the work, opens
-  pull requests, and writes a handoff file for the orchestrator to post.
+- The agent, guided by `WORKFLOW.md`, changes the repo, validates the work,
+  opens or updates pull requests only when the issue produced repo changes and
+  the workflow expects a PR, and writes a handoff file for the orchestrator to
+  post.
 - Every agent run starts with an implementation audit. Already-satisfied issues
   are reported as `AgentOS-Outcome: already-satisfied`, persisted as issue
   state, and moved to review without requiring a PR.
-- Implemented PRs run through the Ralph Wiggum loop while Linear remains
-  `In Progress`: self, correctness, tests, architecture, and conditional
-  security reviewers write machine-readable findings to a workspace-local review
-  artifact path; AgentOS validates and copies those artifacts into the runtime
-  review store. Blocking findings trigger focused fixer turns on the same PR;
-  non-converging or malformed reviews escalate to `Human Review` with
-  `reviewStatus: human_required`.
+- Issue handoffs may carry zero, one, or many PR outputs. AgentOS treats
+  optional `prs[]` as authoritative and keeps legacy `prUrl` only as a first-PR
+  compatibility mirror.
+- PR-producing implemented issues run through the Ralph Wiggum loop while
+  Linear remains `In Progress`: self, correctness, tests, architecture, and
+  conditional security reviewers write machine-readable findings to a
+  workspace-local review artifact path; AgentOS validates and copies those
+  artifacts into the runtime review store. Blocking findings trigger focused
+  fixer turns on the same PR; non-converging or malformed reviews escalate to
+  `Human Review` with `reviewStatus: human_required`.
 - The merge shepherd watches `Merging`, validates GitHub PR checks, squash-merges
   safe PRs, respects Wiggum review state or an explicit Linear `Merging` human
   override, and moves Linear issues to `Done`.

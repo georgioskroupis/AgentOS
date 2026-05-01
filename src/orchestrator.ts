@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
-import { issueStateFromHandoff, IssueStateStore } from "./issue-state.js";
+import { issueStateFromHandoff, IssueStateStore, primaryPullRequestUrl } from "./issue-state.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
@@ -176,11 +176,12 @@ export class Orchestrator {
             })
           : await stateStore.read(issue.identifier);
         if (stateFromHandoff) {
+          const primaryPr = primaryPullRequestUrl(stateFromHandoff);
           await this.logger.write({
-            type: stateFromHandoff.prUrl ? "pr_metadata_persisted" : "issue_state_persisted",
+            type: primaryPr ? "pr_metadata_persisted" : "issue_state_persisted",
             issueId: issue.id,
             issueIdentifier: issue.identifier,
-            message: stateFromHandoff.prUrl ?? stateFromHandoff.outcome,
+            message: primaryPr ?? stateFromHandoff.outcome,
             payload: stateFromHandoff
           });
           if (stateFromHandoff.outcome === "already_satisfied") {
@@ -276,9 +277,10 @@ export class Orchestrator {
           "Continue the same issue in this workspace and write the required `.agent-os/handoff-<issue>.md` before finishing."
         ].join("\n")
       : "";
-    if (!state?.prUrl || issue.state.toLowerCase() !== "todo") return `${base}${runContext}${continuation}`;
+    const existingPr = primaryPullRequestUrl(state);
+    if (!existingPr || issue.state.toLowerCase() !== "todo") return `${base}${runContext}${continuation}`;
 
-    const feedback = await this.githubFeedbackSummary(state.prUrl).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
+    const feedback = await this.githubFeedbackSummary(existingPr).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
     return [
       base,
       runContext,
@@ -288,7 +290,7 @@ export class Orchestrator {
       "",
       "AgentOS found an existing pull request for this issue. Treat this run as a feedback-fix/update pass, not a fresh implementation.",
       "",
-      `Existing PR: ${state.prUrl}`,
+      `Existing PR: ${existingPr}`,
       "",
       feedback || "No recent feedback was found.",
       "",
@@ -392,7 +394,8 @@ export class Orchestrator {
 
   private async reviewIfNeeded(issue: Issue, workspace: Workspace, state: IssueState | null, attempt: number | null, signal?: AbortSignal): Promise<IssueState | null> {
     if (!this.config.review.enabled) return state;
-    if (!state?.prUrl || state.outcome === "already_satisfied") return state;
+    const reviewPr = primaryPullRequestUrl(state);
+    if (!state || !reviewPr || state.outcome === "already_satisfied") return state;
 
     await this.commentIssue(
       issue,
@@ -401,7 +404,7 @@ export class Orchestrator {
         "",
         "The Ralph Wiggum loop is reviewing this PR before moving the issue to Human Review.",
         "",
-        `- PR: ${state.prUrl}`,
+        `- PR: ${reviewPr}`,
         `- Required reviewers: ${this.config.review.requiredReviewers.join(", ")}`,
         `- Max iterations: ${this.config.review.maxIterations}`
       ].join("\n")
@@ -412,20 +415,20 @@ export class Orchestrator {
     let latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "pending", reviewIteration: state.reviewIteration ?? 0 });
     for (let iteration = (state.reviewIteration ?? 0) + 1; iteration <= this.config.review.maxIterations; iteration += 1) {
       const workspaceReviewDir = await ensureReviewIterationDir(workspace.path, issue.identifier, iteration);
-      const githubContext = await this.githubReviewContext(state.prUrl).catch(async (error: Error) => {
+      const githubContext = await this.githubReviewContext(reviewPr).catch(async (error: Error) => {
         latestState = await this.recordIssueState(issue, {
           phase: "review",
           reviewStatus: "human_required",
           lastError: error.message,
           errorCategory: "review"
         });
-        await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nAgentOS could not read the pull request for review.\n\n- PR: ${state.prUrl}\n- Error: ${error.message}`);
+        await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nAgentOS could not read the pull request for review.\n\n- PR: ${reviewPr}\n- Error: ${error.message}`);
         await this.logger.write({
           type: "review_human_required",
           issueId: issue.id,
           issueIdentifier: issue.identifier,
           message: error.message,
-          payload: { prUrl: state.prUrl }
+          payload: { prUrl: reviewPr }
         });
         return null;
       });
@@ -437,7 +440,7 @@ export class Orchestrator {
           lastError: `pull request is ${githubContext.status.state}`,
           errorCategory: "review"
         });
-        await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nPull request is not open.\n\n- PR: ${state.prUrl}\n- State: ${githubContext.status.state}`);
+        await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nPull request is not open.\n\n- PR: ${reviewPr}\n- State: ${githubContext.status.state}`);
         return latestState;
       }
       const reviewers = this.reviewersFor(githubContext.status.changedFiles);
@@ -448,7 +451,7 @@ export class Orchestrator {
         issueId: issue.id,
         issueIdentifier: issue.identifier,
         message: `iteration ${iteration}`,
-        payload: { prUrl: state.prUrl, reviewers }
+        payload: { prUrl: reviewPr, reviewers }
       });
 
       for (const reviewer of reviewers) {
@@ -457,7 +460,7 @@ export class Orchestrator {
         const canonicalArtifactPath = reviewArtifactPath(repoRoot, issue.identifier, iteration, reviewer);
         const prompt = reviewerPrompt({
           issue,
-          prUrl: state.prUrl,
+          prUrl: reviewPr,
           iteration,
           reviewer,
           artifactPath: artifactRelativePath,
@@ -558,7 +561,7 @@ export class Orchestrator {
             "",
             "Required Wiggum reviewers approved this PR.",
             "",
-            `- PR: ${state.prUrl}`,
+            `- PR: ${reviewPr}`,
             `- Iteration: ${iteration}`,
             `- Reviewers: ${reviewerStates.map((reviewer) => `${reviewer.name}=${reviewer.decision}`).join(", ")}`
           ].join("\n")
@@ -580,7 +583,7 @@ export class Orchestrator {
             "",
             `The Wiggum loop stopped because ${reason}.`,
             "",
-            `- PR: ${state.prUrl}`,
+            `- PR: ${reviewPr}`,
             `- Iteration: ${iteration}`,
             "",
             "Blocking findings:",
@@ -592,7 +595,7 @@ export class Orchestrator {
           issueId: issue.id,
           issueIdentifier: issue.identifier,
           message: reason,
-          payload: { findings: blocking, repeated }
+          payload: { findings: blocking, repeated, prUrl: reviewPr }
         });
         return latestState;
       }
@@ -611,7 +614,7 @@ export class Orchestrator {
           "",
           "Blocking findings were found. AgentOS is running a focused fix turn on the existing PR.",
           "",
-          `- PR: ${state.prUrl}`,
+          `- PR: ${reviewPr}`,
           `- Iteration: ${iteration}`,
           "",
           formatFindings(blocking, resolve(this.options.repoRoot))
@@ -622,7 +625,7 @@ export class Orchestrator {
         issue,
         prompt: fixPrompt({
           issue,
-          prUrl: state.prUrl,
+          prUrl: reviewPr,
           iteration,
           findings: blocking,
           handoffPath: join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
@@ -641,7 +644,7 @@ export class Orchestrator {
           lastError: fixResult.error ?? fixResult.status,
           errorCategory: "fix"
         });
-        await this.commentIssue(issue, `### AgentOS review fix failed\n\nThe fixer turn did not complete successfully.\n\n- PR: ${state.prUrl}\n- Error: ${fixResult.error ?? fixResult.status}`);
+        await this.commentIssue(issue, `### AgentOS review fix failed\n\nThe fixer turn did not complete successfully.\n\n- PR: ${reviewPr}\n- Error: ${fixResult.error ?? fixResult.status}`);
         return latestState;
       }
       const updatedHandoff = await readHandoff(workspace.path, issue.identifier);
@@ -687,7 +690,8 @@ export class Orchestrator {
   private async shepherdMergeIssue(issue: Issue): Promise<void> {
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
     const state = await stateStore.read(issue.identifier);
-    if (!state?.prUrl) {
+    const mergePr = primaryPullRequestUrl(state);
+    if (!state || !mergePr) {
       await this.markMergeFailed(issue, "No pull request metadata was found for this issue.");
       return;
     }
@@ -696,21 +700,21 @@ export class Orchestrator {
       type: "merge_shepherd_started",
       issueId: issue.id,
       issueIdentifier: issue.identifier,
-      message: state.prUrl
+      message: mergePr
     });
 
     const github = new GitHubClient(this.config.github.command);
     try {
-      const pr = await github.getPullRequest(state.prUrl, resolve(this.options.repoRoot));
+      const pr = await github.getPullRequest(mergePr, resolve(this.options.repoRoot));
       if (pr.merged) {
-        await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged: ${state.prUrl}`);
+        await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged: ${mergePr}`);
         await this.moveIssue(issue, this.config.github.doneState);
         return;
       }
 
       if (this.config.review.enabled && state.reviewStatus !== "approved") {
         if (!this.config.github.allowHumanMergeOverride) {
-          await this.markMergeFailed(issue, `automated review is not approved (reviewStatus=${state.reviewStatus ?? "missing"})`, state.prUrl);
+          await this.markMergeFailed(issue, `automated review is not approved (reviewStatus=${state.reviewStatus ?? "missing"})`, mergePr);
           return;
         }
         if (!state.humanOverrideAt) {
@@ -727,7 +731,7 @@ export class Orchestrator {
               "",
               "This issue is in `Merging` before automated review approval. Treating the Linear status move as explicit human approval for this merge attempt.",
               "",
-              `- PR: ${state.prUrl}`,
+              `- PR: ${mergePr}`,
               `- Previous reviewStatus: ${state.reviewStatus ?? "missing"}`
             ].join("\n")
           );
@@ -736,7 +740,7 @@ export class Orchestrator {
             issueId: issue.id,
             issueIdentifier: issue.identifier,
             message: state.reviewStatus ?? "missing",
-            payload: { prUrl: state.prUrl }
+            payload: { prUrl: mergePr }
           });
         }
       }
@@ -744,25 +748,25 @@ export class Orchestrator {
       const readiness = evaluateMergeReadiness(pr, this.config.github.requireChecks);
       if (!readiness.ready) {
         if (readiness.reason.includes("pending")) {
-          await this.markMergeWaiting(issue, state.prUrl, readiness.reason);
+          await this.markMergeWaiting(issue, mergePr, readiness.reason);
         } else {
-          await this.markMergeFailed(issue, readiness.reason, state.prUrl);
+          await this.markMergeFailed(issue, readiness.reason, mergePr);
         }
         return;
       }
 
-      await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${state.prUrl}`);
-      await github.mergePullRequest(state.prUrl, this.config.github, resolve(this.options.repoRoot));
-      await this.commentIssue(issue, `### AgentOS merge complete\n\nMerged successfully.\n\n- PR: ${state.prUrl}\n- Method: ${this.config.github.mergeMethod}`);
+      await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
+      await github.mergePullRequest(mergePr, this.config.github, resolve(this.options.repoRoot));
+      await this.commentIssue(issue, `### AgentOS merge complete\n\nMerged successfully.\n\n- PR: ${mergePr}\n- Method: ${this.config.github.mergeMethod}`);
       await this.moveIssue(issue, this.config.github.doneState);
       await this.logger.write({
         type: "merge_succeeded",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
-        message: state.prUrl
+        message: mergePr
       });
     } catch (error) {
-      await this.markMergeFailed(issue, error instanceof Error ? error.message : String(error), state.prUrl);
+      await this.markMergeFailed(issue, error instanceof Error ? error.message : String(error), mergePr);
     }
   }
 
