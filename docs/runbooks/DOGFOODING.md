@@ -41,6 +41,8 @@ For each issue, record:
 - Strict trust mode does not block legitimate small work.
 - Runtime `.agent-os/` data remains ignored and uncommitted.
 - The agent does not create a PR for already-satisfied work.
+- PR-producing issues watch for MCP elicitation and verify AgentOS stops
+  cleanly instead of hanging.
 - The issue reaches the expected Linear state.
 
 ## Suggested Table
