@@ -33,6 +33,9 @@ function checkWorkflow(path) {
   for (const outcome of ["implemented", "partially-satisfied", "already-satisfied"]) {
     if (!text.includes(`AgentOS-Outcome: ${outcome}`)) failures.push(`${path} missing AgentOS-Outcome: ${outcome}`);
   }
+  if (!text.includes("Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json")) {
+    failures.push(`${path} missing validation JSON handoff instruction`);
+  }
   for (const snippet of ["review:", "max_iterations", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing Wiggum review config ${snippet}`);
   }

@@ -150,6 +150,7 @@ export interface AgentRunResult {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  rateLimits?: Array<Record<string, unknown>>;
   error?: string;
 }
 
