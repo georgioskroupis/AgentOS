@@ -244,6 +244,57 @@ describe("orchestrator", () => {
     await expect(access(join(repo, ".agent-os", "workspaces", ".agent-os", "locks", "workspaces", "AG-1.lock"))).rejects.toThrow();
   });
 
+  it("routes deterministic PR creation failures to Human Review without retrying", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-pr-create-failure-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nagent:\n  max_turns: 1\n  max_retry_attempts: 3\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const upserts: Array<{ body: string; key: string }> = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, { ...readyIssue, state: "Human Review" }]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async upsertComment(_issue, body, key) {
+        upserts.push({ body, key });
+      }
+    };
+    const runner: AgentRunner = {
+      async run(): Promise<AgentRunResult> {
+        return { status: "failed", error: "agent_pr_creation_failed" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect(upserts.find((comment) => comment.key === "run_needs_input:AG-1")?.body).toContain("agent_pr_creation_failed");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state).toMatchObject({
+      phase: "needs-input",
+      lastError: "agent_pr_creation_failed",
+      errorCategory: "human-input"
+    });
+    expect(state.nextRetryAt).toBeUndefined();
+  });
+
   it("continues successful turns up to max_turns until a handoff exists", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-max-turns-"));
     const workflowPath = join(repo, "WORKFLOW.md");

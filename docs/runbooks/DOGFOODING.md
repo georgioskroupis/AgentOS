@@ -41,6 +41,8 @@ For each issue, record:
 - Strict trust mode does not block legitimate small work.
 - Runtime `.agent-os/` data remains ignored and uncommitted.
 - The agent does not create a PR for already-satisfied work.
+- PR-producing work uses `scripts/agent-create-pr.sh` or explicit
+  non-interactive `gh pr create` arguments, not GitHub app/MCP PR creation.
 - The issue reaches the expected Linear state.
 
 ## Suggested Table
@@ -61,6 +63,8 @@ Pause the dogfood cycle and file a focused fix issue if any of these occur:
 - Artifact hash warnings appear without an intentional artifact edit.
 - Workspace locks prevent a normal single-issue run.
 - Trust-mode policy blocks valid work without a clear operator path.
+- PR creation falls back to MCP elicitation instead of the deterministic
+  `gh`-based path.
 - Runtime `.agent-os/` data appears in tracked git changes.
 
 ## After the Cycle

@@ -120,6 +120,7 @@ async function contractChecks(targetRoot: string, workflowPath = "WORKFLOW.md"):
 
   for (const path of [
     "scripts/agent-check.sh",
+    "scripts/agent-create-pr.sh",
     "fix-bug",
     "implement-feature",
     "review-pr",

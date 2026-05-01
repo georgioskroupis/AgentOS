@@ -36,6 +36,9 @@ function checkWorkflow(path) {
   if (!text.includes("Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json")) {
     failures.push(`${path} missing validation JSON handoff instruction`);
   }
+  for (const snippet of ["scripts/agent-create-pr.sh", "--body-file", "--base", "--head", "agent_pr_creation_failed", "prs[]"]) {
+    if (!text.includes(snippet)) failures.push(`${path} missing non-interactive PR creation contract ${snippet}`);
+  }
   for (const snippet of ["runId", "repoHead", "git rev-parse HEAD"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing validation evidence field ${snippet}`);
   }
@@ -112,6 +115,9 @@ function checkSkills() {
     const text = read(path);
     if (!text.includes("AgentOS-Outcome: already-satisfied")) failures.push(`${path} missing no-op outcome instruction`);
     if (!text.includes("partially satisfied") && !text.includes("partially-satisfied")) failures.push(`${path} missing partial implementation guardrail`);
+    if (!text.includes("scripts/agent-create-pr.sh") || !text.includes("agent_pr_creation_failed")) {
+      failures.push(`${path} missing deterministic PR creation guidance`);
+    }
   }
 
   for (const path of ["skills/review-pr/SKILL.md", "templates/base-harness/.agents/skills/review-pr/SKILL.md"]) {

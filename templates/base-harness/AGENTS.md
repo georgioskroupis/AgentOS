@@ -24,7 +24,10 @@ For every code-changing task:
 6. Add or update tests.
 7. Run `./scripts/agent-check.sh`.
 8. Update docs if behavior, architecture, or public APIs changed.
-9. Prepare a PR summary with what changed, why, tests run, risks, and follow-ups.
+9. When a PR is needed, use `scripts/agent-create-pr.sh` or explicit
+   non-interactive `gh pr create` arguments.
+10. Prepare a PR summary with what changed, why, tests run, risks, and
+    follow-ups.
 
 ## Hard Rules
 

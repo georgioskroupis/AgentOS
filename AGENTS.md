@@ -25,6 +25,8 @@ For code-changing tasks:
 5. Add or update validation where useful.
 6. Run the narrowest relevant check, then `npm run agent-check` when present.
 7. Update docs if behavior, workflow, or public commands changed.
+8. When a PR is needed, use `scripts/agent-create-pr.sh` or explicit
+   non-interactive `gh pr create` arguments instead of GitHub app/MCP PR tools.
 
 ## Hard Rules
 

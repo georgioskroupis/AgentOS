@@ -12,6 +12,7 @@ const strictSandboxFixtureCommand = `node ${JSON.stringify(fixture)} --strict-sa
 const approvalRequestFixtureCommand = `node ${JSON.stringify(fixture)} --approval-request`;
 const inputRequestFixtureCommand = `node ${JSON.stringify(fixture)} --input-request`;
 const elicitationRequestFixtureCommand = `node ${JSON.stringify(fixture)} --elicitation-request`;
+const prScriptFailureFixtureCommand = `node ${JSON.stringify(fixture)} --pr-script-failure`;
 
 const issue: Issue = {
   id: "issue-1",
@@ -259,6 +260,41 @@ describe("CodexAppServerRunner", () => {
         payload: expect.objectContaining({
           method: "mcpServer/elicitation/request",
           policy: "user_input_denied"
+        })
+      })
+    );
+  });
+
+  it("stops failed deterministic PR creation commands without falling back to interaction", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-pr-failure-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, prScriptFailureFixtureCommand);
+    const events: Array<{ type: string; message?: string; payload?: unknown }> = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Open a PR",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push({ type: event.type, message: event.message, payload: event.payload });
+        }
+      })
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: "agent_pr_creation_failed",
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "codex_command_stop",
+        message: "agent_pr_creation_failed",
+        payload: expect.objectContaining({
+          command: expect.stringContaining("scripts/agent-create-pr.sh"),
+          exitCode: 1
         })
       })
     );

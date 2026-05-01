@@ -50,6 +50,22 @@ rl.on("line", (line) => {
       });
       return;
     }
+    if (process.argv.includes("--pr-script-failure")) {
+      write({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            command: "scripts/agent-create-pr.sh --title Test --body-file pr.md --base main --head agent/AG-1",
+            status: "completed",
+            exitCode: 1
+          }
+        }
+      });
+      return;
+    }
     write({
       method: "thread/tokenUsage/updated",
       params: {

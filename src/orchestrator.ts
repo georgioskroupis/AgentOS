@@ -1120,7 +1120,8 @@ function isHumanInputStop(message: string): boolean {
   return (
     normalized.includes("codex_approval_request_denied") ||
     normalized.includes("codex_user_input_request_denied") ||
-    normalized.includes("codex_elicitation_request_denied")
+    normalized.includes("codex_elicitation_request_denied") ||
+    normalized.includes("agent_pr_creation_failed")
   );
 }
 
