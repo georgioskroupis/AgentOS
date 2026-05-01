@@ -37,6 +37,25 @@ rl.on("line", (line) => {
       write({ method: "turn/input_required", params: { turnId: "turn-1", type: "user_input" } });
       return;
     }
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          total: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }
+        }
+      }
+    });
+    write({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          primary: { usedPercent: 1 }
+        }
+      }
+    });
     const complete = () => {
       write({
         method: "turn/completed",

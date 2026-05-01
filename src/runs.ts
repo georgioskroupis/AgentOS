@@ -95,7 +95,7 @@ export class RunArtifactStore {
           threadId: result.threadId,
           turnId: result.turnId
         },
-        rateLimits: current.metrics.rateLimits
+        rateLimits: result.rateLimits ?? current.metrics.rateLimits
       },
       artifactHashes: await this.hashArtifacts(runId)
     };
@@ -217,6 +217,7 @@ export function formatRunInspect(result: { summary: RunSummary; warnings: string
     summary.metrics.sessions.threadId ? `Thread: ${summary.metrics.sessions.threadId}` : null,
     summary.metrics.sessions.turnId ? `Turn: ${summary.metrics.sessions.turnId}` : null,
     tokenLine(summary),
+    rateLimitLine(summary),
     summary.error ? `Error: ${summary.error}` : null,
     warnings.length ? `Warnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}` : "Warnings: none"
   ].filter((line): line is string => line !== null);
@@ -232,6 +233,11 @@ function tokenLine(summary: RunSummary): string {
   const tokens = summary.metrics.tokens;
   if (tokens.input == null && tokens.output == null && tokens.total == null) return "Tokens: none recorded";
   return `Tokens: input=${tokens.input ?? "unknown"} output=${tokens.output ?? "unknown"} total=${tokens.total ?? "unknown"}`;
+}
+
+function rateLimitLine(summary: RunSummary): string {
+  const count = summary.metrics.rateLimits.length;
+  return count > 0 ? `Rate limits: ${count} snapshot${count === 1 ? "" : "s"} recorded` : "Rate limits: none recorded";
 }
 
 function createRunId(identifier: string, timestamp: string): string {

@@ -44,7 +44,8 @@ describe("run artifacts", () => {
       turnId: "turn-1",
       inputTokens: 10,
       outputTokens: 5,
-      totalTokens: 15
+      totalTokens: 15,
+      rateLimits: [{ limitId: "codex" }]
     });
 
     expect(completed).toMatchObject({
@@ -53,11 +54,14 @@ describe("run artifacts", () => {
       status: "succeeded",
       metrics: {
         tokens: { input: 10, output: 5, total: 15 },
-        sessions: { threadId: "thread-1", turnId: "turn-1" }
+        sessions: { threadId: "thread-1", turnId: "turn-1" },
+        rateLimits: [{ limitId: "codex" }]
       }
     });
     expect(Object.keys(completed.artifactHashes).sort()).toEqual(["events.jsonl", "handoff.md", "prompt.md"]);
-    expect(formatRunInspect(await store.inspect(summary.runId))).toContain("Warnings: none");
+    const inspected = formatRunInspect(await store.inspect(summary.runId));
+    expect(inspected).toContain("Rate limits: 1 snapshot recorded");
+    expect(inspected).toContain("Warnings: none");
 
     await appendFile(join(repo, ".agent-os", "runs", summary.runId, "prompt.md"), "\ntampered", "utf8");
     expect(formatRunInspect(await store.inspect(summary.runId))).toContain("artifact hash mismatch: prompt.md");

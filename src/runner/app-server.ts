@@ -35,6 +35,10 @@ export class CodexAppServerRunner implements AgentRunner {
     let stderr = "";
     let threadId: string | undefined;
     let turnId: string | undefined;
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+    let totalTokens: number | undefined;
+    let rateLimits: Array<Record<string, unknown>> = [];
     let turnCompletion: ((message: Record<string, any>) => void) | undefined;
     let turnFailure: ((error: Error) => void) | undefined;
     let bufferedTurnCompletion: Record<string, any> | undefined;
@@ -105,6 +109,16 @@ export class CodexAppServerRunner implements AgentRunner {
               payload: message,
               timestamp: new Date().toISOString()
             });
+            const tokens = tokenMetricsFrom(message);
+            if (tokens) {
+              inputTokens = tokens.input ?? inputTokens;
+              outputTokens = tokens.output ?? outputTokens;
+              totalTokens = tokens.total ?? totalTokens;
+            }
+            const rateLimit = rateLimitSnapshotFrom(message);
+            if (rateLimit) {
+              rateLimits = [...rateLimits, rateLimit].slice(-10);
+            }
             threadId = message.params?.threadId ?? message.params?.thread?.id ?? message.params?.thread_id ?? message.thread_id ?? threadId;
             turnId = message.params?.turnId ?? message.params?.turn?.id ?? message.params?.turn_id ?? message.turn_id ?? turnId;
             if (message.method === "turn/completed" && (!turnId || message.params?.turn?.id === turnId)) {
@@ -195,6 +209,10 @@ export class CodexAppServerRunner implements AgentRunner {
         status: status === "completed" ? "succeeded" : status === "interrupted" ? "canceled" : "failed",
         threadId,
         turnId,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        rateLimits,
         error: completion.params?.turn?.error?.message
       };
     } catch (error) {
@@ -205,6 +223,10 @@ export class CodexAppServerRunner implements AgentRunner {
         status: "failed",
         threadId,
         turnId,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        rateLimits,
         error: error instanceof Error ? error.message : String(error)
       };
     } finally {
@@ -223,6 +245,25 @@ export class CodexAppServerRunner implements AgentRunner {
       }
     }
   }
+}
+
+function tokenMetricsFrom(message: Record<string, any>): { input?: number; output?: number; total?: number } | null {
+  const usage = message.params?.tokenUsage?.total ?? message.params?.tokenUsage ?? message.params?.usage ?? null;
+  if (!usage || typeof usage !== "object") return null;
+  const input = numberValue(usage.inputTokens ?? usage.input_tokens ?? usage.input);
+  const output = numberValue(usage.outputTokens ?? usage.output_tokens ?? usage.output);
+  const total = numberValue(usage.totalTokens ?? usage.total_tokens ?? usage.total);
+  if (input == null && output == null && total == null) return null;
+  return { input, output, total };
+}
+
+function rateLimitSnapshotFrom(message: Record<string, any>): Record<string, unknown> | null {
+  const snapshot = message.params?.rateLimits ?? message.params?.rateLimit ?? null;
+  return snapshot && typeof snapshot === "object" ? snapshot : null;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeThreadSandbox(value: unknown): unknown {

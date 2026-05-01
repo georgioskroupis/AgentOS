@@ -80,8 +80,18 @@ describe("CodexAppServerRunner", () => {
         events.push(event.type);
       }
     });
-    expect(result).toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+    expect(result).toMatchObject({
+      status: "succeeded",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+      rateLimits: [{ limitId: "codex", primary: { usedPercent: 1 } }]
+    });
     expect(events).toContain("turn/completed");
+    expect(events).toContain("thread/tokenUsage/updated");
+    expect(events).toContain("account/rateLimits/updated");
   });
 
   it("handles completion events that arrive before the waiter is registered", async () => {
