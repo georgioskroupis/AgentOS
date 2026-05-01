@@ -2,9 +2,11 @@
 
 ## Control-Plane Model
 
-AgentOS uses Linear in Symphony style: Linear owns work selection and monitoring,
-while the local orchestrator owns polling, workspace creation, Codex App Server
-runs, retry timing, state moves, and lifecycle comments.
+AgentOS uses Linear in Symphony style: Linear owns work selection and
+monitoring, while the local orchestrator owns polling, workspace creation,
+Codex App Server runs, and retry timing. Tracker write ownership is configured
+through `lifecycle.mode`; the safe default is `orchestrator-owned`, where the
+orchestrator also owns state moves and lifecycle comments.
 
 Put an issue in a configured active state and run the local orchestrator:
 
@@ -53,7 +55,8 @@ for the same state.
 
 ## Linear Lifecycle
 
-The orchestrator, not Codex, performs the Linear lifecycle:
+In the default `orchestrator-owned` lifecycle mode, the orchestrator performs the
+Linear lifecycle:
 
 - active states, `Todo` and `In Progress`, are the queue/continuation lane
 - running state, for example `In Progress`, means AgentOS picked it up

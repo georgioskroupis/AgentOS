@@ -147,14 +147,19 @@ bin/agent-os linear seed-maintenance --team <team-key-or-id> --project AgentOS
 
 ## Current Integration Notes
 
-Linear is the control plane: issues in configured active states are dispatched,
-blocked issues wait for their blockers, and the orchestrator moves/comments on
-the ticket for start, retry, failure, and review handoff. Codex focuses on the
-repo work and writes `.agent-os/handoff-<issue>.md` for the final Linear
-comment. Each handoff includes an `AgentOS-Outcome` line so already-satisfied
-issues can become no-op review handoffs instead of duplicate implementations.
-AgentOS-owned lifecycle comments include hidden `agentos:event` markers so
-retries and restarts update those comments in place when Linear supports it.
+Linear is the control plane: issues in configured active states are dispatched
+and blocked issues wait for their blockers. Lifecycle ownership is explicit in
+`WORKFLOW.md`. The current safe default is `lifecycle.mode:
+orchestrator-owned`, where the orchestrator moves/comments on the ticket for
+start, retry, failure, and review handoff. Codex focuses on the repo work and
+writes `.agent-os/handoff-<issue>.md` for the final Linear comment. Each handoff
+includes an `AgentOS-Outcome` line so already-satisfied issues can become no-op
+review handoffs instead of duplicate implementations. AgentOS-owned lifecycle
+comments include hidden `agentos:event` markers so retries and restarts update
+those comments in place when Linear supports it. `hybrid` and experimental
+`agent-owned` modes are available as a source-alignment path, but strict
+validation gates `agent-owned` until tracker tools, idempotency, transition,
+fallback, and maturity requirements are declared.
 Implemented PRs now pass through automated reviewer turns for self-review,
 correctness, tests, architecture, and conditional security review. Blocking
 findings trigger focused fixer turns on the same PR until reviewers approve or

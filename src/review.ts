@@ -200,7 +200,7 @@ export function fixPrompt(input: {
     "3. Run `npm run agent-check`.",
     "4. Push the branch and update the existing PR.",
     `5. Update the handoff file at ${input.handoffPath} with the latest validation and PR URL.`,
-    "6. Do not move or comment on the Linear issue directly; AgentOS owns Linear lifecycle updates."
+    "6. Do not move or comment on the Linear issue directly; review/fix turns do not own tracker lifecycle updates."
   ]
     .filter(Boolean)
     .join("\n");

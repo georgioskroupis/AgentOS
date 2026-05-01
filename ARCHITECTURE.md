@@ -31,8 +31,11 @@ layers:
 - Template files should not depend on this repository after installation.
 - Shared skills should be reusable across project types.
 - CLI behavior should be conservative and avoid overwriting user files.
-- The orchestrator reads tracker state, starts runs, moves Linear issues, and
-  posts lifecycle comments. Codex writes repo changes and handoff files.
+- Lifecycle ownership is explicit in `WORKFLOW.md`. The current safe default is
+  `orchestrator-owned`, where the orchestrator reads tracker state, starts
+  runs, moves Linear issues, and posts lifecycle comments. `hybrid` and
+  experimental `agent-owned` are source-alignment modes with stricter validation
+  requirements. Codex writes repo changes and handoff files.
 - Merge shepherding is a separate orchestrator path: `Merging` issues do not
   start Codex; they use stored PR metadata and GitHub checks to merge or return
   to `Human Review`.

@@ -4,6 +4,11 @@ AgentOS workflow files declare a top-level `trust_mode`. The mode describes
 what the orchestrator and Codex App Server turns are allowed to assume about
 network, repository writes, PR access, and user input.
 
+Lifecycle ownership is a separate axis under `lifecycle.mode`. Do not use
+`trust_mode` to encode who owns tracker comments or Linear state transitions.
+That belongs to lifecycle ownership. Future repair-loop behavior belongs to an
+automation policy axis, not to `trust_mode`.
+
 ## Capability Matrix
 
 | Mode | Network | Repo writes | Review writes | PR/network access | GitHub merge | Codex user input |
@@ -60,3 +65,11 @@ review store.
 If the Codex App Server emits an approval or user-input request while those
 policies are `deny`, AgentOS records a `codex_event_policy_denied` event and
 fails the run instead of waiting for interactive input.
+
+## Lifecycle Ownership
+
+| Mode | Orchestrator state moves | Orchestrator comments | Notes |
+| --- | --- | --- | --- |
+| `orchestrator-owned` | on | bookkeeping and substantive handoff | Current safe default and intentional AgentOS deviation from Symphony's usual tracker-write boundary. |
+| `hybrid` | on | bookkeeping only | Agent artifacts/tools own substantive handoff/update content and PR metadata. |
+| `agent-owned` | off | off | Experimental. Strict validation requires tracker tools, idempotency marker format, allowed transitions, duplicate-comment behavior, fallback behavior, and an acknowledgement that durable retry/startup reconstruction is not yet complete. |

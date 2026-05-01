@@ -1,5 +1,7 @@
 ---
 trust_mode: local-trusted
+lifecycle:
+  mode: orchestrator-owned
 tracker:
   kind: linear
   endpoint: https://api.linear.app/graphql
@@ -99,6 +101,25 @@ review:
 3. Apply the harness to a target project with `bin/agent-os init <repo>`.
 4. Validate the target project with `bin/agent-os doctor <repo>`.
 5. Run target checks with `bin/agent-os check <repo>`.
+
+## Lifecycle Ownership
+
+`lifecycle.mode: orchestrator-owned` is the current safe AgentOS default and an
+intentional bounded deviation from Symphony's usual tracker-write boundary. In
+this mode the orchestrator owns idempotent Linear lifecycle comments and state
+moves while Codex changes the repo, opens or updates PRs when needed, and writes
+handoff/validation artifacts.
+
+Future source-aligned modes are separate from `trust_mode` and automation repair
+policy:
+
+- `hybrid`: the orchestrator keeps safety/bookkeeping state moves and lifecycle
+  markers, while substantive handoff/update content is expected to be owned by
+  agent-authored artifacts or tracker tools.
+- `agent-owned`: experimental only. Strict workflow validation requires
+  configured tracker tools, idempotency marker format, allowed transitions,
+  duplicate-comment behavior, tracker-write fallback behavior, and an explicit
+  acknowledgement that durable retry/startup reconstruction is not yet complete.
 
 ## Target Repository Lifecycle
 
@@ -204,4 +225,6 @@ Responsibilities:
    `gh pr create` command. Do not use GitHub app/MCP PR creation tools.
 7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, final authoritative `status`, and command entries for every `npm run agent-check` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
 8. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`.
-9. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
+9. Follow `lifecycle.mode`: in the current `orchestrator-owned` mode, do not
+   move or comment on the Linear issue directly; the AgentOS orchestrator owns
+   Linear lifecycle updates.

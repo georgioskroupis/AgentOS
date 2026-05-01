@@ -2,6 +2,7 @@ import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
 import { issueStateFromHandoff, IssueStateStore } from "./issue-state.js";
+import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
 import { redactText } from "./redaction.js";
@@ -864,21 +865,35 @@ export class Orchestrator {
     const reviewLine = state?.reviewStatus
       ? `\n\nAutomated review status: \`${state.reviewStatus}\`${state.reviewIteration ? ` after iteration ${state.reviewIteration}` : ""}.`
       : "";
-    await this.commentIssue(
-      issue,
-      handoff
-        ? `${handoff}${reviewLine}`
-        : [
-            "### AgentOS handoff",
-            "",
-            "Codex completed this run successfully, but no handoff file was found.",
-            "",
-            `- Workspace: \`${workspace.path}\``,
-            "- Expected validation: project harness check",
-            reviewLine.trim()
-          ].join("\n"),
-      "run_handoff"
-    );
+    if (usesFullOrchestratorHandoff(this.config)) {
+      await this.commentIssue(
+        issue,
+        handoff
+          ? `${handoff}${reviewLine}`
+          : [
+              "### AgentOS handoff",
+              "",
+              "Codex completed this run successfully, but no handoff file was found.",
+              "",
+              `- Workspace: \`${workspace.path}\``,
+              "- Expected validation: project harness check",
+              reviewLine.trim()
+            ].join("\n"),
+        "run_handoff",
+        "substantive"
+      );
+    } else {
+      await this.commentIssue(
+        issue,
+        hybridHandoffComment({
+          issueIdentifier: issue.identifier,
+          workspacePath: workspace.path,
+          reviewStatus: state?.reviewStatus,
+          reviewIteration: state?.reviewIteration
+        }),
+        "run_handoff"
+      );
+    }
     await this.moveIssue(issue, this.config.tracker.reviewState);
   }
 
@@ -998,7 +1013,7 @@ export class Orchestrator {
   }
 
   private async moveIssue(issue: Issue, stateName: string | null): Promise<void> {
-    if (!stateName || !this.tracker.move) return;
+    if (!stateName || !this.tracker.move || !orchestratorMayMoveIssue(this.config)) return;
     await this.tracker.move(issue.identifier, stateName).catch((error: Error) =>
       this.logger.write({
         type: "linear_update_failed",
@@ -1009,7 +1024,8 @@ export class Orchestrator {
     );
   }
 
-  private async commentIssue(issue: Issue, body: string, key?: string): Promise<void> {
+  private async commentIssue(issue: Issue, body: string, key?: string, kind: "bookkeeping" | "substantive" = "bookkeeping"): Promise<void> {
+    if (!orchestratorMayComment(this.config, kind)) return;
     if (!this.tracker.comment && !this.tracker.upsertComment) return;
     const safeBody = redactText(key ? `${linearCommentMarker(key, issue.identifier)}\n${body}` : body);
     const operation =

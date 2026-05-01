@@ -4,6 +4,8 @@ export type HarnessProfile = (typeof harnessProfiles)[number];
 export type TrustMode = "review-only" | "ci-locked" | "local-trusted" | "danger";
 export type GitHubMergeMode = "manual" | "shepherd" | "auto";
 export type CodexEventPolicy = "deny" | "allow";
+export type LifecycleMode = "orchestrator-owned" | "hybrid" | "agent-owned";
+export type LifecycleDuplicateCommentBehavior = "upsert" | "skip" | "error";
 
 export interface HarnessChange {
   action: "add" | "overwrite" | "exists" | "missing" | "invalid";
@@ -64,6 +66,15 @@ export interface WorkflowDefinition {
 
 export interface ServiceConfig {
   trustMode: TrustMode;
+  lifecycle: {
+    mode: LifecycleMode;
+    allowedTrackerTools: string[];
+    idempotencyMarkerFormat: string | null;
+    allowedStateTransitions: string[];
+    duplicateCommentBehavior: LifecycleDuplicateCommentBehavior | null;
+    fallbackBehavior: string | null;
+    maturityAcknowledgement: string | null;
+  };
   tracker: {
     kind: "linear";
     endpoint: string;

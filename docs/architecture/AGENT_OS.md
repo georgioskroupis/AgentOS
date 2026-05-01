@@ -25,8 +25,12 @@ records JSONL events for status inspection.
 It keeps orchestration logic narrow:
 
 - Linear is the scheduler control plane.
-- The orchestrator is a reader/runner with retry, reconciliation, status moves,
-  and Linear lifecycle comments.
+- Lifecycle ownership is explicit. `orchestrator-owned` is the current safe
+  mode, where the orchestrator is a reader/runner with retry, reconciliation,
+  status moves, and Linear lifecycle comments. `hybrid` keeps orchestrator-owned
+  safety/bookkeeping moves and markers while leaving substantive update content
+  to agent artifacts/tools. `agent-owned` is experimental and strict-validation
+  gated.
 - The agent, guided by `WORKFLOW.md`, changes the repo, validates the work, opens
   pull requests, and writes a handoff file for the orchestrator to post.
 - Every agent run starts with an implementation audit. Already-satisfied issues
