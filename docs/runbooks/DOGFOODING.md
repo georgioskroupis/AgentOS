@@ -34,6 +34,8 @@ For each issue, record:
 
 - Linear comments are correctly upserted, not duplicated.
 - Validation evidence exists as JSON and verifies as `passed`.
+- Historical failed validation attempts are acceptable only when the final
+  authoritative validation result passed.
 - `runs inspect` reports the true status, thread/turn, tokens, rate limits, and
   warnings.
 - Artifact hashes stay valid; `runs inspect` reports no unexpected mismatch.
