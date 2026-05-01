@@ -17,4 +17,3 @@ Request extra review when a change touches:
 - payment or billing flows
 - secret handling
 - dependency upgrades with security implications
-

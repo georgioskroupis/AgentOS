@@ -6,7 +6,7 @@ import { readText } from "./fs-utils.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
 import { getStatus, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
-import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
+import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
@@ -87,6 +87,24 @@ program
   .argument("<repo>", "repository path to validate")
   .action(async (repo) => {
     process.exitCode = await runHarnessCheck(repo);
+  });
+
+const workflowCommand = program.command("workflow").description("Inspect and validate AgentOS workflow files");
+
+workflowCommand
+  .command("validate")
+  .argument("[path]", "workflow path", "WORKFLOW.md")
+  .option("--strict", "enforce production-safe workflow defaults")
+  .action(async (path, options) => {
+    const workflow = await loadWorkflow(path);
+    const result = validateWorkflowDefinition(workflow, process.env, Boolean(options.strict));
+    for (const warning of result.warnings) console.warn(`warning: ${warning}`);
+    for (const error of result.errors) console.error(`error: ${error}`);
+    if (result.ok) {
+      console.log(`Workflow OK: ${workflow.workflowPath}`);
+    } else {
+      process.exitCode = 1;
+    }
   });
 
 const project = program.command("project").description("Manage agent-os.yml project registry");

@@ -99,6 +99,7 @@ describe("current AgentOS characterization", () => {
     const script = await readFile(resolve("scripts/agent-bootstrap-worktree.sh"), "utf8");
 
     expect(script).toContain('branch="agent/${workspace_key}"');
+    expect(script).toContain("Refusing to create AgentOS workspace from a dirty source worktree.");
     expect(script).toContain('git -C "$source_repo" worktree add -B "$branch" "$workspace" HEAD');
     expect(script).not.toContain("AGENT_OS_RUN_ID");
     expect(script).not.toContain("lock");

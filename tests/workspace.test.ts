@@ -1,6 +1,7 @@
 import { mkdtemp, readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { WorkspaceManager, workspaceKey } from "../src/workspace.js";
 import type { ServiceConfig } from "../src/types.js";
@@ -57,4 +58,48 @@ describe("workspace", () => {
     const workspace = await manager.createOrReuse("AG-1");
     expect(await readFile(join(workspace.path, "key.txt"), "utf8")).toBe("AG-1");
   });
+
+  it("refuses to bootstrap a worktree from a dirty source repo", async () => {
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-dirty-"));
+    const workspace = join(await mkdtemp(join(tmpdir(), "agent-os-ws-dirty-")), "AG-1");
+    await run("git", ["init"], source);
+    await run("sh", ["-lc", "printf dirty > file.txt"], source);
+
+    const result = await run(
+      "bash",
+      [resolve("scripts/agent-bootstrap-worktree.sh")],
+      source,
+      {
+        AGENT_OS_SOURCE_REPO: source,
+        AGENT_OS_WORKSPACE: workspace,
+        AGENT_OS_WORKSPACE_KEY: "AG-1"
+      },
+      false
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("dirty source worktree");
+  });
 });
+
+function run(
+  command: string,
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv = {},
+  rejectOnFailure = true
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const result = { code, stdout, stderr };
+      if (rejectOnFailure && code !== 0) reject(new Error(stderr || `${command} failed`));
+      else resolvePromise(result);
+    });
+  });
+}

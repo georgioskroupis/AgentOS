@@ -6,6 +6,7 @@ import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, readReviewArtifact, repeatedBlockingHashes, reviewArtifactPath, reviewerPrompt } from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
+import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { WorkspaceManager } from "./workspace.js";
 import type { AgentRunResult, AgentRunner, Issue, IssueState, IssueTracker, ReviewFinding, ReviewStateReviewer, ReviewStatus, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
@@ -140,7 +141,13 @@ export class Orchestrator {
         this.completedMarkers.set(issue.id, completionMarker(issue));
         const handoff = await readHandoff(workspace.path, issue.identifier);
         const stateFromHandoff = handoff ? issueStateFromHandoff(issue, handoff) : null;
-        const persistedState = stateFromHandoff ? await stateStore.merge(issue.identifier, stateFromHandoff) : await stateStore.read(issue.identifier);
+        const validation = handoff ? await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path }) : null;
+        const persistedState = stateFromHandoff
+          ? await stateStore.merge(issue.identifier, {
+              ...stateFromHandoff,
+              ...(validation ? { validation: validation.state } : {})
+            })
+          : await stateStore.read(issue.identifier);
         if (stateFromHandoff) {
           await this.logger.write({
             type: stateFromHandoff.prUrl ? "pr_metadata_persisted" : "issue_state_persisted",
@@ -445,7 +452,12 @@ export class Orchestrator {
         }
       }
 
-      const findings = [...artifacts.flatMap((entry) => entry.artifact.findings), ...reviewCheckFindings(githubContext.status, this.config)];
+      const validationFinding = validationEvidenceFinding(latestState?.validation);
+      const findings = [
+        ...artifacts.flatMap((entry) => entry.artifact.findings),
+        ...reviewCheckFindings(githubContext.status, this.config),
+        ...(validationFinding ? [validationFinding] : [])
+      ];
       for (const finding of findings.filter((finding) => finding.reviewer === "checks")) {
         await this.logger.write({
           type: "review_finding",

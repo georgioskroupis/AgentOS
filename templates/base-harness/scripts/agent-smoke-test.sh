@@ -8,4 +8,3 @@ elif [[ -f pyproject.toml ]] && command -v pytest >/dev/null 2>&1; then
 else
   echo "No project-specific smoke test configured."
 fi
-

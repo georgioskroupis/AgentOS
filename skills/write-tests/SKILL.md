@@ -10,4 +10,3 @@ description: Use when adding or strengthening automated coverage. Start from beh
 3. Add fixtures only when they clarify the scenario.
 4. Run the targeted test first, then `./scripts/agent-check.sh`.
 5. Report which behavior is now protected.
-

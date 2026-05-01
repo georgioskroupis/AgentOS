@@ -10,4 +10,3 @@ description: Use when behavior, architecture, workflows, commands, or public int
 3. Preserve `AGENTS.md` as a map; put details in `docs/`.
 4. Add examples for commands or workflows.
 5. Run docs-related checks if available.
-

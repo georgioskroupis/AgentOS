@@ -8,4 +8,3 @@ Good runbooks include:
 - commands to run
 - expected output
 - rollback or failure behavior
-

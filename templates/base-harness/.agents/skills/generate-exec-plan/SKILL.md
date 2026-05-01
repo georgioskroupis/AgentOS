@@ -10,4 +10,3 @@ description: Use when requirements are ambiguous or broad enough that an impleme
 3. Split the work into ordered, independently reviewable tasks.
 4. Specify validation for each task.
 5. Call out blockers and decisions that need human input.
-

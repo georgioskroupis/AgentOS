@@ -13,4 +13,3 @@ Use this format:
 
 ## Consequences
 ```
-

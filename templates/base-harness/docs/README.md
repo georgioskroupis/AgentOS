@@ -9,4 +9,3 @@ This directory is the source of truth for agent-assisted development.
 - `security/` documents security-sensitive areas.
 - `runbooks/` holds operational steps agents and humans can follow.
 - `generated/` is reserved for generated reports and artifacts.
-

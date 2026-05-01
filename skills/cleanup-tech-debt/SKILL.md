@@ -10,4 +10,3 @@ description: Use when reducing maintenance burden without changing product behav
 3. Make one coherent cleanup at a time.
 4. Avoid unrelated style churn.
 5. Run `./scripts/agent-check.sh` and report behavior-preservation evidence.
-

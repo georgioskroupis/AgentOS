@@ -184,7 +184,15 @@ export interface IssueState {
   lastFixedSha?: string | null;
   lastHumanFeedbackAt?: string | null;
   humanOverrideAt?: string | null;
+  validation?: ValidationState;
   updatedAt: string;
+}
+
+export interface ValidationState {
+  status: "passed" | "failed" | "missing";
+  path?: string;
+  errors?: string[];
+  checkedAt: string;
 }
 
 export type RunPhase =

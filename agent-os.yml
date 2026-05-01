@@ -11,4 +11,3 @@ projects:
       kind: linear
       projectSlug: AgentOS
     maxConcurrency: 1
-

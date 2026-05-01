@@ -18,4 +18,3 @@ mkdir -p docs/generated
 } > docs/generated/agent-quality-report.md
 
 echo "Wrote docs/generated/agent-quality-report.md"
-
