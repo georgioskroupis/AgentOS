@@ -131,6 +131,95 @@ describe("orchestrator", () => {
     expect(state.prUrl).toBe("https://github.com/o/r/pull/1");
   });
 
+  it("keeps hybrid lifecycle moves and bookkeeping comments but not full handoff comments", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-hybrid-linear-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\nlifecycle:\n  mode: hybrid\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
+        await writeFile(
+          join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
+          "### Handoff\n\nValidation passed.\n\nPR: https://github.com/o/r/pull/1",
+          "utf8"
+        );
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect(comments[0]).toContain("AgentOS started");
+    expect(comments[1]).toContain("AgentOS handoff recorded");
+    expect(comments[1]).not.toContain("Validation passed.");
+    expect(comments[1]).toContain("lifecycle.mode: hybrid");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.prUrl).toBe("https://github.com/o/r/pull/1");
+  });
+
+  it("refuses unconfigured agent-owned lifecycle dispatch", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-agent-owned-loose-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\nlifecycle:\n  mode: agent-owned\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        throw new Error("agent-owned validation should fail before dispatch");
+      },
+      async fetchIssueStates() {
+        return new Map();
+      }
+    };
+
+    await expect(
+      new Orchestrator({
+        repoRoot: repo,
+        workflowPath,
+        tracker,
+        runner: {
+          async run(): Promise<AgentRunResult> {
+            throw new Error("runner should not be called");
+          }
+        },
+        logger: new JsonlLogger(repo),
+        env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+      }).runOnce(true)
+    ).rejects.toThrow("lifecycle.mode=agent-owned requires lifecycle.allowed_tracker_tools in strict mode");
+  });
+
   it("passes retry attempts and does not re-dispatch an unchanged successful issue", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-retry-"));
     const workflowPath = join(repo, "WORKFLOW.md");

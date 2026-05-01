@@ -3,6 +3,7 @@ import YAML from "yaml";
 import { Liquid } from "liquidjs";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, readText } from "./fs-utils.js";
+import { parseLifecycleConfig, validateLifecycleConfig } from "./lifecycle.js";
 import { defaultThreadSandboxForTrustMode, defaultTurnSandboxPolicyForTrustMode, parseGitHubMergeMode, parseTrustMode, trustCapabilities, validateTrustCompatibility } from "./trust.js";
 import type { CodexEventPolicy, Issue, ServiceConfig, WorkflowDefinition } from "./types.js";
 
@@ -45,6 +46,7 @@ export function parseWorkflowText(text: string): { config: Record<string, unknow
 
 export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.ProcessEnv = process.env): ServiceConfig {
   const cfg = workflow.config;
+  const lifecycle = objectAt(cfg, "lifecycle");
   const tracker = objectAt(cfg, "tracker");
   const polling = objectAt(cfg, "polling");
   const workspace = objectAt(cfg, "workspace");
@@ -66,6 +68,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
 
   return {
     trustMode,
+    lifecycle: parseLifecycleConfig(lifecycle),
     tracker: {
       kind: "linear",
       endpoint: stringAt(tracker, "endpoint", "https://api.linear.app/graphql"),
@@ -135,6 +138,10 @@ export function validateDispatchConfig(config: ServiceConfig): void {
   if (!config.tracker.apiKey) throw new Error("tracker.api_key is required after environment resolution");
   if (!config.tracker.projectSlug) throw new Error("tracker.project_slug is required");
   if (!config.codex.command) throw new Error("codex.command is required");
+  const lifecycle = validateLifecycleConfig(config.lifecycle, true);
+  if (lifecycle.errors.length > 0) {
+    throw new Error(lifecycle.errors.join("; "));
+  }
 }
 
 export interface WorkflowValidationResult {
@@ -169,6 +176,9 @@ export function validateWorkflowDefinition(workflow: WorkflowDefinition, env: No
   });
   errors.push(...trust.errors);
   warnings.push(...trust.warnings);
+  const lifecycle = validateLifecycleConfig(config.lifecycle, strict);
+  errors.push(...lifecycle.errors);
+  warnings.push(...lifecycle.warnings);
 
   if (strict) {
     if (!config.tracker.apiKey) errors.push("tracker.api_key did not resolve from the environment");

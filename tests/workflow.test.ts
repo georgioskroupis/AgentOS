@@ -37,6 +37,15 @@ describe("workflow", () => {
     expect(config.tracker.reviewState).toBe("Human Review");
     expect(config.tracker.mergeState).toBeNull();
     expect(config.trustMode).toBe("ci-locked");
+    expect(config.lifecycle).toMatchObject({
+      mode: "orchestrator-owned",
+      allowedTrackerTools: [],
+      idempotencyMarkerFormat: null,
+      allowedStateTransitions: [],
+      duplicateCommentBehavior: null,
+      fallbackBehavior: null,
+      maturityAcknowledgement: null
+    });
     expect(config.codex.command).toBe("npx -y @openai/codex@0.125.0 app-server");
     expect(config.codex.approvalEventPolicy).toBe("deny");
     expect(config.codex.userInputPolicy).toBe("deny");
@@ -138,6 +147,108 @@ describe("workflow", () => {
     expect(result.errors).toContain("github.merge_mode=shepherd requires PR/network capability");
     expect(result.errors).toContain("codex.approval_event_policy=allow requires trust_mode=danger");
     expect(result.errors).toContain("codex.user_input_policy=allow requires a trust mode with Codex user input capability");
+  });
+
+  it("strictly gates experimental agent-owned lifecycle mode", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-lifecycle-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "lifecycle:",
+        "  mode: agent-owned",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "codex:",
+        "  command: npx -y @openai/codex@0.125.0 app-server",
+        "github:",
+        "  merge_mode: manual",
+        "  allow_human_merge_override: false",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const missing = validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true);
+    expect(missing.errors).toContain("lifecycle.mode=agent-owned requires lifecycle.allowed_tracker_tools in strict mode");
+    expect(missing.errors).toContain("lifecycle.mode=agent-owned requires lifecycle.idempotency_marker_format in strict mode");
+    expect(missing.errors).toContain("lifecycle.mode=agent-owned requires lifecycle.allowed_state_transitions in strict mode");
+    expect(missing.errors).toContain("lifecycle.mode=agent-owned requires lifecycle.duplicate_comment_behavior in strict mode");
+    expect(missing.errors).toContain("lifecycle.mode=agent-owned requires lifecycle.fallback_behavior in strict mode");
+    expect(missing.errors.some((error) => error.includes("maturity_acknowledgement"))).toBe(true);
+
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "lifecycle:",
+        "  mode: agent-owned",
+        "  allowed_tracker_tools:",
+        "    - scripts/agent-linear-comment.sh",
+        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} -->\"",
+        "  allowed_state_transitions:",
+        "    - Todo -> In Progress",
+        "    - In Progress -> Human Review",
+        "  duplicate_comment_behavior: upsert",
+        "  fallback_behavior: write handoff and stop human_required",
+        "  maturity_acknowledgement: durable retry/startup reconstruction is not yet complete",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "codex:",
+        "  command: npx -y @openai/codex@0.125.0 app-server",
+        "github:",
+        "  merge_mode: manual",
+        "  allow_human_merge_override: false",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const configured = validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true);
+    expect(configured.errors).toEqual([]);
+  });
+
+  it("rejects invalid lifecycle configs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-lifecycle-invalid-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "lifecycle:",
+        "  mode: loose",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain("unsupported_lifecycle_mode: loose");
+
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "lifecycle:",
+        "  mode: agent-owned",
+        "  duplicate_comment_behavior: duplicate",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
+      "unsupported_lifecycle_duplicate_comment_behavior: duplicate"
+    );
   });
 
   it("guides agents to non-interactive PR creation instead of MCP elicitation", async () => {

@@ -19,7 +19,8 @@ AgentOS is source-aligned in its broad shape:
 - `AGENTS.md` is short and points to deeper docs instead of becoming the system
   of record.
 - `WORKFLOW.md` owns orchestration policy, prompt text, state names, trust mode,
-  Codex command, review configuration, and GitHub merge mode.
+  lifecycle ownership, Codex command, review configuration, and GitHub merge
+  mode.
 - Linear is the single-project control plane.
 - Issues are eligible work units and run in deterministic workspaces.
 - Agents use standard repo-local tools such as `scripts/agent-create-pr.sh`,
@@ -30,8 +31,8 @@ AgentOS is source-aligned in its broad shape:
 
 The main drift is not conceptual. The drift is ownership and strictness:
 
-- AgentOS currently centralizes Linear lifecycle writes and merge shepherding in
-  the orchestrator.
+- AgentOS defaults Linear lifecycle writes and merge shepherding to the
+  orchestrator, but lifecycle ownership is now an explicit config axis.
 - AgentOS public defaults are deliberately safer than the high-trust OpenAI
   examples.
 - Some repair and feedback loops still escalate earlier than Harness
@@ -190,11 +191,12 @@ configuration:
 - Whether merge shepherding is disabled, manual, or orchestrator-driven.
 - Which mechanical failures trigger repair loops versus human handoff.
 
-PR C should make lifecycle ownership explicit. `orchestrator-owned` can remain
-the current safe mode. `agent-owned` should be experimental and must fail strict
-validation unless tracker tools, idempotency markers, allowed transitions, and
-fallback behavior are configured. `hybrid` can split safety bookkeeping from
-substantive workflow comments.
+PR C makes lifecycle ownership explicit. `orchestrator-owned` remains the
+current safe mode. `agent-owned` is experimental and must fail strict validation
+unless tracker tools, idempotency markers, allowed transitions, duplicate-comment
+behavior, fallback behavior, and the durable-recovery maturity acknowledgement
+are configured. `hybrid` splits safety bookkeeping from substantive workflow
+comments.
 
 ## 6. Where AgentOS Is More PR-Centric Than Symphony
 
@@ -313,6 +315,8 @@ Already configurable:
 - Workspace root and lifecycle hooks.
 - Agent concurrency, max turns, retry attempts, retry backoff, and per-state
   concurrency.
+- Lifecycle ownership: `orchestrator-owned`, `hybrid`, and experimental
+  `agent-owned`.
 - Review enabled flag, reviewers, max iterations, blocking severities, and
   convergence requirements.
 - GitHub merge mode, merge method, check requirement, branch deletion, done
@@ -321,8 +325,6 @@ Already configurable:
 
 Should become configurable:
 
-- Lifecycle ownership: `orchestrator-owned`, `hybrid`, and experimental
-  `agent-owned`.
 - Automation/repair policy: conservative, local-trusted repair, and
   high-throughput bounded repair loops. This must be separate from `trust_mode`.
 - PR review target selection when an issue has multiple PRs.
@@ -333,11 +335,10 @@ Should become configurable:
 
 Refactor-needed deviations:
 
-- Lifecycle ownership is implicit and orchestrator-owned. It needs an explicit
-  config axis and validation.
-- Agent-owned lifecycle mode does not exist. It should be experimental and
-  strict-validation-gated on tracker tools, idempotency contracts, allowed
-  transitions, and fallback behavior.
+- Lifecycle ownership is explicit, but `hybrid` and `agent-owned` still need
+  more dogfood before they should be considered mature.
+- Agent-owned lifecycle mode exists only as an experimental strict-validation-
+  gated path. It still needs repo-local tracker tools before broad use.
 - High-throughput behavior is not modeled. It should be an automation/repair
   profile, not a trust label.
 - Review and feedback loops should escalate less often for mechanical failures
@@ -378,8 +379,8 @@ Top three intentional deviations:
 
 Top three refactor-needed deviations:
 
-1. Make Linear lifecycle ownership explicit and configurable without losing
-   idempotency or safety.
+1. Dogfood explicit Linear lifecycle ownership, especially `hybrid`, without
+   losing idempotency or safety.
 2. Separate automation/repair behavior from trust mode and add bounded
    high-throughput repair semantics.
 3. Recenter prompts/docs/review/merge paths on issues, with no-PR and multi-PR
@@ -387,13 +388,14 @@ Top three refactor-needed deviations:
 
 ## 13. Recommended Next PRs C-G
 
-PR C: Reduce orchestrator-owned workflow business logic where safe.
+PR C: Explicit lifecycle ownership.
 
-- Add `lifecycle.mode` or equivalent.
+- Add `lifecycle.mode` or equivalent and route Linear write decisions through it.
 - Preserve `orchestrator-owned` as the stable safe mode.
 - Add `hybrid` where practical.
 - Treat `agent-owned` as experimental and make strict validation fail unless
-  tracker tools, idempotency markers, allowed transitions, and fallback behavior
+  tracker tools, idempotency markers, allowed transitions, duplicate-comment
+  behavior, fallback behavior, and the durable-recovery maturity acknowledgement
   are configured.
 - Keep lifecycle ownership separate from `trust_mode` and automation policy.
 
