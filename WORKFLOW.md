@@ -169,8 +169,10 @@ runs automated reviewer turns before moving it to `Human Review`.
   external APIs, config, runners, GitHub, Linear, or orchestration.
 - Blocking findings use severity `P0`, `P1`, or `P2`; `P3` findings are
   suggestions and do not force another fix iteration.
-- Reviewers write machine-readable artifacts under
-  `.agent-os/reviews/<issue>/iteration-<n>/`.
+- Reviewers write exactly one machine-readable artifact to the workspace-local
+  path shown in the review prompt, under
+  `.agent-os/reviews/<issue>/iteration-<n>/`; AgentOS validates that JSON and
+  stores the canonical runtime copy.
 - If blocking findings remain, AgentOS runs a focused fixer turn on the same PR
   and repeats review up to `review.max_iterations`.
 - If review cannot converge, AgentOS moves to `Human Review` with

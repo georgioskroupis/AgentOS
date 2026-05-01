@@ -34,9 +34,11 @@ It keeps orchestration logic narrow:
   state, and moved to review without requiring a PR.
 - Implemented PRs run through the Ralph Wiggum loop while Linear remains
   `In Progress`: self, correctness, tests, architecture, and conditional
-  security reviewers write machine-readable findings; blocking findings trigger
-  focused fixer turns on the same PR; non-converging reviews escalate to
-  `Human Review` with `reviewStatus: human_required`.
+  security reviewers write machine-readable findings to a workspace-local review
+  artifact path; AgentOS validates and copies those artifacts into the runtime
+  review store. Blocking findings trigger focused fixer turns on the same PR;
+  non-converging or malformed reviews escalate to `Human Review` with
+  `reviewStatus: human_required`.
 - The merge shepherd watches `Merging`, validates GitHub PR checks, squash-merges
   safe PRs, respects Wiggum review state or an explicit Linear `Merging` human
   override, and moves Linear issues to `Done`.
