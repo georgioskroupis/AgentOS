@@ -108,6 +108,25 @@ export class CodexAppServerRunner implements AgentRunner {
               interruptAndTerminate();
               continue;
             }
+            const commandStop = codexCommandStop(message);
+            if (commandStop) {
+              const error = new Error(commandStop.reason);
+              input.onEvent({
+                type: "codex_command_stop",
+                issueId: input.issue.id,
+                issueIdentifier: input.issue.identifier,
+                message: commandStop.reason,
+                payload: {
+                  command: commandStop.command,
+                  exitCode: commandStop.exitCode
+                },
+                timestamp: new Date().toISOString()
+              });
+              if (turnFailure) turnFailure(error);
+              else bufferedTurnError = error;
+              interruptAndTerminate();
+              continue;
+            }
             input.onEvent({
               type: String(message.method ?? message.type ?? "codex_event"),
               issueId: input.issue.id,
@@ -322,6 +341,20 @@ function codexEventPolicyViolation(
   }
   if ((combined.includes("input") || combined.includes("user-input") || combined.includes("confirmation") || combined.includes("confirm")) && isRequest && policy.userInputPolicy === "deny") {
     return "codex_user_input_request_denied";
+  }
+  return null;
+}
+
+function codexCommandStop(message: Record<string, any>): { reason: string; command: string; exitCode: number | null } | null {
+  if (message.method !== "item/completed") return null;
+  const item = message.params?.item;
+  if (!item || item.type !== "commandExecution") return null;
+  const command = String(item.command ?? "");
+  const status = String(item.status ?? "");
+  const exitCode = typeof item.exitCode === "number" ? item.exitCode : null;
+  if (!["completed", "failed"].includes(status) || exitCode === 0) return null;
+  if (/\b(agent-create-pr\.sh|gh\s+pr\s+create)\b/.test(command)) {
+    return { reason: "agent_pr_creation_failed", command, exitCode };
   }
   return null;
 }

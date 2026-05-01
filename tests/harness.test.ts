@@ -11,6 +11,7 @@ describe("harness", () => {
     const first = await applyHarness({ repo, profile: "typescript" });
     expect(first.some((change) => change.path === "AGENTS.md" && change.action === "add")).toBe(true);
     expect(first.some((change) => change.path === "docs/quality/TYPESCRIPT.md" && change.action === "add")).toBe(true);
+    expect(first.some((change) => change.path === "scripts/agent-create-pr.sh" && change.action === "add")).toBe(true);
 
     const second = await applyHarness({ repo, profile: "typescript" });
     expect(second.every((change) => change.action === "exists")).toBe(true);

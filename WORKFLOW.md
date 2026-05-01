@@ -122,6 +122,29 @@ If a task is blocked, the agent should report:
 - smallest next human decision
 - current validation state
 
+## PR Creation Contract
+
+When code or docs changed and the issue expects a pull request, use the
+deterministic non-interactive path:
+
+```bash
+scripts/agent-create-pr.sh \
+  --title "<short title>" \
+  --body-file <path-to-pr-body.md> \
+  --base main \
+  --head "$(git branch --show-current)" \
+  --draft
+```
+
+Direct `gh pr create` is also acceptable only when it is fully non-interactive
+and includes explicit `--title`, `--body` or `--body-file`, `--base`, and
+`--head` arguments. Do not use GitHub app/MCP PR creation tools for AgentOS
+handoffs, because they may request elicitation. If deterministic PR creation
+fails, do not retry through MCP or ask for interactive approval; stop the turn
+with `agent_pr_creation_failed` and include the failed command/output in the
+handoff. Already-satisfied, investigation-only, or no-op issues may end without
+a PR.
+
 ## Implementation Audit
 
 Before changing code, the agent must compare the issue acceptance criteria with
@@ -174,7 +197,9 @@ Responsibilities:
 4. If partially satisfied, preserve the existing implementation and change only
    the missing delta.
 5. Run `npm run agent-check`.
-6. Open or update a GitHub PR when code or docs changed and validation passes.
+6. Open or update a GitHub PR when code or docs changed and validation passes,
+   using `scripts/agent-create-pr.sh` or an explicit non-interactive
+   `gh pr create` command. Do not use GitHub app/MCP PR creation tools.
 7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, `status`, and command entries for `npm run agent-check` including `name`, `exitCode`, `startedAt`, and `finishedAt`.
-8. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, risks, and PR link when a PR exists.
+8. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`.
 9. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.

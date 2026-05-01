@@ -17,4 +17,12 @@ description: Use when a ticket requests new behavior, a product capability, or a
 7. Update or add tests before or alongside the implementation.
 8. Implement the feature without broad refactors.
 9. Run targeted validation and `./scripts/agent-check.sh`.
-10. Report what changed, why, tests run, risks, and follow-up issues.
+10. When writing an AgentOS handoff, include a `Validation-JSON:` pointer to
+    machine-readable validation evidence with command names, exit codes, and
+    timestamps.
+11. When a code or docs change requires a pull request, use
+    `scripts/agent-create-pr.sh` or explicit non-interactive `gh pr create`
+    arguments. Do not use GitHub app/MCP PR creation tools; if deterministic PR
+    creation fails, stop with `agent_pr_creation_failed` instead of requesting
+    elicitation or approval.
+12. Report what changed, why, tests run, risks, and follow-up issues.

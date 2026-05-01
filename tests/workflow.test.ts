@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -138,5 +138,19 @@ describe("workflow", () => {
     expect(result.errors).toContain("github.merge_mode=shepherd requires PR/network capability");
     expect(result.errors).toContain("codex.approval_event_policy=allow requires trust_mode=danger");
     expect(result.errors).toContain("codex.user_input_policy=allow requires a trust mode with Codex user input capability");
+  });
+
+  it("guides agents to non-interactive PR creation instead of MCP elicitation", async () => {
+    for (const path of ["WORKFLOW.md", "templates/base-harness/WORKFLOW.md"]) {
+      const text = await readFile(path, "utf8");
+      expect(text).toContain("scripts/agent-create-pr.sh");
+      expect(text).toContain("--title");
+      expect(text).toContain("--body-file");
+      expect(text).toContain("--base");
+      expect(text).toContain("--head");
+      expect(text).toContain("Do not use GitHub app/MCP PR creation tools");
+      expect(text).toContain("agent_pr_creation_failed");
+      expect(text).toContain("prs[]");
+    }
   });
 });
