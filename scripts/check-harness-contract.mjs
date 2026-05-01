@@ -36,6 +36,9 @@ function checkWorkflow(path) {
   if (!text.includes("Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json")) {
     failures.push(`${path} missing validation JSON handoff instruction`);
   }
+  for (const snippet of ["runId", "repoHead", "git rev-parse HEAD"]) {
+    if (!text.includes(snippet)) failures.push(`${path} missing validation evidence field ${snippet}`);
+  }
   for (const snippet of ["review:", "max_iterations", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing Wiggum review config ${snippet}`);
   }

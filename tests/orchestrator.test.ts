@@ -68,7 +68,9 @@ describe("orchestrator", () => {
     });
 
     await orchestrator.runOnce(true);
-    expect(prompt).toBe("Do AG-1");
+    expect(prompt).toContain("Do AG-1");
+    expect(prompt).toContain("## AgentOS Run Context");
+    expect(prompt).toContain("Validation evidence path: .agent-os/validation/AG-1.json");
     const logs = await logger.tail(10);
     expect(logs.some((entry) => entry.type === "run_succeeded")).toBe(true);
   });
@@ -167,7 +169,10 @@ describe("orchestrator", () => {
     await orchestrator.runOnce(true);
     await orchestrator.runOnce(true);
 
-    expect(prompts).toEqual(["Attempt 0 for AG-1", "Attempt 1 for AG-1"]);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("Attempt 0 for AG-1");
+    expect(prompts[1]).toContain("Attempt 1 for AG-1");
+    expect(prompts[0]).toContain("## AgentOS Run Context");
   });
 
   it("continues successful turns up to max_turns until a handoff exists", async () => {
@@ -463,6 +468,8 @@ describe("orchestrator", () => {
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
         if (input.prompt.startsWith("Do ")) {
+          const runId = input.prompt.match(/Run ID: (run_[A-Za-z0-9._-]+)/)?.[1];
+          expect(runId).toBeTruthy();
           await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
           await writeFile(
             join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
@@ -473,6 +480,7 @@ describe("orchestrator", () => {
           await writeValidationEvidence(join(input.workspace.path, ".agent-os", "validation", "AG-1.json"), {
             schemaVersion: 1,
             issueIdentifier: "AG-1",
+            runId,
             status: "passed",
             commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
           });
