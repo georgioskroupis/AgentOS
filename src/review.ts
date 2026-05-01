@@ -3,7 +3,10 @@ import { join, relative } from "node:path";
 import { ensureDir, exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
 import type { Issue, ReviewFinding, ReviewStateReviewer, ReviewStatus, ServiceConfig } from "./types.js";
 
+export const REVIEW_ARTIFACT_SCHEMA_VERSION = 1;
+
 export interface ReviewerArtifact {
+  schemaVersion?: 1;
   reviewer: string;
   decision: ReviewStatus;
   findings: ReviewFinding[];
@@ -62,12 +65,13 @@ export function normalizeFinding(raw: unknown, reviewer: string, decision: Revie
 }
 
 export async function writeReviewArtifact(path: string, artifact: ReviewerArtifact): Promise<void> {
-  await writeTextEnsuringDir(path, `${JSON.stringify(artifact, null, 2)}\n`);
+  await writeTextEnsuringDir(path, `${JSON.stringify({ ...artifact, schemaVersion: REVIEW_ARTIFACT_SCHEMA_VERSION }, null, 2)}\n`);
 }
 
 export async function readReviewArtifact(path: string, reviewer: string): Promise<ReviewerArtifact> {
   if (!(await exists(path))) {
     return {
+      schemaVersion: REVIEW_ARTIFACT_SCHEMA_VERSION,
       reviewer,
       decision: "human_required",
       summary: "Reviewer did not produce the required machine-readable artifact.",
@@ -97,6 +101,7 @@ export async function readReviewArtifact(path: string, reviewer: string): Promis
     ? parsed.findings.map((finding) => normalizeFinding(finding, reviewer, decision)).filter((finding): finding is ReviewFinding => Boolean(finding))
     : [];
   return {
+    schemaVersion: REVIEW_ARTIFACT_SCHEMA_VERSION,
     reviewer: typeof parsed.reviewer === "string" ? parsed.reviewer : reviewer,
     decision,
     findings,
@@ -138,6 +143,7 @@ export function reviewerPrompt(context: ReviewContext): string {
     "Schema:",
     [
       "{",
+      '  "schemaVersion": 1,',
       '  "reviewer": "self|correctness|tests|architecture|security",',
       '  "decision": "approved|changes_requested|human_required",',
       '  "summary": "short summary",',

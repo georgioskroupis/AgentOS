@@ -38,8 +38,11 @@ describe("review artifacts", () => {
       ]
     });
 
-    expect(await readFile(path, "utf8")).toContain("correctness");
+    const raw = JSON.parse(await readFile(path, "utf8"));
+    expect(raw.schemaVersion).toBe(1);
+    expect(raw.reviewer).toBe("correctness");
     const artifact = await readReviewArtifact(path, "correctness");
+    expect(artifact.schemaVersion).toBe(1);
     expect(artifact.findings[0].findingHash).toHaveLength(16);
   });
 
