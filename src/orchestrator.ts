@@ -156,7 +156,7 @@ export class Orchestrator {
         const handoff = await readHandoff(workspace.path, issue.identifier);
         if (handoff) await this.runArtifacts.writeHandoff(runId, handoff);
         const stateFromHandoff = handoff ? issueStateFromHandoff(issue, handoff) : null;
-        const validation = handoff ? await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path }) : null;
+        const validation = handoff ? await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId }) : null;
         const persistedState = stateFromHandoff
           ? await stateStore.merge(issue.identifier, {
               ...stateFromHandoff,
@@ -207,7 +207,7 @@ export class Orchestrator {
     let result: AgentRunResult = { status: "failed", error: "no_turn_started" };
     for (let turnNumber = 1; turnNumber <= this.config.agent.maxTurns; turnNumber += 1) {
       await this.recordIssueState(issue, { phase: "prompt" });
-      const prompt = await this.implementationPrompt(issue, attempt, turnNumber);
+      const prompt = await this.implementationPrompt(issue, attempt, turnNumber, runId);
       await this.runArtifacts.writePrompt(runId, prompt);
       await this.recordIssueState(issue, { phase: "streaming-turn" });
       result = await this.runner.run({
@@ -244,8 +244,16 @@ export class Orchestrator {
     return result;
   }
 
-  private async implementationPrompt(issue: Issue, attempt: number | null, turnNumber: number): Promise<string> {
+  private async implementationPrompt(issue: Issue, attempt: number | null, turnNumber: number, runId: string): Promise<string> {
     const base = await renderPrompt(this.workflow.prompt_template, issue, attempt);
+    const runContext = [
+      "",
+      "## AgentOS Run Context",
+      "",
+      `Run ID: ${runId}`,
+      `Validation evidence path: .agent-os/validation/${issue.identifier}.json`,
+      "Include this run ID and the current `git rev-parse HEAD` value in the validation evidence JSON."
+    ].join("\n");
     const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
     const continuation = turnNumber > 1
       ? [
@@ -256,11 +264,12 @@ export class Orchestrator {
           "Continue the same issue in this workspace and write the required `.agent-os/handoff-<issue>.md` before finishing."
         ].join("\n")
       : "";
-    if (!state?.prUrl || issue.state.toLowerCase() !== "todo") return `${base}${continuation}`;
+    if (!state?.prUrl || issue.state.toLowerCase() !== "todo") return `${base}${runContext}${continuation}`;
 
     const feedback = await this.githubFeedbackSummary(state.prUrl).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
     return [
       base,
+      runContext,
       continuation,
       "",
       "## Existing PR Feedback Re-entry",

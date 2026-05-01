@@ -153,6 +153,6 @@ Responsibilities:
    the missing delta.
 5. Run `./scripts/agent-check.sh`.
 6. Open or update a GitHub PR when code or docs changed and validation passes.
-7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `status`, and command entries for `./scripts/agent-check.sh` including `name`, `exitCode`, `startedAt`, and `finishedAt`.
+7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, `status`, and command entries for `./scripts/agent-check.sh` including `name`, `exitCode`, `startedAt`, and `finishedAt`.
 8. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, risks, and PR link when a PR exists.
 9. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
