@@ -110,15 +110,19 @@ bin/agent-os status --repo <repo>
 bin/agent-os inspect VER-28 --repo <repo>
 ```
 
-### `runs list` and `runs inspect`
+### `runs list`, `runs inspect`, `runs simulate`, and `runs replay`
 
 `runs list` shows durable run summaries. `runs inspect <run-id>` prints run
 status, session/token metrics, and warns if recorded artifact hashes no longer
-match the persisted artifacts.
+match the persisted artifacts. `runs simulate` and `runs replay` are local-only:
+they read/write run artifacts without constructing Linear, GitHub, or Codex
+clients.
 
 ```bash
 bin/agent-os runs list --repo <repo>
 bin/agent-os runs inspect run_20260501_AG-1_ab12cd --repo <repo>
+bin/agent-os runs simulate --repo <repo> --issue SIM-1
+bin/agent-os runs replay run_20260501_SIM-1_ab12cd --repo <repo>
 ```
 
 ### `linear seed-roadmap`

@@ -2,7 +2,7 @@ import { appendFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatRunInspect, RunArtifactStore } from "../src/runs.js";
+import { formatRunInspect, formatRunReplay, RunArtifactStore } from "../src/runs.js";
 import type { Issue } from "../src/types.js";
 
 const issue: Issue = {
@@ -61,5 +61,20 @@ describe("run artifacts", () => {
 
     await appendFile(join(repo, ".agent-os", "runs", summary.runId, "prompt.md"), "\ntampered", "utf8");
     expect(formatRunInspect(await store.inspect(summary.runId))).toContain("artifact hash mismatch: prompt.md");
+  });
+
+  it("simulates and replays local-only fake runs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-sim-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.simulateRun({ issueIdentifier: "SIM-1" });
+
+    expect(summary).toMatchObject({
+      schemaVersion: 1,
+      issueIdentifier: "SIM-1",
+      status: "succeeded"
+    });
+    const replay = formatRunReplay(summary.runId, await store.replay(summary.runId));
+    expect(replay).toContain("simulation_started - local simulation");
+    expect(replay).toContain("run_succeeded - simulation complete");
   });
 });

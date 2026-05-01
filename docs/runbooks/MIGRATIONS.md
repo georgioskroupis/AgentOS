@@ -17,6 +17,8 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   with schema-versioned owners and are recovered when stale.
 - AgentOS lifecycle comments include `agentos:event` markers so Linear comments
   can be updated in place instead of duplicated after retries or restarts.
+- `runs simulate` and `runs replay` are artifact-only local modes and must not
+  instantiate real Linear, GitHub, or Codex clients.
 
 ## Validation
 
