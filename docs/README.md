@@ -13,3 +13,5 @@ Start with:
 - `docs/architecture/AGENT_OS.md`
 - `docs/runbooks/LINEAR_SETUP.md`
 - `docs/runbooks/ROLLOUT.md`
+- `docs/runbooks/DOGFOODING.md`
+- `docs/releases/v0.1.0-rc1.md`
