@@ -10,7 +10,16 @@ export interface ValidationEvidence {
   runId?: string;
   repoHead?: string;
   status: "passed" | "failed";
+  finalResult?: ValidationFinalResultEvidence;
   commands: ValidationCommandEvidence[];
+}
+
+export interface ValidationFinalResultEvidence {
+  status: "passed" | "failed";
+  command?: string;
+  exitCode?: number;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
 export interface ValidationCommandEvidence {
@@ -69,18 +78,28 @@ export async function verifyValidationEvidence(input: {
   if (evidence.schemaVersion !== 1) errors.push("schemaVersion must be 1");
   if (evidence.issueIdentifier !== input.issue.identifier) errors.push(`issueIdentifier mismatch: expected ${input.issue.identifier}`);
   if (input.runId && evidence.runId !== input.runId) errors.push(`runId mismatch: expected ${input.runId}`);
-  if (evidence.status !== "passed") errors.push("validation status is not passed");
   if (!Array.isArray(evidence.commands) || evidence.commands.length === 0) errors.push("commands must be a non-empty array");
 
+  const now = input.now ?? new Date();
+  const rawFinalStatus = evidence.finalResult?.status ?? evidence.status;
+  const finalStatus = rawFinalStatus === "passed" || rawFinalStatus === "failed" ? rawFinalStatus : "failed";
+  if (rawFinalStatus !== "passed" && rawFinalStatus !== "failed") errors.push("validation status must be passed or failed");
+  if (finalStatus !== "passed") errors.push("final validation status is not passed");
+  if (evidence.finalResult) validateFinalResult(evidence.finalResult, errors, now);
+
   const expectedCommands = input.expectedCommands ?? defaultExpectedCommands;
+  const acceptedCommands: ValidationCommandEvidence[] = [];
+  const failedHistoricalAttempts: ValidationCommandEvidence[] = [];
   for (const expected of expectedCommands) {
-    if (!evidence.commands?.some((command) => command.name === expected)) errors.push(`missing command evidence: ${expected}`);
+    const accepted = evidence.commands?.filter((command) => isAcceptedCommand(command, expected, now)) ?? [];
+    if (accepted.length === 0) errors.push(`missing passing command evidence: ${expected}`);
+    acceptedCommands.push(...accepted);
   }
 
-  const now = input.now ?? new Date();
   for (const command of evidence.commands ?? []) {
     if (typeof command.name !== "string" || !command.name.trim()) errors.push("command name is required");
-    if (command.exitCode !== 0) errors.push(`${command.name}: exitCode ${command.exitCode}`);
+    if (typeof command.exitCode !== "number" || !Number.isInteger(command.exitCode)) errors.push(`${command.name}: exitCode must be an integer`);
+    else if (command.exitCode !== 0) failedHistoricalAttempts.push(command);
     const started = parseTime(command.startedAt);
     const finished = parseTime(command.finishedAt);
     if (!started) errors.push(`${command.name}: invalid startedAt`);
@@ -97,6 +116,9 @@ export async function verifyValidationEvidence(input: {
     state: {
       status: errors.length === 0 ? "passed" : "failed",
       path,
+      finalStatus,
+      acceptedCommands,
+      failedHistoricalAttempts,
       errors: errors.length ? errors : undefined,
       checkedAt
     },
@@ -133,6 +155,37 @@ export function validationEvidencePath(handoff: string): string | null {
 function parseTime(value: string): Date | null {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isAcceptedCommand(command: ValidationCommandEvidence, expectedName: string, now: Date): boolean {
+  if (command.name !== expectedName) return false;
+  if (command.exitCode !== 0) return false;
+  const started = parseTime(command.startedAt);
+  const finished = parseTime(command.finishedAt);
+  if (!started || !finished) return false;
+  if (started > finished) return false;
+  if (finished.getTime() - now.getTime() > maxFutureSkewMs) return false;
+  if (now.getTime() - finished.getTime() > maxEvidenceAgeMs) return false;
+  return true;
+}
+
+function validateFinalResult(finalResult: ValidationFinalResultEvidence, errors: string[], now: Date): void {
+  if (finalResult.status !== "passed" && finalResult.status !== "failed") {
+    errors.push("finalResult.status must be passed or failed");
+  }
+  if (finalResult.exitCode != null && (!Number.isInteger(finalResult.exitCode) || finalResult.exitCode < 0)) {
+    errors.push("finalResult.exitCode must be a non-negative integer");
+  }
+  if (finalResult.status === "passed" && finalResult.exitCode != null && finalResult.exitCode !== 0) {
+    errors.push("finalResult exitCode must be 0 when finalResult.status is passed");
+  }
+  if (finalResult.startedAt && !parseTime(finalResult.startedAt)) errors.push("finalResult.startedAt is invalid");
+  if (finalResult.finishedAt && !parseTime(finalResult.finishedAt)) errors.push("finalResult.finishedAt is invalid");
+  const started = finalResult.startedAt ? parseTime(finalResult.startedAt) : null;
+  const finished = finalResult.finishedAt ? parseTime(finalResult.finishedAt) : null;
+  if (started && finished && started > finished) errors.push("finalResult.startedAt is after finalResult.finishedAt");
+  if (finished && finished.getTime() - now.getTime() > maxFutureSkewMs) errors.push("finalResult.finishedAt is in the future");
+  if (finished && now.getTime() - finished.getTime() > maxEvidenceAgeMs) errors.push("finalResult validation evidence is stale");
 }
 
 function gitHead(cwd: string): Promise<string | null> {

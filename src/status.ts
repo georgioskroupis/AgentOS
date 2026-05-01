@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { normalizeIssueState, pullRequestUrls } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
+import type { ValidationCommandState, ValidationState } from "./types.js";
 
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
   const logger = new JsonlLogger(resolve(repo));
@@ -35,6 +36,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state ? `Phase: ${state.phase ?? "unknown"}` : "Phase: unknown",
     prs.length ? `PRs:\n${prs.map((url) => `- ${url}`).join("\n")}` : "PRs: none recorded",
     state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
+    validationDetails(state?.validation),
     state?.lastError ? `Last error: ${state.lastError}` : null,
     state?.nextRetryAt ? `Next retry: ${state.nextRetryAt}` : null,
     reviewArtifacts.length ? `Review artifacts:\n${reviewArtifacts.map((path) => `- ${path}`).join("\n")}` : "Review artifacts: none",
@@ -63,4 +65,21 @@ async function listReviewArtifacts(root: string): Promise<string[]> {
 
 function safeFileName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+function validationDetails(validation: ValidationState | undefined): string {
+  if (!validation) return "Validation: none recorded";
+  const lines = [
+    `Validation: ${validation.status}${validation.finalStatus ? ` (final: ${validation.finalStatus})` : ""}`,
+    validation.acceptedCommands?.length ? `Accepted validation commands:\n${commandLines(validation.acceptedCommands)}` : null,
+    validation.failedHistoricalAttempts?.length ? `Failed historical attempts:\n${commandLines(validation.failedHistoricalAttempts)}` : null,
+    validation.errors?.length ? `Validation errors:\n${validation.errors.map((error) => `- ${error}`).join("\n")}` : null
+  ].filter((line): line is string => line !== null);
+  return lines.join("\n");
+}
+
+function commandLines(commands: ValidationCommandState[]): string {
+  return commands
+    .map((command) => `- ${command.name}: exitCode ${command.exitCode}, finished ${command.finishedAt}`)
+    .join("\n");
 }

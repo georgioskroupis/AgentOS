@@ -213,6 +213,16 @@ export interface ValidationState {
   path?: string;
   errors?: string[];
   checkedAt: string;
+  finalStatus?: "passed" | "failed";
+  acceptedCommands?: ValidationCommandState[];
+  failedHistoricalAttempts?: ValidationCommandState[];
+}
+
+export interface ValidationCommandState {
+  name: string;
+  exitCode: number;
+  startedAt: string;
+  finishedAt: string;
 }
 
 export type RunPhase =

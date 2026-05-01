@@ -200,6 +200,6 @@ Responsibilities:
 6. Open or update a GitHub PR when code or docs changed and validation passes,
    using `scripts/agent-create-pr.sh` or an explicit non-interactive
    `gh pr create` command. Do not use GitHub app/MCP PR creation tools.
-7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, `status`, and command entries for `npm run agent-check` including `name`, `exitCode`, `startedAt`, and `finishedAt`.
+7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, final authoritative `status`, and command entries for every `npm run agent-check` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
 8. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`.
 9. Do not move or comment on the Linear issue directly; the AgentOS orchestrator owns Linear lifecycle updates.
