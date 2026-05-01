@@ -41,6 +41,8 @@ For each issue, record:
 - Artifact hashes stay valid; `runs inspect` reports no unexpected mismatch.
 - Workspace locks do not block normal reuse or cleanup.
 - Strict trust mode does not block legitimate small work.
+- Lifecycle smoke checks run in default `lifecycle.mode: orchestrator-owned`
+  mode unless a test explicitly says otherwise.
 - Runtime `.agent-os/` data remains ignored and uncommitted.
 - The agent does not create a PR for already-satisfied work.
 - PR-producing work uses `scripts/agent-create-pr.sh` or explicit
