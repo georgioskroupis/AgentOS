@@ -11,6 +11,7 @@ const instantFixtureCommand = `node ${JSON.stringify(fixture)} --instant`;
 const strictSandboxFixtureCommand = `node ${JSON.stringify(fixture)} --strict-sandbox`;
 const approvalRequestFixtureCommand = `node ${JSON.stringify(fixture)} --approval-request`;
 const inputRequestFixtureCommand = `node ${JSON.stringify(fixture)} --input-request`;
+const elicitationRequestFixtureCommand = `node ${JSON.stringify(fixture)} --elicitation-request`;
 
 const issue: Issue = {
   id: "issue-1",
@@ -226,6 +227,41 @@ describe("CodexAppServerRunner", () => {
         onEvent() {}
       })
     ).resolves.toMatchObject({ status: "failed", error: "codex_user_input_request_denied" });
+  });
+
+  it("denies MCP elicitation request events by default", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-elicitation-policy-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, elicitationRequestFixtureCommand);
+    const events: Array<{ type: string; message?: string; payload?: unknown }> = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Do policy work",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push({ type: event.type, message: event.message, payload: event.payload });
+        }
+      })
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: "codex_elicitation_request_denied",
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "codex_event_policy_denied",
+        message: "codex_elicitation_request_denied",
+        payload: expect.objectContaining({
+          method: "mcpServer/elicitation/request",
+          policy: "user_input_denied"
+        })
+      })
+    );
   });
 });
 

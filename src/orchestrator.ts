@@ -150,7 +150,7 @@ export class Orchestrator {
         payload: result
       });
       if (result.status !== "succeeded") {
-        await this.handleFailedRun(issue, workspace, attempt, result.error ?? result.status);
+        await this.handleFailedRun(issue, workspace, attempt, result.error ?? result.status, runId);
       } else {
         this.completedMarkers.set(issue.id, completionMarker(issue));
         const handoff = await readHandoff(workspace.path, issue.identifier);
@@ -186,7 +186,7 @@ export class Orchestrator {
       }
       await this.runArtifacts.completeRun(runId, result);
     } catch (error) {
-      await this.handleFailedRun(issue, workspace, attempt, error instanceof Error ? error.message : String(error));
+      await this.handleFailedRun(issue, workspace, attempt, error instanceof Error ? error.message : String(error), runId);
       await this.writeRunEvent(runId, {
         type: "run_failed",
         issueId: issue.id,
@@ -775,7 +775,24 @@ export class Orchestrator {
     return runningInState < stateLimit;
   }
 
-  private async handleFailedRun(issue: Issue, workspace: Workspace, previousAttempt: number | null, error: string): Promise<void> {
+  private async handleFailedRun(issue: Issue, workspace: Workspace, previousAttempt: number | null, error: string, runId: string): Promise<void> {
+    if (isHumanInputStop(error)) {
+      this.completedMarkers.set(issue.id, completionMarker(issue));
+      await this.writeRunEvent(runId, {
+        type: "run_needs_human_input",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: error,
+        payload: { errorCategory: "human-input" }
+      });
+      await this.recordIssueState(issue, {
+        phase: "needs-input",
+        lastError: error,
+        errorCategory: "human-input"
+      });
+      await this.markLinearNeedsInput(issue, workspace, previousAttempt, error);
+      return;
+    }
     const nextAttempt = previousAttempt == null ? 1 : previousAttempt + 1;
     if (nextAttempt > this.config.agent.maxRetryAttempts) {
       await this.recordIssueState(issue, {
@@ -882,6 +899,25 @@ export class Orchestrator {
         "Please adjust the issue, repo, or workflow instructions before returning it to an active state."
       ].join("\n"),
       "run_failed"
+    );
+    await this.moveIssue(issue, this.config.tracker.needsInputState);
+  }
+
+  private async markLinearNeedsInput(issue: Issue, workspace: Workspace, attempt: number | null, error: string): Promise<void> {
+    await this.commentIssue(
+      issue,
+      [
+        "### AgentOS needs human input",
+        "",
+        "Codex requested elicitation, approval, user input, or interactive confirmation. Current policy denies those requests by default, so AgentOS stopped the run instead of waiting indefinitely.",
+        "",
+        `- Attempt: ${displayAttempt(attempt)}`,
+        `- Workspace: \`${workspace.path}\``,
+        `- Error: ${error}`,
+        "",
+        "Please handle the requested input manually before returning this issue to an active state."
+      ].join("\n"),
+      "run_needs_input"
     );
     await this.moveIssue(issue, this.config.tracker.needsInputState);
   }
@@ -1066,6 +1102,7 @@ function reviewCheckFindings(status: Awaited<ReturnType<GitHubClient["getPullReq
 
 function categorizeRunError(message: string): RunErrorCategory {
   const normalized = message.toLowerCase();
+  if (isHumanInputStop(normalized)) return "human-input";
   if (normalized.includes("timeout")) return "timeout";
   if (normalized.includes("stall")) return "stall";
   if (normalized.includes("cancel")) return "canceled";
@@ -1076,6 +1113,15 @@ function categorizeRunError(message: string): RunErrorCategory {
   if (normalized.includes("fix")) return "fix";
   if (normalized.includes("validation") || normalized.includes("test") || normalized.includes("check")) return "validation";
   return "streaming-turn";
+}
+
+function isHumanInputStop(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("codex_approval_request_denied") ||
+    normalized.includes("codex_user_input_request_denied") ||
+    normalized.includes("codex_elicitation_request_denied")
+  );
 }
 
 async function readHandoff(workspacePath: string, identifier: string): Promise<string | null> {
