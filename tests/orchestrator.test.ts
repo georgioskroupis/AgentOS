@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
 import type { AgentRunResult, AgentRunner, Issue, IssueTracker } from "../src/types.js";
 import { JsonlLogger } from "../src/logging.js";
+import { RunArtifactStore } from "../src/runs.js";
 import { writeReviewArtifact } from "../src/review.js";
 import { writeValidationEvidence } from "../src/validation.js";
 
@@ -173,6 +174,74 @@ describe("orchestrator", () => {
     expect(prompts[0]).toContain("Attempt 0 for AG-1");
     expect(prompts[1]).toContain("Attempt 1 for AG-1");
     expect(prompts[0]).toContain("## AgentOS Run Context");
+  });
+
+  it("stops denied MCP elicitation requests for human input without retrying", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-elicitation-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nagent:\n  max_turns: 1\n  max_retry_attempts: 3\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    let currentIssue = { ...readyIssue };
+    const moves: string[] = [];
+    const upserts: Array<{ issue: string; body: string; key: string }> = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(activeStates) {
+        return activeStates.includes(currentIssue.state) ? [currentIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[currentIssue.id, currentIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+        currentIssue = { ...currentIssue, state };
+      },
+      async upsertComment(issue, body, key) {
+        upserts.push({ issue, body, key });
+      }
+    };
+    let runCount = 0;
+    const runner: AgentRunner = {
+      async run(): Promise<AgentRunResult> {
+        runCount += 1;
+        return { status: "failed", error: "codex_elicitation_request_denied", threadId: "thread-1", turnId: "turn-1" };
+      }
+    };
+    const logger = new JsonlLogger(repo);
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+    await orchestrator.runOnce(true);
+
+    expect(runCount).toBe(1);
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect(upserts.map((comment) => comment.key)).toContain("run_needs_input:AG-1");
+    expect(upserts.find((comment) => comment.key === "run_needs_input:AG-1")?.body).toContain("Codex requested elicitation");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state).toMatchObject({
+      phase: "needs-input",
+      lastError: "codex_elicitation_request_denied",
+      errorCategory: "human-input"
+    });
+    expect(state.nextRetryAt).toBeUndefined();
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary).toMatchObject({
+      status: "failed",
+      error: "codex_elicitation_request_denied"
+    });
+    const events = await new RunArtifactStore(repo).replay(summary.runId);
+    expect(events.some((event) => event.type === "run_needs_human_input" && event.message === "codex_elicitation_request_denied")).toBe(true);
+    await expect(access(join(repo, ".agent-os", "workspaces", ".agent-os", "locks", "workspaces", "AG-1.lock"))).rejects.toThrow();
   });
 
   it("continues successful turns up to max_turns until a handoff exists", async () => {

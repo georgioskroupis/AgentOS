@@ -37,6 +37,19 @@ rl.on("line", (line) => {
       write({ method: "turn/input_required", params: { turnId: "turn-1", type: "user_input" } });
       return;
     }
+    if (process.argv.includes("--elicitation-request")) {
+      write({
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "github",
+          mode: "form",
+          type: "mcp_elicitation"
+        }
+      });
+      return;
+    }
     write({
       method: "thread/tokenUsage/updated",
       params: {

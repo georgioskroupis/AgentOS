@@ -220,6 +220,7 @@ export type RunPhase =
   | "prompt"
   | "app-server-init"
   | "streaming-turn"
+  | "needs-input"
   | "validation"
   | "review"
   | "fix"
@@ -234,6 +235,7 @@ export type RunErrorCategory =
   | "timeout"
   | "stall"
   | "canceled"
+  | "human-input"
   | "validation"
   | "review"
   | "fix";

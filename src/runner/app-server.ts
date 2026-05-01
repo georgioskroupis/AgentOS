@@ -83,6 +83,8 @@ export class CodexAppServerRunner implements AgentRunner {
             if (message.error) pendingRequest.reject(new Error(JSON.stringify(message.error)));
             else pendingRequest.resolve(message.result);
           } else {
+            threadId = message.params?.threadId ?? message.params?.thread?.id ?? message.params?.thread_id ?? message.thread_id ?? threadId;
+            turnId = message.params?.turnId ?? message.params?.turn?.id ?? message.params?.turn_id ?? message.turn_id ?? turnId;
             const violation = codexEventPolicyViolation(message, {
               approvalEventPolicy: input.config.codex.approvalEventPolicy,
               userInputPolicy: input.config.codex.userInputPolicy
@@ -94,12 +96,16 @@ export class CodexAppServerRunner implements AgentRunner {
                 issueId: input.issue.id,
                 issueIdentifier: input.issue.identifier,
                 message: violation,
-                payload: { method: message.method ?? message.type },
+                payload: {
+                  method: message.method ?? message.type,
+                  paramType: message.params?.type ?? message.params?.event,
+                  policy: violation.includes("approval") ? "approval_event_denied" : "user_input_denied"
+                },
                 timestamp: new Date().toISOString()
               });
               if (turnFailure) turnFailure(error);
               else bufferedTurnError = error;
-              child.kill("SIGTERM");
+              interruptAndTerminate();
               continue;
             }
             input.onEvent({
@@ -119,8 +125,6 @@ export class CodexAppServerRunner implements AgentRunner {
             if (rateLimit) {
               rateLimits = [...rateLimits, rateLimit].slice(-10);
             }
-            threadId = message.params?.threadId ?? message.params?.thread?.id ?? message.params?.thread_id ?? message.thread_id ?? threadId;
-            turnId = message.params?.turnId ?? message.params?.turn?.id ?? message.params?.turn_id ?? message.turn_id ?? turnId;
             if (message.method === "turn/completed" && (!turnId || message.params?.turn?.id === turnId)) {
               if (turnCompletion) turnCompletion(message);
               else bufferedTurnCompletion = message;
@@ -194,12 +198,7 @@ export class CodexAppServerRunner implements AgentRunner {
             bufferedTurnCompletion = undefined;
           }
         },
-        cancel() {
-          if (threadId && turnId) {
-            void send("turn/interrupt", { threadId, turnId }).catch(() => undefined);
-          }
-          child.kill("SIGTERM");
-        }
+        cancel: interruptAndTerminate
       });
       clearInterval(stallTimer);
       clearTimeout(turnTimer);
@@ -243,6 +242,13 @@ export class CodexAppServerRunner implements AgentRunner {
           timestamp: new Date().toISOString()
         });
       }
+    }
+
+    function interruptAndTerminate() {
+      if (threadId && turnId) {
+        void send("turn/interrupt", { threadId, turnId }).catch(() => undefined);
+      }
+      child.kill("SIGTERM");
     }
   }
 }
@@ -311,7 +317,10 @@ function codexEventPolicyViolation(
   if (combined.includes("approval") && isRequest && policy.approvalEventPolicy === "deny") {
     return "codex_approval_request_denied";
   }
-  if ((combined.includes("input") || combined.includes("user-input")) && isRequest && policy.userInputPolicy === "deny") {
+  if (combined.includes("elicitation") && isRequest && policy.userInputPolicy === "deny") {
+    return "codex_elicitation_request_denied";
+  }
+  if ((combined.includes("input") || combined.includes("user-input") || combined.includes("confirmation") || combined.includes("confirm")) && isRequest && policy.userInputPolicy === "deny") {
     return "codex_user_input_request_denied";
   }
   return null;
