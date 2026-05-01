@@ -37,6 +37,10 @@ describe("workflow", () => {
     expect(config.tracker.reviewState).toBe("Human Review");
     expect(config.tracker.mergeState).toBeNull();
     expect(config.trustMode).toBe("ci-locked");
+    expect(config.automation).toMatchObject({
+      profile: "conservative",
+      repairPolicy: "conservative"
+    });
     expect(config.lifecycle).toMatchObject({
       mode: "orchestrator-owned",
       allowedTrackerTools: [],
@@ -147,6 +151,87 @@ describe("workflow", () => {
     expect(result.errors).toContain("github.merge_mode=shepherd requires PR/network capability");
     expect(result.errors).toContain("codex.approval_event_policy=allow requires trust_mode=danger");
     expect(result.errors).toContain("codex.user_input_policy=allow requires a trust mode with Codex user input capability");
+  });
+
+  it("parses automation behavior as a separate axis from trust and lifecycle", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-automation-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "trust_mode: ci-locked",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "codex:",
+        "  command: npx -y @openai/codex@0.125.0 app-server",
+        "  approval_event_policy: deny",
+        "  user_input_policy: deny",
+        "github:",
+        "  merge_mode: manual",
+        "  allow_human_merge_override: false",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const workflow = await loadWorkflow(workflowPath);
+    const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+    expect(config.automation).toEqual({ profile: "high-throughput", repairPolicy: "mechanical-first" });
+    expect(config.trustMode).toBe("ci-locked");
+    expect(config.lifecycle.mode).toBe("orchestrator-owned");
+    expect(config.codex.approvalEventPolicy).toBe("deny");
+    expect(config.codex.userInputPolicy).toBe("deny");
+
+    expect(validateWorkflowDefinition(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true)).toMatchObject({
+      ok: true,
+      errors: []
+    });
+  });
+
+  it("rejects invalid automation configs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-automation-invalid-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "automation:",
+        "  profile: instant",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain("unsupported_automation_profile: instant");
+
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "automation:",
+        "  repair_policy: unbounded",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
+      "unsupported_automation_repair_policy: unbounded"
+    );
   });
 
   it("strictly gates experimental agent-owned lifecycle mode", async () => {
@@ -263,5 +348,12 @@ describe("workflow", () => {
       expect(text).toContain("agent_pr_creation_failed");
       expect(text).toContain("prs[]");
     }
+  });
+
+  it("keeps public template automation defaults conservative", async () => {
+    const text = await readFile("templates/base-harness/WORKFLOW.md", "utf8");
+    expect(text).toContain("automation:");
+    expect(text).toContain("profile: conservative");
+    expect(text).toContain("repair_policy: conservative");
   });
 });

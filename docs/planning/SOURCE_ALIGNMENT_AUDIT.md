@@ -249,7 +249,7 @@ these areas:
 - Some missing capability failures escalate immediately to humans instead of
   opening a small capability-building issue.
 
-PR D should define high-trust automation as an automation/repair behavior
+PR D should define high-throughput automation as an automation/repair behavior
 profile, not as a `trust_mode`. PR F should implement or tighten bounded repair
 and feedback behavior separately.
 
@@ -321,12 +321,13 @@ Already configurable:
   convergence requirements.
 - GitHub merge mode, merge method, check requirement, branch deletion, done
   state, and human merge override.
+- Automation/repair policy: `automation.profile` and
+  `automation.repair_policy` model conservative and high-throughput behavior as
+  a separate axis from `trust_mode`.
 - Strict versus structure-only validation.
 
 Should become configurable:
 
-- Automation/repair policy: conservative, local-trusted repair, and
-  high-throughput bounded repair loops. This must be separate from `trust_mode`.
 - PR review target selection when an issue has multiple PRs.
 - Handoff behavior for investigation-only and planning-only issues.
 - What counts as mechanical failure versus judgment-heavy failure.
@@ -339,8 +340,8 @@ Refactor-needed deviations:
   more dogfood before they should be considered mature.
 - Agent-owned lifecycle mode exists only as an experimental strict-validation-
   gated path. It still needs repo-local tracker tools before broad use.
-- High-throughput behavior is not modeled. It should be an automation/repair
-  profile, not a trust label.
+- High-throughput behavior is modeled as automation policy, but additional
+  runtime repair-loop behavior remains PR F work.
 - Review and feedback loops should escalate less often for mechanical failures
   when policy allows bounded repair.
 - PR-centric wording should be reduced so no-PR and multi-PR issue paths are as
@@ -381,8 +382,8 @@ Top three refactor-needed deviations:
 
 1. Dogfood explicit Linear lifecycle ownership, especially `hybrid`, without
    losing idempotency or safety.
-2. Separate automation/repair behavior from trust mode and add bounded
-   high-throughput repair semantics.
+2. Keep automation/repair behavior separate from trust mode and add bounded
+   high-throughput repair semantics in PR F.
 3. Recenter prompts/docs/review/merge paths on issues, with no-PR and multi-PR
    paths treated as first-class.
 
@@ -399,14 +400,15 @@ PR C: Explicit lifecycle ownership.
   are configured.
 - Keep lifecycle ownership separate from `trust_mode` and automation policy.
 
-PR D: Add high-trust automation profile without weakening public defaults.
+PR D: High-throughput automation profile definition.
 
 - Do not add `high-throughput` as a `trust_mode`.
 - Keep `trust_mode` for sandbox, network, and tool permissions only.
-- Add `automation.profile` or `automation.repair_policy` for repair-loop
+- Add `automation.profile` and `automation.repair_policy` for repair-loop
   behavior.
 - Define high-throughput as bounded repair/feedback behavior that prefers cheap
-  mechanical correction when policy allows it.
+  mechanical correction when policy allows it, without activating new runtime
+  loops until PR F.
 
 PR E: Recenter the system on issues, not PRs.
 

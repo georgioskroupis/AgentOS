@@ -6,6 +6,8 @@ export type GitHubMergeMode = "manual" | "shepherd" | "auto";
 export type CodexEventPolicy = "deny" | "allow";
 export type LifecycleMode = "orchestrator-owned" | "hybrid" | "agent-owned";
 export type LifecycleDuplicateCommentBehavior = "upsert" | "skip" | "error";
+export type AutomationProfile = "conservative" | "high-throughput";
+export type AutomationRepairPolicy = "conservative" | "mechanical-first";
 
 export interface HarnessChange {
   action: "add" | "overwrite" | "exists" | "missing" | "invalid";
@@ -66,6 +68,10 @@ export interface WorkflowDefinition {
 
 export interface ServiceConfig {
   trustMode: TrustMode;
+  automation: {
+    profile: AutomationProfile;
+    repairPolicy: AutomationRepairPolicy;
+  };
   lifecycle: {
     mode: LifecycleMode;
     allowedTrackerTools: string[];

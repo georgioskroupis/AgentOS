@@ -1,5 +1,8 @@
 ---
 trust_mode: local-trusted
+automation:
+  profile: high-throughput
+  repair_policy: mechanical-first
 lifecycle:
   mode: orchestrator-owned
 tracker:
@@ -120,6 +123,28 @@ policy:
   configured tracker tools, idempotency marker format, allowed transitions,
   duplicate-comment behavior, tracker-write fallback behavior, and an explicit
   acknowledgement that durable retry/startup reconstruction is not yet complete.
+
+## Automation And Repair Policy
+
+Automation behavior is a separate axis from trust and lifecycle ownership:
+
+- `trust_mode` controls sandbox, network, PR/tool, merge, and user-input
+  capability.
+- `lifecycle.mode` controls who owns tracker state moves and lifecycle comments.
+- `automation.profile` and `automation.repair_policy` describe how aggressively
+  AgentOS should prefer deterministic feedback and repair loops when the
+  configured trust mode already permits the needed tools.
+
+AgentOS dogfood uses `automation.profile: high-throughput` with
+`automation.repair_policy: mechanical-first` to declare the desired
+Harness-aligned behavior: prefer standard repo-local tools, CI/log inspection,
+review-feedback handling, and bounded mechanical fix loops before human
+escalation when the failure is tool-addressable. This profile does not grant
+network, tracker, merge, or approval capability by itself; generic MCP
+elicitation and user-input requests remain denied by `codex` policy.
+
+PR F owns runtime changes that make additional repair loops active. Until then,
+this policy is an explicit, testable declaration of operating intent.
 
 ## Target Repository Lifecycle
 
