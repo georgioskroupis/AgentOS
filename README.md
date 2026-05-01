@@ -159,6 +159,8 @@ Implemented PRs now pass through automated reviewer turns for self-review,
 correctness, tests, architecture, and conditional security review. Blocking
 findings trigger focused fixer turns on the same PR until reviewers approve or
 AgentOS escalates to Human Review with a concrete reason.
+Those turns write review JSON to workspace-local `.agent-os/reviews/...` paths
+that AgentOS validates and copies into canonical runtime artifacts.
 Public harness defaults leave `github.merge_mode: manual`; AgentOS dogfood opts
 into `shepherd`, where moving an approved issue to `Merging` lets AgentOS read
 the stored PR metadata, require green GitHub checks, squash-merge, delete the
