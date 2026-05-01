@@ -15,3 +15,4 @@ Key runbooks:
 - `ROLLOUT.md`
 - `GITHUB_CI.md`
 - `MIGRATIONS.md`
+- `DOGFOODING.md`
