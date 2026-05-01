@@ -37,11 +37,16 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
 ## Workflow Defaults
 
 - New harness installs should use `trust_mode: ci-locked`,
+  `automation.profile: conservative`, `automation.repair_policy: conservative`,
   `github.merge_mode: manual`, and `github.allow_human_merge_override: false`.
 - Codex App Server approval and user-input event policies should default to
   `deny`.
 - Existing dogfood workflows may opt into `trust_mode: local-trusted` and
   `github.merge_mode: shepherd` when they intentionally need PR/network access.
+  Dogfood workflows may separately opt into
+  `automation.profile: high-throughput` and
+  `automation.repair_policy: mechanical-first` to declare bounded repair-loop
+  intent without granting additional trust capability.
 - Workflows should declare `lifecycle.mode`. Missing values resolve to
   `orchestrator-owned` for backward compatibility. `agent-owned` is
   experimental and strict-validation-gated until tracker tools, idempotency,

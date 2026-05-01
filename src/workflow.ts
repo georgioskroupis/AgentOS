@@ -1,6 +1,7 @@
 import { dirname, resolve } from "node:path";
 import YAML from "yaml";
 import { Liquid } from "liquidjs";
+import { parseAutomationConfig, validateAutomationConfig } from "./automation.js";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, readText } from "./fs-utils.js";
 import { parseLifecycleConfig, validateLifecycleConfig } from "./lifecycle.js";
@@ -46,6 +47,7 @@ export function parseWorkflowText(text: string): { config: Record<string, unknow
 
 export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.ProcessEnv = process.env): ServiceConfig {
   const cfg = workflow.config;
+  const automation = objectAt(cfg, "automation");
   const lifecycle = objectAt(cfg, "lifecycle");
   const tracker = objectAt(cfg, "tracker");
   const polling = objectAt(cfg, "polling");
@@ -68,6 +70,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
 
   return {
     trustMode,
+    automation: parseAutomationConfig(automation),
     lifecycle: parseLifecycleConfig(lifecycle),
     tracker: {
       kind: "linear",
@@ -142,6 +145,10 @@ export function validateDispatchConfig(config: ServiceConfig): void {
   if (lifecycle.errors.length > 0) {
     throw new Error(lifecycle.errors.join("; "));
   }
+  const automation = validateAutomationConfig(config.automation);
+  if (automation.errors.length > 0) {
+    throw new Error(automation.errors.join("; "));
+  }
 }
 
 export interface WorkflowValidationResult {
@@ -179,6 +186,9 @@ export function validateWorkflowDefinition(workflow: WorkflowDefinition, env: No
   const lifecycle = validateLifecycleConfig(config.lifecycle, strict);
   errors.push(...lifecycle.errors);
   warnings.push(...lifecycle.warnings);
+  const automation = validateAutomationConfig(config.automation);
+  errors.push(...automation.errors);
+  warnings.push(...automation.warnings);
 
   if (strict) {
     if (!config.tracker.apiKey) errors.push("tracker.api_key did not resolve from the environment");

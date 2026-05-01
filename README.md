@@ -160,6 +160,14 @@ those comments in place when Linear supports it. `hybrid` and experimental
 `agent-owned` modes are available as a source-alignment path, but strict
 validation gates `agent-owned` until tracker tools, idempotency, transition,
 fallback, and maturity requirements are declared.
+Automation and repair behavior is a separate `automation` axis, not a trust
+mode. Public harnesses default to `automation.profile: conservative` and
+`automation.repair_policy: conservative`; AgentOS dogfood may opt into
+`high-throughput`/`mechanical-first` to declare a Harness-aligned preference for
+deterministic tools, CI/log reading, review-feedback handling, and bounded
+mechanical repair loops where the existing trust mode permits them. These
+settings do not grant network, merge, tracker, approval, or user-input
+capability by themselves.
 Implemented PRs now pass through automated reviewer turns for self-review,
 correctness, tests, architecture, and conditional security review. Blocking
 findings trigger focused fixer turns on the same PR until reviewers approve or

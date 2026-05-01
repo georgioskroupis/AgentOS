@@ -6,8 +6,8 @@ network, repository writes, PR access, and user input.
 
 Lifecycle ownership is a separate axis under `lifecycle.mode`. Do not use
 `trust_mode` to encode who owns tracker comments or Linear state transitions.
-That belongs to lifecycle ownership. Future repair-loop behavior belongs to an
-automation policy axis, not to `trust_mode`.
+That belongs to lifecycle ownership. Repair-loop behavior is a third axis under
+`automation`, not a `trust_mode`.
 
 ## Capability Matrix
 
@@ -73,3 +73,22 @@ fails the run instead of waiting for interactive input.
 | `orchestrator-owned` | on | bookkeeping and substantive handoff | Current safe default and intentional AgentOS deviation from Symphony's usual tracker-write boundary. |
 | `hybrid` | on | bookkeeping only | Agent artifacts/tools own substantive handoff/update content and PR metadata. |
 | `agent-owned` | off | off | Experimental. Strict validation requires tracker tools, idempotency marker format, allowed transitions, duplicate-comment behavior, fallback behavior, and an acknowledgement that durable retry/startup reconstruction is not yet complete. |
+
+## Automation And Repair Behavior
+
+Automation policy is not a permission model. It describes how AgentOS should
+prefer feedback and repair loops after trust and lifecycle checks have already
+allowed the required tools.
+
+| Setting | Meaning |
+| --- | --- |
+| `automation.profile: conservative` | Public-safe default. Prefer explicit handoff over extra repair loops. |
+| `automation.profile: high-throughput` | Opt-in internal/dogfood posture aligned with Harness Engineering's cheap-correction loop. Prefer deterministic tools, CI/log reading, review-feedback handling, and bounded mechanical repair where configured. |
+| `automation.repair_policy: conservative` | Do not add additional repair-loop behavior beyond existing review/fixer handling. |
+| `automation.repair_policy: mechanical-first` | Prefer bounded mechanical repair before human escalation when the issue is tool-addressable and the trust mode permits the required tools. |
+
+`high-throughput` does not grant network, GitHub, Linear, merge, approval, or
+user-input capability. Generic MCP elicitation remains denied unless the
+separate Codex event policy and trust mode explicitly allow it. Runtime
+expansion of repair loops belongs to PR F; PR D only makes the policy axis
+explicit and mechanically parsed.

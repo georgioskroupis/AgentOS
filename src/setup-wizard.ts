@@ -226,6 +226,7 @@ function updateWorkflowText(text: string, profile: ProjectProfile, project: Line
 
 function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectProfile, project: LinearProject | undefined): Record<string, unknown> {
   const tracker = objectRecord(config.tracker);
+  const automation = objectRecord(config.automation);
   const lifecycle = objectRecord(config.lifecycle);
   const hooks = objectRecord(config.hooks);
   const agent = objectRecord(config.agent);
@@ -235,6 +236,11 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
   return {
     ...config,
     trust_mode: typeof config.trust_mode === "string" ? config.trust_mode : "ci-locked",
+    automation: {
+      ...automation,
+      profile: automation.profile === "high-throughput" ? "high-throughput" : "conservative",
+      repair_policy: automation.repair_policy === "mechanical-first" ? "mechanical-first" : "conservative"
+    },
     lifecycle: {
       ...lifecycle,
       mode: typeof lifecycle.mode === "string" ? lifecycle.mode : "orchestrator-owned"

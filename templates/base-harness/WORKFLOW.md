@@ -1,5 +1,8 @@
 ---
 trust_mode: ci-locked
+automation:
+  profile: conservative
+  repair_policy: conservative
 lifecycle:
   mode: orchestrator-owned
 tracker:
@@ -93,6 +96,23 @@ Other modes are separate from `trust_mode` and automation repair policy:
   tracker tools, idempotency marker format, allowed transitions,
   duplicate-comment behavior, fallback behavior, and an acknowledgement that
   durable retry/startup reconstruction is not yet complete.
+
+## Automation And Repair Policy
+
+Automation behavior is separate from trust and lifecycle ownership:
+
+- `trust_mode` controls sandbox, network, PR/tool, merge, and user-input
+  capability.
+- `lifecycle.mode` controls tracker state moves and lifecycle comments.
+- `automation.profile` and `automation.repair_policy` describe feedback-loop
+  and repair-loop behavior only.
+
+Public harnesses default to `automation.profile: conservative` and
+`automation.repair_policy: conservative`. Projects may opt into
+`high-throughput` and `mechanical-first` when their operator wants internal
+Harness-style cheap correction loops and has configured the needed trust mode
+and tools. These automation settings do not grant network, merge, tracker, or
+approval/user-input capability by themselves.
 
 ## Agent Responsibilities
 

@@ -47,6 +47,8 @@ function checkWorkflow(path) {
   }
   for (const snippet of [
     "trust_mode:",
+    "automation:",
+    "repair_policy:",
     "lifecycle:",
     "mode: orchestrator-owned",
     "merge_mode:",
