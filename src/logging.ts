@@ -15,13 +15,14 @@ export class JsonlLogger {
     this.logPath = join(repoRoot, ".agent-os", "runs", "agent-os.jsonl");
   }
 
-  async write(entry: Omit<AgentOSLogEntry, "timestamp"> & { timestamp?: string }): Promise<void> {
+  async write(entry: Omit<AgentOSLogEntry, "timestamp"> & { timestamp?: string }): Promise<AgentOSLogEntry> {
     await ensureDir(dirname(this.logPath));
     const payload: AgentOSLogEntry = {
       timestamp: entry.timestamp ?? new Date().toISOString(),
       ...entry
     };
     await appendFile(this.logPath, `${JSON.stringify(redactValue(payload))}\n`, "utf8");
+    return payload;
   }
 
   async tail(limit = 20): Promise<AgentOSLogEntry[]> {
