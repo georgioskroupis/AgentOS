@@ -3,6 +3,7 @@ export const harnessProfiles = ["base", "typescript", "python", "web", "api"] as
 export type HarnessProfile = (typeof harnessProfiles)[number];
 export type TrustMode = "review-only" | "ci-locked" | "local-trusted" | "danger";
 export type GitHubMergeMode = "manual" | "shepherd" | "auto";
+export type CodexEventPolicy = "deny" | "allow";
 
 export interface HarnessChange {
   action: "add" | "overwrite" | "exists" | "missing" | "invalid";
@@ -98,6 +99,8 @@ export interface ServiceConfig {
   codex: {
     command: string;
     approvalPolicy?: unknown;
+    approvalEventPolicy: CodexEventPolicy;
+    userInputPolicy: CodexEventPolicy;
     threadSandbox?: unknown;
     turnSandboxPolicy?: unknown;
     turnTimeoutMs: number;

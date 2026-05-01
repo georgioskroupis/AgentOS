@@ -19,6 +19,8 @@ describe("current AgentOS characterization", () => {
 
     expect(config.trustMode).toBe("ci-locked");
     expect(config.codex.command).toBe("npx -y @openai/codex@0.125.0 app-server");
+    expect(config.codex.approvalEventPolicy).toBe("deny");
+    expect(config.codex.userInputPolicy).toBe("deny");
     expect(config.codex.turnSandboxPolicy).toMatchObject({ type: "workspaceWrite", networkAccess: false });
     expect(config.github.mergeMode).toBe("manual");
     expect(config.github.allowHumanMergeOverride).toBe(false);

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
-import type { AgentRunResult, AgentRunner } from "../types.js";
+import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -79,6 +79,25 @@ export class CodexAppServerRunner implements AgentRunner {
             if (message.error) pendingRequest.reject(new Error(JSON.stringify(message.error)));
             else pendingRequest.resolve(message.result);
           } else {
+            const violation = codexEventPolicyViolation(message, {
+              approvalEventPolicy: input.config.codex.approvalEventPolicy,
+              userInputPolicy: input.config.codex.userInputPolicy
+            });
+            if (violation) {
+              const error = new Error(violation);
+              input.onEvent({
+                type: "codex_event_policy_denied",
+                issueId: input.issue.id,
+                issueIdentifier: input.issue.identifier,
+                message: violation,
+                payload: { method: message.method ?? message.type },
+                timestamp: new Date().toISOString()
+              });
+              if (turnFailure) turnFailure(error);
+              else bufferedTurnError = error;
+              child.kill("SIGTERM");
+              continue;
+            }
             input.onEvent({
               type: String(message.method ?? message.type ?? "codex_event"),
               issueId: input.issue.id,
@@ -237,6 +256,24 @@ function normalizeSandboxPolicy(policy: unknown, workspacePath: string): unknown
     writableRoots: [workspacePath],
     networkAccess: false
   };
+}
+
+function codexEventPolicyViolation(
+  message: Record<string, any>,
+  policy: { approvalEventPolicy: CodexEventPolicy; userInputPolicy: CodexEventPolicy }
+): string | null {
+  const eventName = String(message.method ?? message.type ?? "").toLowerCase();
+  const paramType = String(message.params?.type ?? message.params?.event ?? "").toLowerCase();
+  const combined = `${eventName} ${paramType}`;
+
+  const isRequest = /request|requested|required|needed/.test(combined);
+  if (combined.includes("approval") && isRequest && policy.approvalEventPolicy === "deny") {
+    return "codex_approval_request_denied";
+  }
+  if ((combined.includes("input") || combined.includes("user-input")) && isRequest && policy.userInputPolicy === "deny") {
+    return "codex_user_input_request_denied";
+  }
+  return null;
 }
 
 function captureShell(command: string, timeoutMs: number): Promise<string> {

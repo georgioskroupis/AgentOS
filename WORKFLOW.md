@@ -31,6 +31,8 @@ agent:
   max_retry_backoff_ms: 300000
 codex:
   command: npx -y @openai/codex@0.125.0 app-server
+  approval_event_policy: deny
+  user_input_policy: deny
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000

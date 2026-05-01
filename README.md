@@ -155,5 +155,7 @@ bin/agent-os codex-doctor
 
 If this reports unavailable, upgrade or install a Codex build that exposes
 `npx -y @openai/codex@0.125.0 app-server` before running live orchestration.
+Use `bin/agent-os codex-doctor --workflow WORKFLOW.md --strict` to also print
+the configured approval/user-input event policy and reject unpinned commands.
 Run `bin/agent-os workflow validate --strict` to catch unsafe workflow drift,
 including unpinned Codex commands and incompatible trust-mode/network settings.
