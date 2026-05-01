@@ -29,6 +29,10 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   dependency-backed checks.
 - Future validation evidence is JSON-first so the orchestrator can verify issue,
   run, command, timestamp, and exit-code metadata mechanically.
+- Validation evidence `status` is the final authoritative result. The
+  `commands` array may include failed historical attempts, but each required
+  validation command must have a later fresh passing attempt for the evidence to
+  be accepted.
 
 ## Workflow Defaults
 
