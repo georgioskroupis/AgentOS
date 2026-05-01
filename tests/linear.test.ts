@@ -66,6 +66,40 @@ describe("LinearClient", () => {
     expect(requests[1].variables.input).toEqual({ issueId: "issue-5", body: "handoff" });
   });
 
+  it("updates existing AgentOS lifecycle comments by marker", async () => {
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      { data: { issues: { nodes: [{ id: "issue-5", identifier: "VER-5", team: { id: "team-1", key: "VER", name: "Verity" } }] } } },
+      { data: { issue: { comments: { nodes: [{ id: "comment-1", body: "<!-- agentos:event=run_started:VER-5 -->\nold" }] } } } },
+      { data: { commentUpdate: { success: true } } }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    await client.upsertComment("VER-5", "new", "run_started:VER-5");
+
+    expect(requests[2].variables).toEqual({
+      id: "comment-1",
+      input: { body: "<!-- agentos:event=run_started:VER-5 -->\nnew" }
+    });
+  });
+
+  it("creates AgentOS lifecycle comments when no marker exists", async () => {
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      { data: { issues: { nodes: [{ id: "issue-5", identifier: "VER-5", team: { id: "team-1", key: "VER", name: "Verity" } }] } } },
+      { data: { issue: { comments: { nodes: [] } } } },
+      { data: { commentCreate: { success: true } } }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    await client.upsertComment("VER-5", "new", "run_started:VER-5");
+
+    expect(requests[2].variables.input).toEqual({
+      issueId: "issue-5",
+      body: "<!-- agentos:event=run_started:VER-5 -->\nnew"
+    });
+  });
+
   it("moves issues by UUID without confusing them for Linear identifiers", async () => {
     const issueId = "01974a5a-40bb-7bf1-b09f-b6d1f18d1234";
     const requests: Array<Record<string, any>> = [];

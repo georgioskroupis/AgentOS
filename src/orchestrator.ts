@@ -813,7 +813,8 @@ export class Orchestrator {
         `- Workspace: \`${workspace.path}\``,
         `- Branch: \`agent/${workspace.workspaceKey}\``,
         "- Logs: `.agent-os/runs/agent-os.jsonl`"
-      ].join("\n")
+      ].join("\n"),
+      "run_started"
     );
   }
 
@@ -834,7 +835,8 @@ export class Orchestrator {
             `- Workspace: \`${workspace.path}\``,
             "- Expected validation: project harness check",
             reviewLine.trim()
-          ].join("\n")
+          ].join("\n"),
+      "run_handoff"
     );
     await this.moveIssue(issue, this.config.tracker.reviewState);
   }
@@ -851,7 +853,8 @@ export class Orchestrator {
         `- Retry after: ${new Date(retry.dueAtMs).toISOString()}`,
         `- Workspace: \`${workspace.path}\``,
         `- Error: ${retry.error ?? "unknown"}`
-      ].join("\n")
+      ].join("\n"),
+      "retry_scheduled"
     );
   }
 
@@ -868,7 +871,8 @@ export class Orchestrator {
         `- Error: ${error}`,
         "",
         "Please adjust the issue, repo, or workflow instructions before returning it to an active state."
-      ].join("\n")
+      ].join("\n"),
+      "run_failed"
     );
     await this.moveIssue(issue, this.config.tracker.needsInputState);
   }
@@ -886,7 +890,8 @@ export class Orchestrator {
         "",
         `- PR: ${prUrl}`,
         `- Reason: ${reason}`
-      ].join("\n")
+      ].join("\n"),
+      "merge_waiting"
     );
     await this.logger.write({
       type: "merge_waiting",
@@ -911,7 +916,8 @@ export class Orchestrator {
         "Please resolve the issue and move it back to `Merging` when ready."
       ]
         .filter((line): line is string => line !== null)
-        .join("\n")
+        .join("\n"),
+      "merge_failed"
     );
     await this.moveIssue(issue, this.config.tracker.reviewState);
     await this.logger.write({
@@ -943,9 +949,14 @@ export class Orchestrator {
     );
   }
 
-  private async commentIssue(issue: Issue, body: string): Promise<void> {
-    if (!this.tracker.comment) return;
-    await this.tracker.comment(issue.identifier, redactText(body)).catch((error: Error) =>
+  private async commentIssue(issue: Issue, body: string, key?: string): Promise<void> {
+    if (!this.tracker.comment && !this.tracker.upsertComment) return;
+    const safeBody = redactText(key ? `${linearCommentMarker(key, issue.identifier)}\n${body}` : body);
+    const operation =
+      key && this.tracker.upsertComment
+        ? this.tracker.upsertComment(issue.identifier, safeBody, linearCommentKey(key, issue.identifier))
+        : this.tracker.comment!(issue.identifier, safeBody);
+    await operation.catch((error: Error) =>
       this.logger.write({
         type: "linear_update_failed",
         issueId: issue.id,
@@ -954,6 +965,14 @@ export class Orchestrator {
       })
     );
   }
+}
+
+function linearCommentKey(event: string, issueIdentifier: string): string {
+  return `${event}:${issueIdentifier}`;
+}
+
+function linearCommentMarker(event: string, issueIdentifier: string): string {
+  return `<!-- agentos:event=${linearCommentKey(event, issueIdentifier)} -->`;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
