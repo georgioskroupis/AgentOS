@@ -1,5 +1,5 @@
 ---
-trust_mode: local-trusted
+trust_mode: danger
 automation:
   profile: high-throughput
   repair_policy: mechanical-first
@@ -36,8 +36,13 @@ agent:
   max_retry_backoff_ms: 300000
 codex:
   command: npx -y @openai/codex@0.125.0 app-server
+  approval_policy: never
   approval_event_policy: deny
   user_input_policy: deny
+  thread_sandbox: danger-full-access
+  turn_sandbox_policy:
+    type: dangerFullAccess
+    networkAccess: true
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
