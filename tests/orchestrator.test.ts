@@ -258,6 +258,151 @@ describe("orchestrator", () => {
     expect(prompts[0]).toContain("## AgentOS Run Context");
   });
 
+  it("does not mark active runs stale while Codex events are still arriving", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-active-stall-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\nagent:\n  max_turns: 1\n  max_retry_attempts: 1\nworkspace:\n  root: .agent-os/workspaces\ncodex:\n  stall_timeout_ms: 25\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    let runnerStarted = false;
+    let aborted = false;
+    let resolveFinished: () => void = () => {};
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async comment() {},
+      async move() {}
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        runnerStarted = true;
+        const eventTimer = setInterval(() => {
+          input.onEvent({
+            type: "item/commandExecution/outputDelta",
+            issueId: input.issue.id,
+            issueIdentifier: input.issue.identifier,
+            timestamp: new Date().toISOString()
+          });
+        }, 5);
+        return new Promise<AgentRunResult>((resolve) => {
+          let finishTimer: NodeJS.Timeout;
+          const abort = () => {
+            aborted = true;
+            clearInterval(eventTimer);
+            clearTimeout(finishTimer);
+            resolveFinished();
+            resolve({ status: "canceled", error: "canceled" });
+          };
+          finishTimer = setTimeout(async () => {
+            input.signal?.removeEventListener("abort", abort);
+            clearInterval(eventTimer);
+            await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+            resolveFinished();
+            resolve({ status: "succeeded" });
+          }, 80);
+          input.signal?.addEventListener("abort", abort, { once: true });
+        });
+      }
+    };
+    const logger = new JsonlLogger(repo);
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(false);
+    await waitUntil(() => runnerStarted);
+    await sleep(40);
+    await orchestrator.runOnce(false);
+    expect(aborted).toBe(false);
+    await finished;
+
+    const logs = await logger.tail(50);
+    expect(logs.some((entry) => entry.type === "run_stalled")).toBe(false);
+  });
+
+  it("marks running attempts stale when no Codex events arrive before the stall timeout", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-inactive-stall-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\nagent:\n  max_turns: 1\n  max_retry_attempts: 1\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\ncodex:\n  stall_timeout_ms: 20\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    let aborted = false;
+    let runnerStarted = false;
+    let resolveFinished: () => void = () => {};
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async comment() {},
+      async move() {}
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        runnerStarted = true;
+        return new Promise<AgentRunResult>((resolve) => {
+          if (input.signal?.aborted) {
+            aborted = true;
+            resolveFinished();
+            resolve({ status: "canceled", error: "canceled" });
+            return;
+          }
+          input.signal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              resolveFinished();
+              resolve({ status: "canceled", error: "canceled" });
+            },
+            { once: true }
+          );
+        });
+      }
+    };
+    const logger = new JsonlLogger(repo);
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(false);
+    await waitUntil(() => runnerStarted);
+    await sleep(35);
+    await orchestrator.runOnce(false);
+    await finished;
+
+    expect(aborted).toBe(true);
+    const logs = await logger.tail(50);
+    expect(logs.some((entry) => entry.type === "run_stalled" && entry.message === "stall timeout exceeded")).toBe(true);
+  });
+
   it("stops denied MCP elicitation requests for human input without retrying", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-elicitation-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -1169,4 +1314,16 @@ async function writePassingHandoff(workspacePath: string, issueIdentifier: strin
       }
     ]
   });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error("waitUntil timeout");
+    await sleep(5);
+  }
 }

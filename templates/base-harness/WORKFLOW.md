@@ -146,6 +146,10 @@ evidence stays in the retry/failure path instead of moving the issue to
 `Human Review`. A successful Codex turn that exhausts `agent.max_turns` without
 writing `.agent-os/handoff-<issue>.md` fails as `missing_handoff`.
 
+Stall reconciliation uses the most recent Codex event timestamp, falling back to
+run start only when no events have arrived. Long-running validation or command
+output should keep the run active instead of being aborted by wall-clock age.
+
 Do not launch `agent-os orchestrator once` or `agent-os orchestrator run` from
 inside an AgentOS-managed agent turn. If an issue needs follow-up or probe
 issues, create/link them in the handoff and let the top-level scheduler own

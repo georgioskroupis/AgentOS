@@ -172,7 +172,9 @@ first-PR compatibility mirror.
 When a handoff references `Validation-JSON`, AgentOS verifies that evidence
 before moving the issue to `Human Review`; missing or failed evidence stays in
 the retry/failure path. Codex App Server exits and stall timeouts fail the turn
-promptly instead of waiting for the full turn timeout.
+promptly instead of waiting for the full turn timeout. Stall reconciliation is
+based on the last Codex event, so active validation output is not mistaken for a
+stale run just because the overall turn is long.
 Agent-managed turns are also blocked from launching nested
 `agent-os orchestrator once`/`run` processes, so Linear remains the single
 control plane and the top-level scheduler owns dispatch.

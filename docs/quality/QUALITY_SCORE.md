@@ -40,6 +40,8 @@ Use this as a lightweight rubric for harnessed repositories.
 - Handoffs that reference `Validation-JSON` are not moved to review unless the
   evidence verifies successfully; missing handoffs and dead/stalled Codex App
   Server turns fail through the retry/failure path.
+- Stall detection is event-based: active Codex output refreshes the running
+  attempt, while truly silent attempts are still aborted and retried.
 - Agent turns do not recursively launch nested AgentOS orchestrators; follow-up
   or probe issues stay visible in Linear and are dispatched by the top-level
   scheduler.
