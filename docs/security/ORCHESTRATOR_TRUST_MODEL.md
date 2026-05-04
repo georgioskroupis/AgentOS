@@ -18,9 +18,10 @@ That belongs to lifecycle ownership. Repair-loop behavior is a third axis under
 | `local-trusted` | on | workspace | on | on | on | deny |
 | `danger` | on | broad | on | on | on | allow |
 
-Public templates default to `ci-locked`. AgentOS dogfood uses
-`local-trusted` because it intentionally runs local orchestration with GitHub
-and Linear access.
+Public templates default to `ci-locked`. AgentOS dogfood uses `danger` because
+the live roadmap daemon is intentionally responsible for local orchestration,
+GitHub/Linear operations, repo-local runtime cleanup, worktree recovery, and
+other full-project maintenance without supervisor intervention.
 
 ## Compatibility Checks
 
@@ -58,6 +59,10 @@ commands can update the index, `FETCH_HEAD`, and repository object metadata
 without requiring broad filesystem access. Projects that need dependency
 installation, browser access, or GitHub PR operations should explicitly opt into
 `local-trusted` and explain that choice in the PR.
+
+The AgentOS dogfood workflow goes further and opts into `danger` with
+`dangerFullAccess` turns. That posture is not a public-template default; it is
+the autonomy posture for this repository's own roadmap runner.
 
 Automated review turns are narrower than implementation turns: AgentOS gives
 reviewers a workspace-local `.agent-os/reviews/...` artifact destination, no
