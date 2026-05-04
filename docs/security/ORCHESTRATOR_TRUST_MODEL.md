@@ -52,9 +52,12 @@ codex:
 ```
 
 The default `ci-locked` turn sandbox uses workspace write access with network
-disabled. Projects that need dependency installation, browser access, or GitHub
-PR operations should explicitly opt into `local-trusted` and explain that choice
-in the PR.
+disabled. For Git worktree-based agent workspaces, AgentOS also grants the
+active worktree's Git metadata directories as writable roots so ordinary Git
+commands can update the index, `FETCH_HEAD`, and repository object metadata
+without requiring broad filesystem access. Projects that need dependency
+installation, browser access, or GitHub PR operations should explicitly opt into
+`local-trusted` and explain that choice in the PR.
 
 Automated review turns are narrower than implementation turns: AgentOS gives
 reviewers a workspace-local `.agent-os/reviews/...` artifact destination, no
