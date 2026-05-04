@@ -198,7 +198,7 @@ export class GitHubClient {
       return {
         check,
         classification: "human_required",
-        reason: `Could not read failed check logs: ${error instanceof Error ? error.message : String(error)}`,
+        reason: diagnosticErrorReason("Could not read failed check logs", error),
         log: null
       };
     }
@@ -220,7 +220,7 @@ export class GitHubClient {
       }
       return { ok: true };
     } catch (error) {
-      return { ok: false, reason: `Could not verify the failed GitHub Actions run before reading logs: ${error instanceof Error ? error.message : String(error)}` };
+      return { ok: false, reason: diagnosticErrorReason("Could not verify the failed GitHub Actions run before reading logs", error) };
     }
   }
 }
@@ -333,7 +333,7 @@ export function summarizeCheckDiagnostics(diagnostics: CheckDiagnostic[]): strin
   return diagnostics
     .map((diagnostic) => {
       const log = diagnostic.log ? `\n  Log excerpt (sanitized, untrusted): ${singleLine(diagnostic.log).slice(0, 1200)}` : "";
-      return `- ${diagnostic.check.name}: ${diagnostic.classification} - ${diagnostic.reason}${log}`;
+      return `- ${diagnostic.check.name}: ${diagnostic.classification} - ${sanitizeDiagnosticText(diagnostic.reason, 800)}${log}`;
     })
     .join("\n");
 }
@@ -422,6 +422,23 @@ function sanitizeCiLog(log: string): string | null {
   const sanitized = redactText(log).trim();
   if (!sanitized) return null;
   return sanitized.slice(0, 4000);
+}
+
+function diagnosticErrorReason(prefix: string, error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const withoutCommand = raw
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*command_failed:/i.test(line))
+    .join("\n");
+  const details = sanitizeDiagnosticText(withoutCommand, 500);
+  if (!details) {
+    return `${prefix}. GitHub CLI error details were unavailable after sanitization.`;
+  }
+  return `${prefix}: ${details}`;
+}
+
+function sanitizeDiagnosticText(value: string, maxLength: number): string {
+  return singleLine(redactText(value)).slice(0, maxLength).trim();
 }
 
 function classifyCiFailureLog(log: string): { mechanical: boolean; reason: string } {

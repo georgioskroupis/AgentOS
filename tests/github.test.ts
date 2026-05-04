@@ -314,4 +314,86 @@ describe("GitHubClient", () => {
     expect(summary).not.toContain(secret);
     expect(summary.length).toBeLessThan(1500);
   });
+
+  it("redacts and bounds failed Actions log read errors before diagnostics escape GitHub", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    const secret = `ghp_${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/9",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/654"
+            }
+          ]
+        },
+        runLogError: `Authorization: Bearer ${secret}\ncommand_failed: GH_TOKEN=${secret} gh run view 654 --log-failed`
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/9", dir);
+    const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
+    const summary = summarizeCheckDiagnostics(diagnostics);
+
+    expect(diagnostics[0].classification).toBe("human_required");
+    expect(diagnostics[0].reason).toContain("[REDACTED]");
+    expect(diagnostics[0].reason).not.toContain(secret);
+    expect(diagnostics[0].reason).not.toContain("command_failed");
+    expect(summary).not.toContain(secret);
+    expect(summary).not.toContain("command_failed");
+    expect(summary.length).toBeLessThan(1000);
+  });
+
+  it("redacts and bounds failed Actions run verification errors before diagnostics escape GitHub", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    const secret = `ghp_${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/10",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/655"
+            }
+          ]
+        },
+        runViewError: `Authorization: Bearer ${secret}\ncommand_failed: GH_TOKEN=${secret} gh run view 655 --json headSha`
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/10", dir);
+    const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
+    const summary = summarizeCheckDiagnostics(diagnostics);
+
+    expect(diagnostics[0].classification).toBe("human_required");
+    expect(diagnostics[0].reason).toContain("[REDACTED]");
+    expect(diagnostics[0].reason).not.toContain(secret);
+    expect(diagnostics[0].reason).not.toContain("command_failed");
+    expect(summary).not.toContain(secret);
+    expect(summary).not.toContain("command_failed");
+    expect(summary.length).toBeLessThan(1000);
+  });
 });

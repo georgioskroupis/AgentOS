@@ -117,9 +117,10 @@ approval/user-input capability by themselves.
 Runtime repair stays bounded by `review.max_iterations`. Automated review
 findings may trigger focused fixer turns on the existing PR. CI repair is only
 attempted under `automation.repair_policy: mechanical-first` when failed
-GitHub Actions logs classify the failure as mechanical; missing logs, ambiguous
-requirements, denied approval/user-input, or repeated findings escalate to
-human review.
+GitHub Actions logs classify the failure as mechanical and the configured
+`trust_mode` permits PR/network repair; missing logs, ambiguous requirements,
+denied approval/user-input, trust-mode capability gaps, or repeated findings
+escalate to human review.
 
 ## Agent Responsibilities
 

@@ -21,6 +21,7 @@ import {
 } from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore } from "./runs.js";
+import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { WorkspaceManager } from "./workspace.js";
@@ -1201,7 +1202,9 @@ function reviewCheckFindings(
   if (status.checkSummary.failing > 0) {
     const mechanical = diagnostics.filter((diagnostic) => diagnostic.classification === "mechanical");
     const humanRequired = diagnostics.filter((diagnostic) => diagnostic.classification === "human_required");
-    if (mechanical.length > 0 && config.automation.repairPolicy === "mechanical-first") {
+    const capabilities = trustCapabilities(config.trustMode);
+    const canRunMechanicalCiFix = config.automation.repairPolicy === "mechanical-first" && capabilities.prNetwork;
+    if (mechanical.length > 0 && canRunMechanicalCiFix) {
       findings.push({
         reviewer: "checks",
         decision: "changes_requested" as const,
@@ -1212,12 +1215,14 @@ function reviewCheckFindings(
         findingHash: `checks-failing-mechanical-${checkDiagnosticFingerprint(mechanical)}`
       });
     }
-    if (humanRequired.length > 0 || mechanical.length === 0 || config.automation.repairPolicy !== "mechanical-first") {
+    if (humanRequired.length > 0 || mechanical.length === 0 || !canRunMechanicalCiFix) {
       const unresolved = humanRequired.length > 0 ? humanRequired : diagnostics.length > 0 ? diagnostics : [];
       const reason =
         config.automation.repairPolicy !== "mechanical-first"
           ? "automation.repair_policy is conservative, so CI repair is not attempted automatically."
-          : "AgentOS could not classify the failed check as a mechanical failure with enough context.";
+          : !capabilities.prNetwork
+            ? `trust_mode=${config.trustMode} does not allow PR/network capability, so CI repair is not attempted automatically.`
+            : "AgentOS could not classify the failed check as a mechanical failure with enough context.";
       findings.push({
         reviewer: "checks",
         decision: "human_required" as const,
