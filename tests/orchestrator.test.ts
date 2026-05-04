@@ -256,6 +256,11 @@ describe("orchestrator", () => {
     expect(prompts[0]).toContain("Attempt 0 for AG-1");
     expect(prompts[1]).toContain("Attempt 1 for AG-1");
     expect(prompts[0]).toContain("## AgentOS Run Context");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state).toMatchObject({ phase: "completed" });
+    expect(state.lastError).toBeUndefined();
+    expect(state.errorCategory).toBeUndefined();
+    expect(state.nextRetryAt).toBeUndefined();
   });
 
   it("does not mark active runs stale while Codex events are still arriving", async () => {
