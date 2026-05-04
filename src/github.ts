@@ -30,6 +30,7 @@ export interface CheckDetail {
   name: string;
   status: string | null;
   conclusion: string | null;
+  state?: string | null;
   url: string | null;
 }
 
@@ -204,7 +205,9 @@ export class GitHubClient {
   }
 
   private async verifyActionsRunForPullRequest(runId: string, status: PullRequestStatus, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
-    if (!status.headSha) return { ok: true };
+    if (!status.headSha) {
+      return { ok: false, reason: "Could not verify the reviewed pull request head SHA before reading failed check logs." };
+    }
     try {
       const raw = await runShell(`${this.command} run view ${shellQuote(runId)} --json headSha`, cwd);
       const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -256,18 +259,7 @@ export function evaluateMergeReadiness(status: PullRequestStatus, requireChecks:
 export function summarizeChecks(items: unknown[]): CheckSummary {
   const summary: CheckSummary = { total: items.length, successful: 0, pending: 0, failing: 0 };
   for (const item of items) {
-    const raw = item as Record<string, unknown>;
-    const conclusion = String(raw.conclusion ?? raw.state ?? "").toUpperCase();
-    const status = String(raw.status ?? "").toUpperCase();
-    if (conclusion === "SUCCESS" || conclusion === "SUCCESSFUL") {
-      summary.successful += 1;
-    } else if (status && status !== "COMPLETED") {
-      summary.pending += 1;
-    } else if (["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS"].includes(conclusion)) {
-      summary.pending += 1;
-    } else {
-      summary.failing += 1;
-    }
+    summary[classifyCheckState(item as CheckStateInput)] += 1;
   }
   return summary;
 }
@@ -279,14 +271,22 @@ export function summarizeCheckDetails(items: unknown[]): CheckDetail[] {
       name: String(raw.name ?? raw.context ?? raw.workflowName ?? "unknown"),
       status: raw.status == null ? null : String(raw.status),
       conclusion: raw.conclusion == null ? null : String(raw.conclusion),
-      url: typeof raw.detailsUrl === "string" ? raw.detailsUrl : typeof raw.url === "string" ? raw.url : null
+      state: raw.state == null ? null : String(raw.state),
+      url:
+        typeof raw.detailsUrl === "string"
+          ? raw.detailsUrl
+          : typeof raw.targetUrl === "string"
+            ? raw.targetUrl
+            : typeof raw.url === "string"
+              ? raw.url
+              : null
     };
   });
 }
 
 export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: string, threads: ReviewThread[] = [], diagnostics: CheckDiagnostic[] = []): string {
   const checks = status.checkDetails.length
-    ? status.checkDetails.map((check) => `- ${check.name}: ${check.status ?? "unknown"} / ${check.conclusion ?? "unknown"}${check.url ? ` (${check.url})` : ""}`).join("\n")
+    ? status.checkDetails.map((check) => `- ${check.name}: ${check.status ?? check.state ?? "unknown"} / ${check.conclusion ?? "unknown"}${check.url ? ` (${check.url})` : ""}`).join("\n")
     : "- No checks reported.";
   const checkDiagnostics = diagnostics.length ? summarizeCheckDiagnostics(diagnostics) : "- No failed check diagnostics reported.";
   const reviews = status.latestReviews.length
@@ -358,13 +358,25 @@ function changedFileNames(value: unknown): string[] {
     .filter((item): item is string => Boolean(item));
 }
 
-function checkDetailState(check: CheckDetail): "successful" | "pending" | "failing" {
-  const conclusion = String(check.conclusion ?? "").toUpperCase();
+type CheckState = "successful" | "pending" | "failing";
+
+interface CheckStateInput {
+  status?: unknown;
+  conclusion?: unknown;
+  state?: unknown;
+}
+
+function classifyCheckState(check: CheckStateInput): CheckState {
+  const conclusion = String(check.conclusion ?? check.state ?? "").toUpperCase();
   const status = String(check.status ?? "").toUpperCase();
   if (conclusion === "SUCCESS" || conclusion === "SUCCESSFUL") return "successful";
   if (status && status !== "COMPLETED") return "pending";
   if (["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS"].includes(conclusion)) return "pending";
   return "failing";
+}
+
+function checkDetailState(check: CheckDetail): CheckState {
+  return classifyCheckState(check);
 }
 
 interface GitHubRepositoryRef {

@@ -109,6 +109,53 @@ describe("GitHubClient", () => {
     ).toEqual({ total: 3, successful: 1, pending: 1, failing: 1 });
   });
 
+  it("does not diagnose successful legacy status contexts as failing checks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/7",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/456"
+            },
+            {
+              context: "legacy/status",
+              state: "SUCCESS",
+              targetUrl: "https://github.com/o/r/actions/runs/999"
+            }
+          ]
+        },
+        runLogs: {
+          "456": "npm run agent-check\nAssertionError: expected 1 to be 2",
+          "999": "npm run agent-check\nthis successful status should not be read"
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/7", dir);
+    const legacy = status.checkDetails.find((check) => check.name === "legacy/status");
+    const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
+
+    expect(status.checkSummary).toEqual({ total: 2, successful: 1, pending: 0, failing: 1 });
+    expect(legacy?.state).toBe("SUCCESS");
+    expect(legacy?.url).toBe("https://github.com/o/r/actions/runs/999");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].check.name).toBe("AgentOS CI");
+    expect(diagnostics[0].classification).toBe("mechanical");
+  });
+
   it("refuses to read Actions logs from a check URL outside the reviewed repository", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
     const statePath = join(dir, "state.json");
@@ -186,6 +233,44 @@ describe("GitHubClient", () => {
     expect(diagnostics[0].classification).toBe("human_required");
     expect(diagnostics[0].log).toBeNull();
     expect(diagnostics[0].reason).toContain("head SHA");
+  });
+
+  it("refuses to read Actions logs when the PR head SHA is unavailable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/8",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/321"
+            }
+          ]
+        },
+        runLogs: {
+          "321": "npm run agent-check\nsrc/github.ts(1,1): error TS2304: Cannot find name 'leaked'."
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/8", dir);
+    const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
+
+    expect(status.headSha).toBeNull();
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].classification).toBe("human_required");
+    expect(diagnostics[0].log).toBeNull();
+    expect(diagnostics[0].reason).toContain("pull request head SHA");
   });
 
   it("redacts and bounds failed Actions log excerpts before summarizing diagnostics", async () => {
