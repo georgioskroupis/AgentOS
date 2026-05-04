@@ -89,11 +89,14 @@ Runs one Symphony-style scheduling pass:
 5. start Codex App Server runs
 6. move/comment on Linear for start, retry, failure, and review handoff
 7. persist implementation outcome and optional PR metadata from handoff notes
-8. run the Ralph Wiggum review/fix loop for PR-producing issues before
+8. verify referenced validation evidence before any review handoff
+9. fail/retry dead Codex App Server turns, missing handoffs, and failed
+   validation instead of silently parking them in review
+10. run the Ralph Wiggum review/fix loop for PR-producing issues before
    `Human Review`
-9. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
-10. track retries, unchanged successful issues, startup cleanup, and reconciliation
-11. write `.agent-os/runs/agent-os.jsonl` and per-run artifacts
+11. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
+12. track retries, unchanged successful issues, startup cleanup, and reconciliation
+13. write `.agent-os/runs/agent-os.jsonl` and per-run artifacts
 
 Continuous mode is:
 
@@ -166,6 +169,13 @@ an already-satisfied no-op, investigation-only result, planning-only result,
 one docs/code PR, multiple PRs for a larger issue, or follow-up issue discovery.
 AgentOS records PR outputs in optional `prs[]`; legacy `prUrl` is only the
 first-PR compatibility mirror.
+When a handoff references `Validation-JSON`, AgentOS verifies that evidence
+before moving the issue to `Human Review`; missing or failed evidence stays in
+the retry/failure path. Codex App Server exits and stall timeouts fail the turn
+promptly instead of waiting for the full turn timeout.
+Agent-managed turns are also blocked from launching nested
+`agent-os orchestrator once`/`run` processes, so Linear remains the single
+control plane and the top-level scheduler owns dispatch.
 Automation and repair behavior is a separate `automation` axis, not a trust
 mode. Public harnesses default to `automation.profile: conservative` and
 `automation.repair_policy: conservative`; AgentOS dogfood may opt into

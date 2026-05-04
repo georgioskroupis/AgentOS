@@ -37,6 +37,12 @@ Use this as a lightweight rubric for harnessed repositories.
 - `agent-os orchestrator once --repo <repo> --workflow WORKFLOW.md` can dispatch
   an eligible issue into a deterministic workspace, post Linear progress, and
   move the issue to review after handoff.
+- Handoffs that reference `Validation-JSON` are not moved to review unless the
+  evidence verifies successfully; missing handoffs and dead/stalled Codex App
+  Server turns fail through the retry/failure path.
+- Agent turns do not recursively launch nested AgentOS orchestrators; follow-up
+  or probe issues stay visible in Linear and are dispatched by the top-level
+  scheduler.
 - Already-satisfied issues can produce an `AgentOS-Outcome: already-satisfied`
   no-op handoff that is persisted and moved to review without a PR.
 - Handoffs can represent zero, one, or many PR outputs; optional `prs[]` is the

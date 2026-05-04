@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { writeValidationEvidence } from "../../src/validation.js";
 import type { AgentRunResult, AgentRunner, Issue, IssueTracker, ServiceConfig, Workspace } from "../../src/types.js";
 
 export function fakeIssue(overrides: Partial<Issue> = {}): Issue {
@@ -105,16 +106,30 @@ export class FakeRunner implements AgentRunner {
   prompts: string[] = [];
   workspaces: Workspace[] = [];
 
-  constructor(private readonly result: AgentRunResult | ((workspace: Workspace) => Promise<AgentRunResult>)) {}
+  constructor(private readonly result: AgentRunResult | ((workspace: Workspace, input: Parameters<AgentRunner["run"]>[0]) => Promise<AgentRunResult>)) {}
 
   async run(input: Parameters<AgentRunner["run"]>[0]): Promise<AgentRunResult> {
     this.prompts.push(input.prompt);
     this.workspaces.push(input.workspace);
-    return typeof this.result === "function" ? this.result(input.workspace) : this.result;
+    return typeof this.result === "function" ? this.result(input.workspace, input) : this.result;
   }
 }
 
 export async function writeHandoff(workspace: Workspace, issueIdentifier: string, body: string): Promise<void> {
   await mkdir(join(workspace.path, ".agent-os"), { recursive: true });
   await writeFile(join(workspace.path, ".agent-os", `handoff-${issueIdentifier}.md`), body, "utf8");
+}
+
+export async function writePassingHandoff(workspace: Workspace, issueIdentifier: string, prompt: string, body: string): Promise<void> {
+  const validationPath = `.agent-os/validation/${issueIdentifier}.json`;
+  const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
+  await writeHandoff(workspace, issueIdentifier, `${body}\n\nValidation-JSON: ${validationPath}`);
+  const now = new Date().toISOString();
+  await writeValidationEvidence(join(workspace.path, validationPath), {
+    schemaVersion: 1,
+    issueIdentifier,
+    runId,
+    status: "passed",
+    commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+  });
 }

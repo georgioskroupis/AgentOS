@@ -44,6 +44,8 @@ export class CodexAppServerRunner implements AgentRunner {
     let bufferedTurnCompletion: Record<string, any> | undefined;
     let bufferedTurnError: Error | undefined;
     let lastEventAt = Date.now();
+    let ignoreChildClose = false;
+    let turnFinished = false;
 
     const send = (method: string, params: Record<string, unknown>) => {
       const requestId = id++;
@@ -60,6 +62,27 @@ export class CodexAppServerRunner implements AgentRunner {
     const notify = (method: string, params: Record<string, unknown> = {}) => {
       child.stdin.write(`${JSON.stringify({ method, params })}\n`);
     };
+
+    const failAppServer = (error: Error) => {
+      for (const [requestId, request] of pending.entries()) {
+        clearTimeout(request.timer);
+        pending.delete(requestId);
+        request.reject(error);
+      }
+      if (turnFailure) turnFailure(error);
+      else bufferedTurnError = bufferedTurnError ?? error;
+    };
+
+    child.on("error", (error) => {
+      failAppServer(error);
+    });
+
+    child.on("close", (code, signal) => {
+      if (ignoreChildClose || turnFinished) return;
+      const reason = signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`;
+      const details = stderr.trim() ? `: ${stderr.trim().slice(-500)}` : "";
+      failAppServer(new Error(`codex_app_server_closed: ${reason}${details}`));
+    });
 
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
@@ -145,6 +168,7 @@ export class CodexAppServerRunner implements AgentRunner {
               rateLimits = [...rateLimits, rateLimit].slice(-10);
             }
             if (message.method === "turn/completed" && (!turnId || message.params?.turn?.id === turnId)) {
+              turnFinished = true;
               if (turnCompletion) turnCompletion(message);
               else bufferedTurnCompletion = message;
             }
@@ -168,6 +192,7 @@ export class CodexAppServerRunner implements AgentRunner {
 
     const stallTimer = setInterval(() => {
       if (input.config.codex.stallTimeoutMs > 0 && Date.now() - lastEventAt > input.config.codex.stallTimeoutMs) {
+        failAppServer(new Error("codex_stall_timeout"));
         child.kill("SIGTERM");
       }
     }, Math.max(1000, Math.min(input.config.codex.stallTimeoutMs, 30_000)));
@@ -221,6 +246,7 @@ export class CodexAppServerRunner implements AgentRunner {
       });
       clearInterval(stallTimer);
       clearTimeout(turnTimer);
+      ignoreChildClose = true;
       child.kill("SIGTERM");
       const status = completion.params?.turn?.status;
       return {
@@ -236,9 +262,10 @@ export class CodexAppServerRunner implements AgentRunner {
     } catch (error) {
       clearInterval(stallTimer);
       clearTimeout(turnTimer);
+      ignoreChildClose = true;
       child.kill("SIGTERM");
       return {
-        status: "failed",
+        status: runnerStatusForError(error),
         threadId,
         turnId,
         inputTokens,
@@ -267,9 +294,18 @@ export class CodexAppServerRunner implements AgentRunner {
       if (threadId && turnId) {
         void send("turn/interrupt", { threadId, turnId }).catch(() => undefined);
       }
+      ignoreChildClose = true;
       child.kill("SIGTERM");
     }
   }
+}
+
+function runnerStatusForError(error: unknown): AgentRunResult["status"] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("codex_stall_timeout")) return "stalled";
+  if (message.includes("codex_turn_timeout") || message.includes("codex_read_timeout")) return "timed_out";
+  if (message.includes("canceled")) return "canceled";
+  return "failed";
 }
 
 function tokenMetricsFrom(message: Record<string, any>): { input?: number; output?: number; total?: number } | null {
@@ -365,10 +401,13 @@ function codexEventPolicyViolation(
 }
 
 function codexCommandStop(message: Record<string, any>): { reason: string; command: string; exitCode: number | null } | null {
-  if (message.method !== "item/completed") return null;
+  if (message.method !== "item/started" && message.method !== "item/completed") return null;
   const item = message.params?.item;
   if (!item || item.type !== "commandExecution") return null;
   const command = String(item.command ?? "");
+  if (/\b(?:bin\/)?agent-os\s+orchestrator\s+(?:once|run)\b/.test(command)) {
+    return { reason: "nested_orchestrator_forbidden", command, exitCode: null };
+  }
   const status = String(item.status ?? "");
   const exitCode = typeof item.exitCode === "number" ? item.exitCode : null;
   if (!["completed", "failed"].includes(status) || exitCode === 0) return null;

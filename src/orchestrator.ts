@@ -154,14 +154,14 @@ export class Orchestrator {
       await this.markLinearStarted(issue, workspace, attempt);
       await workspaceManager.beforeRun(workspace);
       const result = await this.runImplementationTurns(issue, attempt, workspace, abortController.signal, runId);
-      await this.writeRunEvent(runId, {
-        type: `run_${result.status}`,
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: result.error ?? "completed",
-        payload: result
-      });
       if (result.status !== "succeeded") {
+        await this.writeRunEvent(runId, {
+          type: `run_${result.status}`,
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: result.error ?? result.status,
+          payload: result
+        });
         await this.handleFailedRun(issue, workspace, attempt, result.error ?? result.status, runId);
       } else {
         this.completedMarkers.set(issue.id, completionMarker(issue));
@@ -169,6 +169,36 @@ export class Orchestrator {
         if (handoff) await this.runArtifacts.writeHandoff(runId, handoff);
         const stateFromHandoff = handoff ? issueStateFromHandoff(issue, handoff) : null;
         const validation = handoff ? await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId }) : null;
+        if (validation && validation.state.status !== "passed") {
+          const error = validationFailureMessage(validation.state);
+          await this.recordIssueState(issue, {
+            phase: "validation",
+            validation: validation.state,
+            lastError: error,
+            errorCategory: "validation"
+          });
+          await this.writeRunEvent(runId, {
+            type: "validation_failed",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: error,
+            payload: validation.state
+          });
+          await this.writeRunEvent(runId, {
+            type: "run_failed",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: error,
+            payload: { ...result, status: "failed", error }
+          });
+          await this.handleFailedRun(issue, workspace, attempt, error, runId);
+          await this.runArtifacts.completeRun(runId, {
+            ...result,
+            status: "failed",
+            error
+          });
+          return;
+        }
         const persistedState = stateFromHandoff
           ? await stateStore.merge(issue.identifier, {
               ...stateFromHandoff,
@@ -196,6 +226,13 @@ export class Orchestrator {
         }
         const reviewedState = await this.reviewIfNeeded(issue, workspace, persistedState, attempt, abortController.signal);
         await this.markLinearSucceeded(issue, workspace, handoff, reviewedState ?? persistedState ?? undefined);
+        await this.writeRunEvent(runId, {
+          type: "run_succeeded",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: "completed",
+          payload: result
+        });
       }
       await this.runArtifacts.completeRun(runId, result);
     } catch (error) {
@@ -253,6 +290,9 @@ export class Orchestrator {
           payload: { turnNumber, maxTurns: this.config.agent.maxTurns }
         });
       }
+    }
+    if (result.status === "succeeded" && !(await readHandoff(workspace.path, issue.identifier))) {
+      return { ...result, status: "failed", error: "missing_handoff" };
     }
     return result;
   }
@@ -1161,6 +1201,11 @@ function reviewCheckFindings(status: Awaited<ReturnType<GitHubClient["getPullReq
   return findings;
 }
 
+function validationFailureMessage(validation: NonNullable<IssueState["validation"]>): string {
+  const reason = validation.errors?.length ? validation.errors.join("; ") : `status=${validation.status}`;
+  return `validation_failed: ${reason}`;
+}
+
 function categorizeRunError(message: string): RunErrorCategory {
   const normalized = message.toLowerCase();
   if (isHumanInputStop(normalized)) return "human-input";
@@ -1182,7 +1227,8 @@ function isHumanInputStop(message: string): boolean {
     normalized.includes("codex_approval_request_denied") ||
     normalized.includes("codex_user_input_request_denied") ||
     normalized.includes("codex_elicitation_request_denied") ||
-    normalized.includes("agent_pr_creation_failed")
+    normalized.includes("agent_pr_creation_failed") ||
+    normalized.includes("nested_orchestrator_forbidden")
   );
 }
 

@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { JsonlLogger } from "../src/logging.js";
 import { Orchestrator } from "../src/orchestrator.js";
 import { redactText, redactValue } from "../src/redaction.js";
-import { fakeIssue, FakeRunner, FakeTracker } from "./fixtures/agentos-fakes.js";
+import { fakeIssue, FakeRunner, FakeTracker, writePassingHandoff } from "./fixtures/agentos-fakes.js";
 
 describe("redaction", () => {
   it("redacts token-shaped values and sensitive env values", () => {
@@ -45,14 +45,9 @@ describe("redaction", () => {
     );
     const issue = fakeIssue();
     const tracker = new FakeTracker([issue], new Map([[issue.id, issue]]));
-    const runner = new FakeRunner(async (workspace) => {
+    const runner = new FakeRunner(async (workspace, input) => {
       const openAiKey = `sk-${"abcdefghijklmnopqrstuvwxyz"}`;
-      await mkdir(join(workspace.path, ".agent-os"), { recursive: true });
-      await writeFile(
-        join(workspace.path, ".agent-os", "handoff-AG-1.md"),
-        `AgentOS-Outcome: already-satisfied\n\nSecret: ${openAiKey}`,
-        "utf8"
-      );
+      await writePassingHandoff(workspace, "AG-1", input.prompt, `AgentOS-Outcome: already-satisfied\n\nSecret: ${openAiKey}`);
       return { status: "succeeded" };
     });
 

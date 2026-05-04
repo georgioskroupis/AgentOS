@@ -128,7 +128,7 @@ When assigned a ticket:
 6. Run validation.
 7. Open or update a PR only when the issue produced repo changes and the
    workflow expects a PR.
-8. Write `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, plus summary, validation, artifacts, risks, and PR links when PRs exist.
+8. Write `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, artifacts, risks, and PR links when PRs exist.
 9. Follow `lifecycle.mode`: in the default `orchestrator-owned` mode, do not
    move or comment on the Linear issue directly; the AgentOS orchestrator owns
    Linear lifecycle updates.
@@ -139,6 +139,17 @@ If blocked:
 
 - Write the blocker, attempted steps, smallest next human decision, and current validation state in the handoff file.
 - Let the AgentOS orchestrator post the handoff and move the issue to `Human Review`.
+
+AgentOS treats a handoff as reviewable only after the referenced
+`Validation-JSON` evidence verifies successfully. Missing or failed validation
+evidence stays in the retry/failure path instead of moving the issue to
+`Human Review`. A successful Codex turn that exhausts `agent.max_turns` without
+writing `.agent-os/handoff-<issue>.md` fails as `missing_handoff`.
+
+Do not launch `agent-os orchestrator once` or `agent-os orchestrator run` from
+inside an AgentOS-managed agent turn. If an issue needs follow-up or probe
+issues, create/link them in the handoff and let the top-level scheduler own
+dispatch.
 
 ## Issue Outcomes
 
