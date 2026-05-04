@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
@@ -635,7 +636,7 @@ export class Orchestrator {
             `- Iteration: ${iteration}`,
             "",
             "Blocking findings:",
-            formatFindings(blocking, resolve(this.options.repoRoot))
+            formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
           ].join("\n")
         );
         await this.logger.write({
@@ -665,7 +666,7 @@ export class Orchestrator {
           `- PR: ${reviewPr}`,
           `- Iteration: ${iteration}`,
           "",
-          formatFindings(blocking, resolve(this.options.repoRoot))
+          formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
         ].join("\n")
       );
       await this.recordIssueState(issue, { phase: "fix", reviewStatus: "changes_requested" });
@@ -1208,7 +1209,7 @@ function reviewCheckFindings(
         file: null,
         line: null,
         body: `${mechanical.length} GitHub check(s) failed mechanically with logs available. Run a bounded CI fix before Human Review.\n\n${summarizeCheckDiagnostics(mechanical)}`,
-        findingHash: `checks-failing-mechanical-${mechanical.map((diagnostic) => diagnostic.check.name).sort().join(",")}`
+        findingHash: `checks-failing-mechanical-${checkDiagnosticFingerprint(mechanical)}`
       });
     }
     if (humanRequired.length > 0 || mechanical.length === 0 || config.automation.repairPolicy !== "mechanical-first") {
@@ -1224,7 +1225,7 @@ function reviewCheckFindings(
         file: null,
         line: null,
         body: `${status.checkSummary.failing} GitHub check(s) failed. ${reason}\n\n${unresolved.length > 0 ? summarizeCheckDiagnostics(unresolved) : "No failed check logs were available."}`,
-        findingHash: `checks-failing-human-${unresolved.map((diagnostic) => diagnostic.check.name).sort().join(",") || status.checkSummary.failing}`
+        findingHash: `checks-failing-human-${unresolved.length > 0 ? checkDiagnosticFingerprint(unresolved) : status.checkSummary.failing}`
       });
     }
   }
@@ -1239,7 +1240,7 @@ function reviewCheckFindings(
       findingHash: "checks-missing"
     });
   }
-  if (config.github.requireChecks && status.checkSummary.total > 0 && status.checkSummary.successful === 0 && status.checkSummary.pending === 0) {
+  if (config.github.requireChecks && status.checkSummary.total > 0 && status.checkSummary.failing === 0 && status.checkSummary.successful === 0 && status.checkSummary.pending === 0) {
     findings.push({
       reviewer: "checks",
       decision: "changes_requested" as const,
@@ -1251,6 +1252,27 @@ function reviewCheckFindings(
     });
   }
   return findings;
+}
+
+function checkDiagnosticFingerprint(diagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>>): string {
+  const stable = diagnostics
+    .map((diagnostic) =>
+      [
+        diagnostic.check.name,
+        diagnostic.check.status ?? "",
+        diagnostic.check.conclusion ?? "",
+        diagnostic.classification,
+        diagnostic.reason,
+        diagnostic.log ? singleLine(diagnostic.log).slice(0, 1200) : ""
+      ].join("\n")
+    )
+    .sort()
+    .join("\n---\n");
+  return createHash("sha256").update(stable).digest("hex").slice(0, 16);
+}
+
+function singleLine(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
 }
 
 function validationFailureMessage(validation: NonNullable<IssueState["validation"]>): string {

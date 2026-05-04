@@ -39,6 +39,11 @@ if (args[0] === "pr" && args[1] === "merge") {
 
 if (args[0] === "run" && args[1] === "view") {
   const runId = args[2];
+  if (args.includes("--json")) {
+    const runViews = state.runViews ?? {};
+    console.log(JSON.stringify(runViews[runId] ?? { headSha: state.view?.headRefOid ?? null }));
+    process.exit(0);
+  }
   const logs = state.runLogs ?? {};
   if (Object.prototype.hasOwnProperty.call(logs, runId)) {
     console.log(logs[runId]);

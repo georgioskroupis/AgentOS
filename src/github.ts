@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { redactText } from "./redaction.js";
 import type { ServiceConfig } from "./types.js";
 
 export interface PullRequestStatus {
@@ -36,6 +37,7 @@ export interface CheckDiagnostic {
   check: CheckDetail;
   classification: "mechanical" | "human_required";
   reason: string;
+  /** Sanitized, bounded, untrusted CI output excerpt. */
   log: string | null;
 }
 
@@ -160,27 +162,36 @@ export class GitHubClient {
         }
       ];
     }
-    return Promise.all(failing.map((check) => this.getCheckDiagnostic(check, cwd)));
+    return Promise.all(failing.map((check) => this.getCheckDiagnostic(check, status, cwd)));
   }
 
-  private async getCheckDiagnostic(check: CheckDetail, cwd: string): Promise<CheckDiagnostic> {
-    const runId = githubActionsRunId(check.url);
-    if (!runId) {
+  private async getCheckDiagnostic(check: CheckDetail, status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic> {
+    const run = githubActionsRunId(check.url, githubRepositoryFromPullRequestUrl(status.url));
+    if (!run.runId) {
       return {
         check,
         classification: "human_required",
-        reason: "No GitHub Actions run URL was available for the failing check.",
+        reason: run.reason,
+        log: null
+      };
+    }
+    const verification = await this.verifyActionsRunForPullRequest(run.runId, status, cwd);
+    if (!verification.ok) {
+      return {
+        check,
+        classification: "human_required",
+        reason: verification.reason,
         log: null
       };
     }
     try {
-      const log = await runShell(`${this.command} run view ${shellQuote(runId)} --log-failed`, cwd);
+      const log = await runShell(`${this.command} run view ${shellQuote(run.runId)} --log-failed`, cwd);
       const classification = classifyCiFailureLog(log);
       return {
         check,
         classification: classification.mechanical ? "mechanical" : "human_required",
         reason: classification.reason,
-        log: log.trim() ? log : null
+        log: sanitizeCiLog(log)
       };
     } catch (error) {
       return {
@@ -189,6 +200,24 @@ export class GitHubClient {
         reason: `Could not read failed check logs: ${error instanceof Error ? error.message : String(error)}`,
         log: null
       };
+    }
+  }
+
+  private async verifyActionsRunForPullRequest(runId: string, status: PullRequestStatus, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!status.headSha) return { ok: true };
+    try {
+      const raw = await runShell(`${this.command} run view ${shellQuote(runId)} --json headSha`, cwd);
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const headSha = typeof parsed.headSha === "string" ? parsed.headSha : null;
+      if (!headSha) {
+        return { ok: false, reason: "Could not verify the failed GitHub Actions run head SHA before reading logs." };
+      }
+      if (headSha.toLowerCase() !== status.headSha.toLowerCase()) {
+        return { ok: false, reason: "The failed GitHub Actions run does not match the reviewed pull request head SHA." };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: `Could not verify the failed GitHub Actions run before reading logs: ${error instanceof Error ? error.message : String(error)}` };
     }
   }
 }
@@ -303,7 +332,7 @@ export function summarizeCheckDiagnostics(diagnostics: CheckDiagnostic[]): strin
   if (diagnostics.length === 0) return "- No failing check diagnostics.";
   return diagnostics
     .map((diagnostic) => {
-      const log = diagnostic.log ? `\n  Log excerpt: ${singleLine(diagnostic.log).slice(0, 1200)}` : "";
+      const log = diagnostic.log ? `\n  Log excerpt (sanitized, untrusted): ${singleLine(diagnostic.log).slice(0, 1200)}` : "";
       return `- ${diagnostic.check.name}: ${diagnostic.classification} - ${diagnostic.reason}${log}`;
     })
     .join("\n");
@@ -338,10 +367,49 @@ function checkDetailState(check: CheckDetail): "successful" | "pending" | "faili
   return "failing";
 }
 
-function githubActionsRunId(url: string | null): string | null {
-  if (!url) return null;
-  const match = url.match(/\/actions\/runs\/(\d+)(?:\/|$)/);
-  return match?.[1] ?? null;
+interface GitHubRepositoryRef {
+  owner: string;
+  repo: string;
+}
+
+function githubRepositoryFromPullRequestUrl(url: string): GitHubRepositoryRef | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.hostname.toLowerCase() !== "github.com") return null;
+  const [owner, repo, pull, number] = parsed.pathname.split("/").filter(Boolean);
+  if (!owner || !repo || pull !== "pull" || !number) return null;
+  return { owner, repo };
+}
+
+function githubActionsRunId(url: string | null, repository: GitHubRepositoryRef | null): { runId: string | null; reason: string } {
+  if (!url) {
+    return { runId: null, reason: "No GitHub Actions run URL was available for the failing check." };
+  }
+  if (!repository) {
+    return { runId: null, reason: "Could not verify the reviewed pull request repository before reading failed check logs." };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { runId: null, reason: "The failing check URL was not a valid GitHub Actions run URL for the reviewed pull request repository." };
+  }
+  const [owner, repo, actions, runs, runId] = parsed.pathname.split("/").filter(Boolean);
+  const sameRepository = owner?.toLowerCase() === repository.owner.toLowerCase() && repo?.toLowerCase() === repository.repo.toLowerCase();
+  if (parsed.hostname.toLowerCase() !== "github.com" || !sameRepository || actions !== "actions" || runs !== "runs" || !/^\d+$/.test(runId ?? "")) {
+    return { runId: null, reason: "The failing check URL was not a GitHub Actions run URL for the reviewed pull request repository." };
+  }
+  return { runId, reason: "GitHub Actions run URL verified for the reviewed pull request repository." };
+}
+
+function sanitizeCiLog(log: string): string | null {
+  const sanitized = redactText(log).trim();
+  if (!sanitized) return null;
+  return sanitized.slice(0, 4000);
 }
 
 function classifyCiFailureLog(log: string): { mechanical: boolean; reason: string } {
