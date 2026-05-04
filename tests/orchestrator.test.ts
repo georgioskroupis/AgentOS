@@ -761,6 +761,79 @@ describe("orchestrator", () => {
     expect(state.prUrl).toBeUndefined();
     const logs = await logger.tail(20);
     expect(logs.some((entry) => entry.type === "issue_already_satisfied")).toBe(true);
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary).toMatchObject({ status: "succeeded" });
+    expect((await new RunArtifactStore(repo).inspect(summary.runId)).warnings).toEqual([]);
+  });
+
+  it("records investigation-only implemented handoffs without requiring a PR", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-investigation-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nInvestigate {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        await writePassingHandoff(
+          input.workspace.path,
+          "AG-1",
+          input.prompt,
+          [
+            "AgentOS-Outcome: implemented",
+            "",
+            "### Summary",
+            "",
+            "Investigation completed; no repository changes or pull requests were needed.",
+            "",
+            "### Follow-Up Recommendations",
+            "",
+            "- File AG-2 if the optional cleanup becomes product work."
+          ].join("\n")
+        );
+        return { status: "succeeded" };
+      }
+    };
+
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("Follow-Up Recommendations");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state).toMatchObject({ outcome: "implemented" });
+    expect(state.prs).toBeUndefined();
+    expect(state.prUrl).toBeUndefined();
+    expect(state.reviewStatus).toBeUndefined();
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary).toMatchObject({ status: "succeeded" });
+    expect((await new RunArtifactStore(repo).inspect(summary.runId)).warnings).toEqual([]);
   });
 
   it("persists multiple PR outputs without collapsing issue state to one PR", async () => {
@@ -825,6 +898,9 @@ describe("orchestrator", () => {
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.prs.map((pr: { url: string }) => pr.url)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
     expect(state.prUrl).toBe("https://github.com/o/r/pull/1");
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary).toMatchObject({ status: "succeeded" });
+    expect((await new RunArtifactStore(repo).inspect(summary.runId)).warnings).toEqual([]);
   });
 
   it("shepherds a mergeable PR from Merging to Done without running Codex", async () => {
