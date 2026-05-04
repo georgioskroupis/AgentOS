@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
 import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js";
 
@@ -310,7 +310,7 @@ function normalizeSandboxPolicy(policy: unknown, workspacePath: string): unknown
     const normalized = { ...(policy as Record<string, unknown>) };
     normalized.type = normalizeTurnSandbox(normalized.type);
     if (normalized.type === "workspaceWrite" && !Array.isArray(normalized.writableRoots)) {
-      normalized.writableRoots = [workspacePath];
+      normalized.writableRoots = workspaceWritableRoots(workspacePath);
     }
     if (typeof normalized.networkAccess !== "boolean") {
       normalized.networkAccess = false;
@@ -319,9 +319,28 @@ function normalizeSandboxPolicy(policy: unknown, workspacePath: string): unknown
   }
   return {
     type: "workspaceWrite",
-    writableRoots: [workspacePath],
+    writableRoots: workspaceWritableRoots(workspacePath),
     networkAccess: false
   };
+}
+
+function workspaceWritableRoots(workspacePath: string): string[] {
+  return uniquePaths([workspacePath, ...gitMetadataWritableRoots(workspacePath)]);
+}
+
+function gitMetadataWritableRoots(workspacePath: string): string[] {
+  const result = spawnSync("git", ["-C", workspacePath, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], {
+    encoding: "utf8"
+  });
+  if (result.status !== 0) return [];
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths)];
 }
 
 function codexEventPolicyViolation(

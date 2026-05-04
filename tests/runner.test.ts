@@ -1,14 +1,18 @@
-import { mkdtemp } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { CodexAppServerRunner, verifyCodexAppServer } from "../src/runner/app-server.js";
 import type { Issue, ServiceConfig, Workspace } from "../src/types.js";
 
+const execFileAsync = promisify(execFile);
 const fixture = resolve("tests/fixtures/fake-app-server.mjs");
 const fixtureCommand = `node ${JSON.stringify(fixture)}`;
 const instantFixtureCommand = `node ${JSON.stringify(fixture)} --instant`;
 const strictSandboxFixtureCommand = `node ${JSON.stringify(fixture)} --strict-sandbox`;
+const gitWritableRootsFixtureCommand = `node ${JSON.stringify(fixture)} --strict-sandbox --require-git-writable-roots`;
 const approvalRequestFixtureCommand = `node ${JSON.stringify(fixture)} --approval-request`;
 const inputRequestFixtureCommand = `node ${JSON.stringify(fixture)} --input-request`;
 const elicitationRequestFixtureCommand = `node ${JSON.stringify(fixture)} --elicitation-request`;
@@ -192,6 +196,48 @@ describe("CodexAppServerRunner", () => {
     ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
   });
 
+  it("adds git worktree metadata dirs to default writable roots", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runner-git-repo-"));
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "agent-os-runner-git-worktrees-"));
+    await git(repo, ["init"]);
+    await git(repo, ["config", "user.email", "agentos@example.test"]);
+    await git(repo, ["config", "user.name", "AgentOS Test"]);
+    await writeFile(join(repo, "README.md"), "AgentOS test repo\n", "utf8");
+    await git(repo, ["add", "README.md"]);
+    await git(repo, ["commit", "-m", "initial"]);
+    const workspacePath = join(workspaceRoot, "AG-1");
+    await git(repo, ["worktree", "add", "-b", "agent/AG-1", workspacePath, "HEAD"]);
+    const gitDir = await gitOutput(workspacePath, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+    const gitCommonDir = await gitOutput(workspacePath, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, gitWritableRootsFixtureCommand);
+    const previousEnv = {
+      workspace: process.env.AGENT_OS_EXPECTED_WORKSPACE_ROOT,
+      gitDir: process.env.AGENT_OS_EXPECTED_GIT_DIR,
+      gitCommonDir: process.env.AGENT_OS_EXPECTED_GIT_COMMON_DIR
+    };
+
+    process.env.AGENT_OS_EXPECTED_WORKSPACE_ROOT = workspacePath;
+    process.env.AGENT_OS_EXPECTED_GIT_DIR = gitDir;
+    process.env.AGENT_OS_EXPECTED_GIT_COMMON_DIR = gitCommonDir;
+    try {
+      await expect(
+        new CodexAppServerRunner().run({
+          issue,
+          prompt: "Do git worktree work",
+          attempt: null,
+          workspace,
+          config,
+          onEvent() {}
+        })
+      ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+    } finally {
+      restoreEnv("AGENT_OS_EXPECTED_WORKSPACE_ROOT", previousEnv.workspace);
+      restoreEnv("AGENT_OS_EXPECTED_GIT_DIR", previousEnv.gitDir);
+      restoreEnv("AGENT_OS_EXPECTED_GIT_COMMON_DIR", previousEnv.gitCommonDir);
+    }
+  });
+
   it("denies approval request events by default", async () => {
     const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-approval-policy-"));
     const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
@@ -300,6 +346,20 @@ describe("CodexAppServerRunner", () => {
     );
   });
 });
+
+async function git(cwd: string, args: string[]): Promise<void> {
+  await execFileAsync("git", args, { cwd });
+}
+
+async function gitOutput(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout.trim();
+}
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 function runnerConfig(workspacePath: string, command: string): ServiceConfig {
   return {

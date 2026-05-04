@@ -8,6 +8,7 @@ if (process.argv.includes("--help")) {
 
 const rl = readline.createInterface({ input: process.stdin });
 const strictSandbox = process.argv.includes("--strict-sandbox");
+const requireGitWritableRoots = process.argv.includes("--require-git-writable-roots");
 
 function write(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -27,6 +28,19 @@ rl.on("line", (line) => {
     if (strictSandbox && message.params?.sandboxPolicy?.type !== "workspaceWrite") {
       write({ id: message.id, error: { message: `bad turn sandbox: ${message.params?.sandboxPolicy?.type}` } });
       return;
+    }
+    if (requireGitWritableRoots) {
+      const roots = message.params?.sandboxPolicy?.writableRoots ?? [];
+      const expectedRoots = [
+        process.env.AGENT_OS_EXPECTED_WORKSPACE_ROOT,
+        process.env.AGENT_OS_EXPECTED_GIT_DIR,
+        process.env.AGENT_OS_EXPECTED_GIT_COMMON_DIR
+      ].filter(Boolean);
+      const missing = expectedRoots.filter((root) => !roots.includes(root));
+      if (missing.length > 0) {
+        write({ id: message.id, error: { message: `missing writable roots: ${missing.join(", ")}` } });
+        return;
+      }
     }
     write({ id: message.id, result: { turn: { id: "turn-1", status: "inProgress" } } });
     if (process.argv.includes("--approval-request")) {
