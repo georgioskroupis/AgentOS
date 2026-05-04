@@ -38,6 +38,7 @@ export interface OrchestratorOptions {
 interface RunningEntry {
   issue: Issue;
   startedAt: number;
+  lastCodexEventAt: number | null;
   abortController: AbortController;
   promise: Promise<void>;
 }
@@ -131,6 +132,7 @@ export class Orchestrator {
     this.running.set(issue.id, {
       issue,
       startedAt: Date.now(),
+      lastCodexEventAt: null,
       abortController,
       promise
     });
@@ -267,7 +269,11 @@ export class Orchestrator {
         workspace,
         config: this.config,
         signal,
-        onEvent: (event) => void this.writeRunEvent(runId, { ...event, runId })
+        onEvent: (event) => {
+          const running = this.running.get(issue.id);
+          if (running) running.lastCodexEventAt = Date.now();
+          void this.writeRunEvent(runId, { ...event, runId });
+        }
       });
       await this.writeRunEvent(runId, {
         type: "turn_completed",
@@ -397,7 +403,7 @@ export class Orchestrator {
   private async reconcile(): Promise<void> {
     const stale: string[] = [];
     for (const [id, entry] of this.running.entries()) {
-      const elapsed = Date.now() - entry.startedAt;
+      const elapsed = Date.now() - (entry.lastCodexEventAt ?? entry.startedAt);
       if (this.config.codex.stallTimeoutMs > 0 && elapsed > this.config.codex.stallTimeoutMs) {
         entry.abortController.abort();
         stale.push(id);
