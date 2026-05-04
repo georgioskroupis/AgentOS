@@ -169,7 +169,8 @@ export function reviewerPrompt(context: ReviewContext): string {
       "}"
     ].join("\n"),
     "",
-    "Use P0, P1, or P2 only for findings that must be fixed before human review. Use P3 for suggestions."
+    "Use P0, P1, or P2 only for findings that must be fixed before human review. Use P3 for suggestions.",
+    "Use decision=human_required when requirements are ambiguous, required context is missing, or a fix would require denied approval/user input."
   ]
     .filter(Boolean)
     .join("\n");

@@ -190,6 +190,11 @@ PR-producing implemented issues now pass through automated reviewer turns for
 self-review, correctness, tests, architecture, and conditional security review.
 Blocking findings trigger focused fixer turns on the same PR until reviewers
 approve or AgentOS escalates to Human Review with a concrete reason.
+For failed GitHub checks, AgentOS reads PR/check status and failed GitHub
+Actions logs; `automation.repair_policy: mechanical-first` allows a bounded CI
+fixer only when the logs classify the failure as mechanical. Missing logs,
+ambiguous failures, denied approval/user-input, and repeated findings escalate
+instead of looping.
 Those turns write review JSON to workspace-local `.agent-os/reviews/...` paths
 that AgentOS validates and copies into canonical runtime artifacts.
 Public harness defaults leave `github.merge_mode: manual`; AgentOS dogfood opts

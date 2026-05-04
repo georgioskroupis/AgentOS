@@ -1220,6 +1220,365 @@ describe("orchestrator", () => {
     expect(state.reviewStatus).toBe("approved");
   });
 
+  it("runs a focused fixer turn for blocking mechanical review findings", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-fix-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 2\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          files: [{ path: "src/orchestrator.ts" }]
+        }
+      }),
+      "utf8"
+    );
+
+    let fixRuns = 0;
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        if (input.prompt.startsWith("You are fixing")) {
+          fixRuns += 1;
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        const iteration = Number(input.prompt.match(/Iteration: (\d+)/)?.[1] ?? "1");
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+          reviewer: "self",
+          decision: iteration === 1 ? "changes_requested" : "approved",
+          summary: iteration === 1 ? "fix required" : "approved",
+          findings:
+            iteration === 1
+              ? [
+                  {
+                    reviewer: "self",
+                    decision: "changes_requested",
+                    severity: "P1",
+                    file: "src/orchestrator.ts",
+                    line: 12,
+                    body: "The retry-state branch has a deterministic off-by-one error.",
+                    findingHash: "mechanical-review-finding"
+                  }
+                ]
+              : []
+        });
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(fixRuns).toBe(1);
+    expect(comments.join("\n")).toContain("automated review requested fixes");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("approved");
+    expect(state.reviewIteration).toBe(2);
+  });
+
+  it("escalates repeated blocking review findings to human_required", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-repeated-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 3\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          files: [{ path: "src/orchestrator.ts" }]
+        }
+      }),
+      "utf8"
+    );
+
+    let fixRuns = 0;
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        if (input.prompt.startsWith("You are fixing")) {
+          fixRuns += 1;
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+          reviewer: "self",
+          decision: "changes_requested",
+          summary: "same finding",
+          findings: [
+            {
+              reviewer: "self",
+              decision: "changes_requested",
+              severity: "P1",
+              file: "src/orchestrator.ts",
+              line: 12,
+              body: "The same deterministic off-by-one error is still present.",
+              findingHash: "same-review-finding"
+            }
+          ]
+        });
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(fixRuns).toBe(1);
+    expect(comments.join("\n")).toContain("same blocking finding repeated after a fix");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("human_required");
+    expect(state.reviewIteration).toBe(2);
+  });
+
+  it("runs a bounded CI fixer turn for mechanical failed checks with logs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-mechanical-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\nautomation:\n  repair_policy: mechanical-first\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 2\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/123"
+            }
+          ],
+          files: [{ path: "src/orchestrator.ts" }]
+        },
+        runLogs: {
+          "123": "npm run agent-check\nsrc/orchestrator.ts(12,3): error TS2304: Cannot find name 'missingValue'."
+        }
+      }),
+      "utf8"
+    );
+
+    let fixRuns = 0;
+    let fixPromptText = "";
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment() {}
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        if (input.prompt.startsWith("You are fixing")) {
+          fixRuns += 1;
+          fixPromptText = input.prompt;
+          const state = JSON.parse(await readFile(ghState, "utf8"));
+          state.view.statusCheckRollup = [{ name: "AgentOS CI", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://github.com/o/r/actions/runs/124" }];
+          state.runLogs = {};
+          await writeFile(ghState, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+          reviewer: "self",
+          decision: "approved",
+          summary: "approved",
+          findings: []
+        });
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(fixRuns).toBe(1);
+    expect(fixPromptText).toContain("AgentOS CI");
+    expect(fixPromptText).toContain("TS2304");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("approved");
+    expect(state.reviewIteration).toBe(2);
+  });
+
+  it("escalates failed checks without logs instead of running a CI fixer", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-no-logs-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\nautomation:\n  repair_policy: mechanical-first\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 2\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/123"
+            }
+          ],
+          files: [{ path: "src/orchestrator.ts" }]
+        },
+        runLogs: {
+          "123": ""
+        }
+      }),
+      "utf8"
+    );
+
+    let fixRuns = 0;
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        if (input.prompt.startsWith("You are fixing")) {
+          fixRuns += 1;
+          return { status: "succeeded" };
+        }
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+          reviewer: "self",
+          decision: "approved",
+          summary: "approved",
+          findings: []
+        });
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(fixRuns).toBe(0);
+    expect(comments.join("\n")).toContain("could not classify");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("human_required");
+    expect(state.findings[0].decision).toBe("human_required");
+  });
+
   it("escalates malformed review artifacts to human_required", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-malformed-"));
     const workflowPath = join(repo, "WORKFLOW.md");

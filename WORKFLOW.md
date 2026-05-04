@@ -148,8 +148,13 @@ escalation when the failure is tool-addressable. This profile does not grant
 network, tracker, merge, or approval capability by itself; generic MCP
 elicitation and user-input requests remain denied by `codex` policy.
 
-PR F owns runtime changes that make additional repair loops active. Until then,
-this policy is an explicit, testable declaration of operating intent.
+Runtime repair remains bounded by `review.max_iterations`. Automated review
+findings can trigger focused fixer turns on the existing PR, and CI failures are
+diagnosed from PR/check status plus failed GitHub Actions logs. AgentOS only
+attempts a CI fixer turn when `automation.repair_policy: mechanical-first`
+classifies the failure as mechanical with logs available; missing logs,
+ambiguous requirements, denied approval/user-input, or repeated findings
+escalate to `Human Review`.
 
 ## Target Repository Lifecycle
 

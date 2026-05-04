@@ -37,6 +37,21 @@ if (args[0] === "pr" && args[1] === "merge") {
   process.exit(0);
 }
 
+if (args[0] === "run" && args[1] === "view") {
+  const runId = args[2];
+  const logs = state.runLogs ?? {};
+  if (Object.prototype.hasOwnProperty.call(logs, runId)) {
+    console.log(logs[runId]);
+    process.exit(0);
+  }
+  if (state.runLogError) {
+    console.error(state.runLogError);
+    process.exit(1);
+  }
+  console.log("");
+  process.exit(0);
+}
+
 if (args[0] === "api" && args[1] === "graphql") {
   console.log(JSON.stringify(state.graphql ?? { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }));
   process.exit(0);
