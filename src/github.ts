@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { redactText } from "./redaction.js";
 import type { ServiceConfig } from "./types.js";
 
 export interface PullRequestStatus {
@@ -29,7 +30,16 @@ export interface CheckDetail {
   name: string;
   status: string | null;
   conclusion: string | null;
+  state?: string | null;
   url: string | null;
+}
+
+export interface CheckDiagnostic {
+  check: CheckDetail;
+  classification: "mechanical" | "human_required";
+  reason: string;
+  /** Sanitized, bounded, untrusted CI output excerpt. */
+  log: string | null;
 }
 
 export interface PullRequestReview {
@@ -135,6 +145,84 @@ export class GitHubClient {
       comments: pullRequestComments(Array.isArray(node.comments?.nodes) ? node.comments.nodes : [])
     }));
   }
+
+  async getFailingCheckDiagnostics(status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic[]> {
+    const failing = status.checkDetails.filter((check) => checkDetailState(check) === "failing");
+    if (status.checkSummary.failing > 0 && failing.length === 0) {
+      return [
+        {
+          check: {
+            name: "unknown failing check",
+            status: null,
+            conclusion: "FAILURE",
+            url: null
+          },
+          classification: "human_required",
+          reason: "GitHub reported failing checks, but no check details were available.",
+          log: null
+        }
+      ];
+    }
+    return Promise.all(failing.map((check) => this.getCheckDiagnostic(check, status, cwd)));
+  }
+
+  private async getCheckDiagnostic(check: CheckDetail, status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic> {
+    const run = githubActionsRunId(check.url, githubRepositoryFromPullRequestUrl(status.url));
+    if (!run.runId) {
+      return {
+        check,
+        classification: "human_required",
+        reason: run.reason,
+        log: null
+      };
+    }
+    const verification = await this.verifyActionsRunForPullRequest(run.runId, status, cwd);
+    if (!verification.ok) {
+      return {
+        check,
+        classification: "human_required",
+        reason: verification.reason,
+        log: null
+      };
+    }
+    try {
+      const log = await runShell(`${this.command} run view ${shellQuote(run.runId)} --log-failed`, cwd);
+      const classification = classifyCiFailureLog(log);
+      return {
+        check,
+        classification: classification.mechanical ? "mechanical" : "human_required",
+        reason: classification.reason,
+        log: sanitizeCiLog(log)
+      };
+    } catch (error) {
+      return {
+        check,
+        classification: "human_required",
+        reason: diagnosticErrorReason("Could not read failed check logs", error),
+        log: null
+      };
+    }
+  }
+
+  private async verifyActionsRunForPullRequest(runId: string, status: PullRequestStatus, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!status.headSha) {
+      return { ok: false, reason: "Could not verify the reviewed pull request head SHA before reading failed check logs." };
+    }
+    try {
+      const raw = await runShell(`${this.command} run view ${shellQuote(runId)} --json headSha`, cwd);
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const headSha = typeof parsed.headSha === "string" ? parsed.headSha : null;
+      if (!headSha) {
+        return { ok: false, reason: "Could not verify the failed GitHub Actions run head SHA before reading logs." };
+      }
+      if (headSha.toLowerCase() !== status.headSha.toLowerCase()) {
+        return { ok: false, reason: "The failed GitHub Actions run does not match the reviewed pull request head SHA." };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: diagnosticErrorReason("Could not verify the failed GitHub Actions run before reading logs", error) };
+    }
+  }
 }
 
 export async function verifyGitHubCli(command = "gh", cwd = process.cwd()): Promise<{ ok: boolean; details: string }> {
@@ -171,18 +259,7 @@ export function evaluateMergeReadiness(status: PullRequestStatus, requireChecks:
 export function summarizeChecks(items: unknown[]): CheckSummary {
   const summary: CheckSummary = { total: items.length, successful: 0, pending: 0, failing: 0 };
   for (const item of items) {
-    const raw = item as Record<string, unknown>;
-    const conclusion = String(raw.conclusion ?? raw.state ?? "").toUpperCase();
-    const status = String(raw.status ?? "").toUpperCase();
-    if (conclusion === "SUCCESS" || conclusion === "SUCCESSFUL") {
-      summary.successful += 1;
-    } else if (status && status !== "COMPLETED") {
-      summary.pending += 1;
-    } else if (["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS"].includes(conclusion)) {
-      summary.pending += 1;
-    } else {
-      summary.failing += 1;
-    }
+    summary[classifyCheckState(item as CheckStateInput)] += 1;
   }
   return summary;
 }
@@ -194,15 +271,24 @@ export function summarizeCheckDetails(items: unknown[]): CheckDetail[] {
       name: String(raw.name ?? raw.context ?? raw.workflowName ?? "unknown"),
       status: raw.status == null ? null : String(raw.status),
       conclusion: raw.conclusion == null ? null : String(raw.conclusion),
-      url: typeof raw.detailsUrl === "string" ? raw.detailsUrl : typeof raw.url === "string" ? raw.url : null
+      state: raw.state == null ? null : String(raw.state),
+      url:
+        typeof raw.detailsUrl === "string"
+          ? raw.detailsUrl
+          : typeof raw.targetUrl === "string"
+            ? raw.targetUrl
+            : typeof raw.url === "string"
+              ? raw.url
+              : null
     };
   });
 }
 
-export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: string, threads: ReviewThread[] = []): string {
+export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: string, threads: ReviewThread[] = [], diagnostics: CheckDiagnostic[] = []): string {
   const checks = status.checkDetails.length
-    ? status.checkDetails.map((check) => `- ${check.name}: ${check.status ?? "unknown"} / ${check.conclusion ?? "unknown"}${check.url ? ` (${check.url})` : ""}`).join("\n")
+    ? status.checkDetails.map((check) => `- ${check.name}: ${check.status ?? check.state ?? "unknown"} / ${check.conclusion ?? "unknown"}${check.url ? ` (${check.url})` : ""}`).join("\n")
     : "- No checks reported.";
+  const checkDiagnostics = diagnostics.length ? summarizeCheckDiagnostics(diagnostics) : "- No failed check diagnostics reported.";
   const reviews = status.latestReviews.length
     ? status.latestReviews.map((review) => `- ${review.author ?? "unknown"}: ${review.state}${review.body ? ` - ${firstLine(review.body)}` : ""}`).join("\n")
     : "- No reviews reported.";
@@ -225,6 +311,9 @@ export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: s
     "Checks:",
     checks,
     "",
+    "Failed check diagnostics:",
+    checkDiagnostics,
+    "",
     "Latest reviews:",
     reviews,
     "",
@@ -237,6 +326,16 @@ export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: s
     "Diff:",
     diff.slice(0, 60_000)
   ].join("\n");
+}
+
+export function summarizeCheckDiagnostics(diagnostics: CheckDiagnostic[]): string {
+  if (diagnostics.length === 0) return "- No failing check diagnostics.";
+  return diagnostics
+    .map((diagnostic) => {
+      const log = diagnostic.log ? `\n  Log excerpt (sanitized, untrusted): ${singleLine(diagnostic.log).slice(0, 1200)}` : "";
+      return `- ${diagnostic.check.name}: ${diagnostic.classification} - ${sanitizeDiagnosticText(diagnostic.reason, 800)}${log}`;
+    })
+    .join("\n");
 }
 
 export function summarizeFeedback(status: PullRequestStatus, threads: ReviewThread[] = []): string {
@@ -257,6 +356,115 @@ function changedFileNames(value: unknown): string[] {
       return typeof raw.path === "string" ? raw.path : typeof raw.filename === "string" ? raw.filename : null;
     })
     .filter((item): item is string => Boolean(item));
+}
+
+type CheckState = "successful" | "pending" | "failing";
+
+interface CheckStateInput {
+  status?: unknown;
+  conclusion?: unknown;
+  state?: unknown;
+}
+
+function classifyCheckState(check: CheckStateInput): CheckState {
+  const conclusion = String(check.conclusion ?? check.state ?? "").toUpperCase();
+  const status = String(check.status ?? "").toUpperCase();
+  if (conclusion === "SUCCESS" || conclusion === "SUCCESSFUL") return "successful";
+  if (status && status !== "COMPLETED") return "pending";
+  if (["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS"].includes(conclusion)) return "pending";
+  return "failing";
+}
+
+function checkDetailState(check: CheckDetail): CheckState {
+  return classifyCheckState(check);
+}
+
+interface GitHubRepositoryRef {
+  owner: string;
+  repo: string;
+}
+
+function githubRepositoryFromPullRequestUrl(url: string): GitHubRepositoryRef | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.hostname.toLowerCase() !== "github.com") return null;
+  const [owner, repo, pull, number] = parsed.pathname.split("/").filter(Boolean);
+  if (!owner || !repo || pull !== "pull" || !number) return null;
+  return { owner, repo };
+}
+
+function githubActionsRunId(url: string | null, repository: GitHubRepositoryRef | null): { runId: string | null; reason: string } {
+  if (!url) {
+    return { runId: null, reason: "No GitHub Actions run URL was available for the failing check." };
+  }
+  if (!repository) {
+    return { runId: null, reason: "Could not verify the reviewed pull request repository before reading failed check logs." };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { runId: null, reason: "The failing check URL was not a valid GitHub Actions run URL for the reviewed pull request repository." };
+  }
+  const [owner, repo, actions, runs, runId] = parsed.pathname.split("/").filter(Boolean);
+  const sameRepository = owner?.toLowerCase() === repository.owner.toLowerCase() && repo?.toLowerCase() === repository.repo.toLowerCase();
+  if (parsed.hostname.toLowerCase() !== "github.com" || !sameRepository || actions !== "actions" || runs !== "runs" || !/^\d+$/.test(runId ?? "")) {
+    return { runId: null, reason: "The failing check URL was not a GitHub Actions run URL for the reviewed pull request repository." };
+  }
+  return { runId, reason: "GitHub Actions run URL verified for the reviewed pull request repository." };
+}
+
+function sanitizeCiLog(log: string): string | null {
+  const sanitized = redactText(log).trim();
+  if (!sanitized) return null;
+  return sanitized.slice(0, 4000);
+}
+
+function diagnosticErrorReason(prefix: string, error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const withoutCommand = raw
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*command_failed:/i.test(line))
+    .join("\n");
+  const details = sanitizeDiagnosticText(withoutCommand, 500);
+  if (!details) {
+    return `${prefix}. GitHub CLI error details were unavailable after sanitization.`;
+  }
+  return `${prefix}: ${details}`;
+}
+
+function sanitizeDiagnosticText(value: string, maxLength: number): string {
+  return singleLine(redactText(value)).slice(0, maxLength).trim();
+}
+
+function classifyCiFailureLog(log: string): { mechanical: boolean; reason: string } {
+  const text = log.trim();
+  if (!text) {
+    return { mechanical: false, reason: "The failed check did not expose logs." };
+  }
+  if (
+    /ambiguous|unclear requirement|human judgment|manual approval|requires approval|user input|approval request|elicitation|permission denied|resource not accessible|authentication|authorization|missing secret/i.test(
+      text
+    )
+  ) {
+    return { mechanical: false, reason: "The failed check logs point to missing access, denied input, or ambiguous requirements." };
+  }
+  if (
+    /npm run agent-check|npm test|vitest|test failed|tests failed|assertionerror|expected .* received|error TS\d+|typescript|tsc\b|eslint|prettier|lint|syntaxerror|typeerror|referenceerror|build failed|command failed/i.test(
+      text
+    )
+  ) {
+    return { mechanical: true, reason: "Failed check logs contain deterministic build, typecheck, lint, or test output." };
+  }
+  return { mechanical: false, reason: "The failed check logs were present, but AgentOS could not classify the failure as mechanical." };
+}
+
+function singleLine(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
 }
 
 function pullRequestReviews(items: unknown[]): PullRequestReview[] {

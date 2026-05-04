@@ -169,7 +169,8 @@ export function reviewerPrompt(context: ReviewContext): string {
       "}"
     ].join("\n"),
     "",
-    "Use P0, P1, or P2 only for findings that must be fixed before human review. Use P3 for suggestions."
+    "Use P0, P1, or P2 only for findings that must be fixed before human review. Use P3 for suggestions.",
+    "Use decision=human_required when requirements are ambiguous, required context is missing, or a fix would require denied approval/user input."
   ]
     .filter(Boolean)
     .join("\n");
@@ -234,15 +235,22 @@ export function repeatedBlockingHashes(previous: ReviewFinding[] | undefined, cu
     .filter((hash) => oldHashes.has(hash));
 }
 
-export function formatFindings(findings: ReviewFinding[], repoRoot: string): string {
+export function formatFindings(findings: ReviewFinding[], repoRoot: string, options: { includeLogExcerpts?: boolean } = {}): string {
   if (findings.length === 0) return "No findings.";
   return findings
     .map((finding) => {
       const file = finding.file ? relative(repoRoot, finding.file).replace(/^\.\.\//, finding.file) : "general";
       const line = finding.line ? `:${finding.line}` : "";
-      return `- ${finding.severity} ${finding.reviewer} ${file}${line}: ${finding.body}`;
+      const body = options.includeLogExcerpts === false ? omitDiagnosticLogExcerpts(finding.body) : finding.body;
+      return `- ${finding.severity} ${finding.reviewer} ${file}${line}: ${body}`;
     })
     .join("\n");
+}
+
+function omitDiagnosticLogExcerpts(body: string): string {
+  return body
+    .replace(/\n  Log excerpt \(sanitized, untrusted\): .*/g, "\n  Log excerpt: omitted from tracker comments.")
+    .replace(/\n  Log excerpt: .*/g, "\n  Log excerpt: omitted from tracker comments.");
 }
 
 function reviewerFocus(reviewer: string): string {

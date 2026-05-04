@@ -97,6 +97,11 @@ allowed the required tools.
 
 `high-throughput` does not grant network, GitHub, Linear, merge, approval, or
 user-input capability. Generic MCP elicitation remains denied unless the
-separate Codex event policy and trust mode explicitly allow it. Runtime
-expansion of repair loops belongs to PR F; PR D only makes the policy axis
-explicit and mechanically parsed.
+separate Codex event policy and trust mode explicitly allow it.
+
+Runtime repair loops stay bounded by `review.max_iterations`. Reviewer findings
+can trigger focused fixer turns on the existing PR. CI repair is narrower:
+AgentOS reads PR/check status and failed GitHub Actions logs, and
+`automation.repair_policy: mechanical-first` only permits a fixer when the logs
+classify the failure as mechanical. Missing logs, ambiguous requirements, denied
+approval/user-input, and repeated findings escalate to `Human Review`.

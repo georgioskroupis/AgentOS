@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
-import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
+import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
 import { issueStateFromHandoff, IssueStateStore, primaryPullRequestUrl } from "./issue-state.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
@@ -20,6 +21,7 @@ import {
 } from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore } from "./runs.js";
+import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { WorkspaceManager } from "./workspace.js";
@@ -549,7 +551,7 @@ export class Orchestrator {
       const validationFinding = validationEvidenceFinding(latestState?.validation);
       const findings = [
         ...artifacts.flatMap((entry) => entry.artifact.findings),
-        ...reviewCheckFindings(githubContext.status, this.config),
+        ...reviewCheckFindings(githubContext.status, this.config, githubContext.checkDiagnostics),
         ...(validationFinding ? [validationFinding] : [])
       ];
       for (const finding of findings.filter((finding) => finding.reviewer === "checks")) {
@@ -575,7 +577,7 @@ export class Orchestrator {
         iteration,
         artifactPath: entry.path
       }));
-      const humanRequired = artifacts.some((entry) => entry.artifact.decision === "human_required");
+      const humanRequired = artifacts.some((entry) => entry.artifact.decision === "human_required") || findings.some((finding) => finding.decision === "human_required");
       const allRequiredApproved = this.config.review.requiredReviewers.every((reviewer) =>
         artifacts.some((entry) => entry.artifact.reviewer === reviewer && entry.artifact.decision === "approved")
       );
@@ -635,7 +637,7 @@ export class Orchestrator {
             `- Iteration: ${iteration}`,
             "",
             "Blocking findings:",
-            formatFindings(blocking, resolve(this.options.repoRoot))
+            formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
           ].join("\n")
         );
         await this.logger.write({
@@ -665,7 +667,7 @@ export class Orchestrator {
           `- PR: ${reviewPr}`,
           `- Iteration: ${iteration}`,
           "",
-          formatFindings(blocking, resolve(this.options.repoRoot))
+          formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
         ].join("\n")
       );
       await this.recordIssueState(issue, { phase: "fix", reviewStatus: "changes_requested" });
@@ -725,16 +727,23 @@ export class Orchestrator {
     return reviewers;
   }
 
-  private async githubReviewContext(prUrl: string): Promise<{ status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>; summary: string; feedback: string }> {
+  private async githubReviewContext(prUrl: string): Promise<{
+    status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>;
+    summary: string;
+    feedback: string;
+    checkDiagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>>;
+  }> {
     const github = new GitHubClient(this.config.github.command);
     const cwd = resolve(this.options.repoRoot);
     const status = await github.getPullRequest(prUrl, cwd);
+    const checkDiagnostics = await github.getFailingCheckDiagnostics(status, cwd);
     const diff = await github.getPullRequestDiff(prUrl, cwd).catch((error: Error) => `Could not fetch diff: ${error.message}`);
     const threads = await github.getPullRequestReviewThreads(prUrl, cwd).catch(() => []);
     return {
       status,
-      summary: summarizePullRequestForPrompt(status, diff, threads),
-      feedback: summarizeFeedback(status, threads)
+      summary: summarizePullRequestForPrompt(status, diff, threads, checkDiagnostics),
+      feedback: summarizeFeedback(status, threads),
+      checkDiagnostics
     };
   }
 
@@ -1184,18 +1193,46 @@ function readOnlyReviewConfig(config: ServiceConfig, reviewWritableRoot: string)
   };
 }
 
-function reviewCheckFindings(status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>, config: ServiceConfig): ReviewFinding[] {
+function reviewCheckFindings(
+  status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>,
+  config: ServiceConfig,
+  diagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>> = []
+): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
   if (status.checkSummary.failing > 0) {
-    findings.push({
-      reviewer: "checks",
-      decision: "changes_requested" as const,
-      severity: "P1" as const,
-      file: null,
-      line: null,
-      body: `${status.checkSummary.failing} GitHub check(s) failed. Fix CI before Human Review.`,
-      findingHash: `checks-failing-${status.checkSummary.failing}`
-    });
+    const mechanical = diagnostics.filter((diagnostic) => diagnostic.classification === "mechanical");
+    const humanRequired = diagnostics.filter((diagnostic) => diagnostic.classification === "human_required");
+    const capabilities = trustCapabilities(config.trustMode);
+    const canRunMechanicalCiFix = config.automation.repairPolicy === "mechanical-first" && capabilities.prNetwork;
+    if (mechanical.length > 0 && canRunMechanicalCiFix) {
+      findings.push({
+        reviewer: "checks",
+        decision: "changes_requested" as const,
+        severity: "P1" as const,
+        file: null,
+        line: null,
+        body: `${mechanical.length} GitHub check(s) failed mechanically with logs available. Run a bounded CI fix before Human Review.\n\n${summarizeCheckDiagnostics(mechanical)}`,
+        findingHash: `checks-failing-mechanical-${checkDiagnosticFingerprint(mechanical)}`
+      });
+    }
+    if (humanRequired.length > 0 || mechanical.length === 0 || !canRunMechanicalCiFix) {
+      const unresolved = humanRequired.length > 0 ? humanRequired : diagnostics.length > 0 ? diagnostics : [];
+      const reason =
+        config.automation.repairPolicy !== "mechanical-first"
+          ? "automation.repair_policy is conservative, so CI repair is not attempted automatically."
+          : !capabilities.prNetwork
+            ? `trust_mode=${config.trustMode} does not allow PR/network capability, so CI repair is not attempted automatically.`
+            : "AgentOS could not classify the failed check as a mechanical failure with enough context.";
+      findings.push({
+        reviewer: "checks",
+        decision: "human_required" as const,
+        severity: "P1" as const,
+        file: null,
+        line: null,
+        body: `${status.checkSummary.failing} GitHub check(s) failed. ${reason}\n\n${unresolved.length > 0 ? summarizeCheckDiagnostics(unresolved) : "No failed check logs were available."}`,
+        findingHash: `checks-failing-human-${unresolved.length > 0 ? checkDiagnosticFingerprint(unresolved) : status.checkSummary.failing}`
+      });
+    }
   }
   if (config.github.requireChecks && status.checkSummary.total === 0) {
     findings.push({
@@ -1208,7 +1245,7 @@ function reviewCheckFindings(status: Awaited<ReturnType<GitHubClient["getPullReq
       findingHash: "checks-missing"
     });
   }
-  if (config.github.requireChecks && status.checkSummary.total > 0 && status.checkSummary.successful === 0 && status.checkSummary.pending === 0) {
+  if (config.github.requireChecks && status.checkSummary.total > 0 && status.checkSummary.failing === 0 && status.checkSummary.successful === 0 && status.checkSummary.pending === 0) {
     findings.push({
       reviewer: "checks",
       decision: "changes_requested" as const,
@@ -1220,6 +1257,27 @@ function reviewCheckFindings(status: Awaited<ReturnType<GitHubClient["getPullReq
     });
   }
   return findings;
+}
+
+function checkDiagnosticFingerprint(diagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>>): string {
+  const stable = diagnostics
+    .map((diagnostic) =>
+      [
+        diagnostic.check.name,
+        diagnostic.check.status ?? "",
+        diagnostic.check.conclusion ?? "",
+        diagnostic.classification,
+        diagnostic.reason,
+        diagnostic.log ? singleLine(diagnostic.log).slice(0, 1200) : ""
+      ].join("\n")
+    )
+    .sort()
+    .join("\n---\n");
+  return createHash("sha256").update(stable).digest("hex").slice(0, 16);
+}
+
+function singleLine(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
 }
 
 function validationFailureMessage(validation: NonNullable<IssueState["validation"]>): string {
