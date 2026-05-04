@@ -499,6 +499,70 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "issue_already_satisfied")).toBe(true);
   });
 
+  it("persists multiple PR outputs without collapsing issue state to one PR", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-multi-pr-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
+        await writeFile(
+          join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
+          [
+            "AgentOS-Outcome: implemented",
+            "",
+            "### Summary",
+            "",
+            "The issue was split into two reviewable PRs.",
+            "",
+            "PR: https://github.com/o/r/pull/1",
+            "Follow-up PR: https://github.com/o/r/pull/2"
+          ].join("\n"),
+          "utf8"
+        );
+        return { status: "succeeded" };
+      }
+    };
+
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("Follow-up PR: https://github.com/o/r/pull/2");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.prs.map((pr: { url: string }) => pr.url)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
+    expect(state.prUrl).toBe("https://github.com/o/r/pull/1");
+  });
+
   it("shepherds a mergeable PR from Merging to Done without running Codex", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -511,14 +575,20 @@ describe("orchestrator", () => {
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
-      JSON.stringify({ issueId: "issue-1", issueIdentifier: "AG-1", prUrl: "https://github.com/o/r/pull/1", updatedAt: new Date().toISOString() }),
+      JSON.stringify({
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        prUrl: "https://github.com/o/r/pull/1",
+        prs: [{ url: "https://github.com/o/r/pull/2", source: "handoff", discoveredAt: new Date().toISOString() }],
+        updatedAt: new Date().toISOString()
+      }),
       "utf8"
     );
     await writeFile(
       ghState,
       JSON.stringify({
         view: {
-          url: "https://github.com/o/r/pull/1",
+          url: "https://github.com/o/r/pull/2",
           state: "OPEN",
           isDraft: false,
           mergeable: "MERGEABLE",
@@ -564,6 +634,7 @@ describe("orchestrator", () => {
 
     expect(moves).toEqual(["AG-1 -> Done"]);
     expect(comments.join("\n")).toContain("Merged successfully");
+    expect(comments.join("\n")).toContain("https://github.com/o/r/pull/2");
   });
 
   it("routes unsafe merge shepherd failures back to Human Review", async () => {

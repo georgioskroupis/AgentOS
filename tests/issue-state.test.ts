@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractOutcome, extractPullRequestUrls, issueStateFromHandoff, IssueStateStore } from "../src/issue-state.js";
+import { extractOutcome, extractPullRequestUrls, issueStateFromHandoff, IssueStateStore, primaryPullRequestUrl, pullRequestUrls } from "../src/issue-state.js";
 import type { Issue } from "../src/types.js";
 
 const issue: Issue = {
@@ -61,6 +61,29 @@ describe("issue state handoff parsing", () => {
     });
   });
 
+  it("treats implemented handoff-only outcomes as valid no-PR issue state", () => {
+    const state = issueStateFromHandoff(
+      issue,
+      [
+        "AgentOS-Outcome: implemented",
+        "",
+        "### Summary",
+        "",
+        "Investigation completed and follow-up issue AG-2 was filed. No repo change was needed."
+      ].join("\n")
+    );
+
+    expect(state).toMatchObject({
+      schemaVersion: 1,
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      outcome: "implemented"
+    });
+    expect(state?.prs).toBeUndefined();
+    expect(state?.prUrl).toBeUndefined();
+    expect(state?.reviewStatus).toBeUndefined();
+  });
+
   it("stores multiple PRs from handoff text", () => {
     const state = issueStateFromHandoff(
       issue,
@@ -74,6 +97,24 @@ describe("issue state handoff parsing", () => {
 
     expect(state?.prs?.map((pr) => pr.url)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
     expect(state?.prUrl).toBe("https://github.com/o/r/pull/1");
+    expect(pullRequestUrls(state)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
+  });
+
+  it("uses prs as authoritative while preserving legacy prUrl as a mirror", () => {
+    const state = {
+      prs: [
+        { url: "https://github.com/o/r/pull/2", source: "handoff" as const, discoveredAt: "2026-01-02T00:00:00.000Z" },
+        { url: "https://github.com/o/r/pull/3", source: "handoff" as const, discoveredAt: "2026-01-03T00:00:00.000Z" }
+      ],
+      prUrl: "https://github.com/o/r/pull/1"
+    };
+
+    expect(primaryPullRequestUrl(state)).toBe("https://github.com/o/r/pull/2");
+    expect(pullRequestUrls(state)).toEqual([
+      "https://github.com/o/r/pull/2",
+      "https://github.com/o/r/pull/3",
+      "https://github.com/o/r/pull/1"
+    ]);
   });
 
   it("lazily migrates legacy prUrl state to prs on merge", async () => {

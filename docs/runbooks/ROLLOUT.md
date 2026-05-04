@@ -41,10 +41,13 @@ instead of requesting approval or using an interactive fallback.
 Every handoff starts with an implementation outcome. If the issue is already
 satisfied, Codex writes `AgentOS-Outcome: already-satisfied`, makes no code
 changes, and AgentOS moves the issue to `Human Review` with validation evidence.
+Investigation-only and planning-only issues may also finish with a handoff and
+no PR. Larger issues may list multiple PR URLs; AgentOS records them in optional
+`prs[]`, while legacy `prUrl` remains only the first-PR compatibility mirror.
 
-After human review, move the Linear issue to `Merging`. AgentOS will require a
-green GitHub check, squash-merge the PR, delete the branch, comment in Linear,
-and move the issue to `Done`.
+After human review of PR-producing issues, move the Linear issue to `Merging`.
+AgentOS will require a green GitHub check, squash-merge the primary PR, delete
+the branch, comment in Linear, and move the issue to `Done`.
 
 This flow is dogfooded by the AgentOS project before being reused elsewhere.
 For successful dogfood PR probes, confirm the pull request was created through

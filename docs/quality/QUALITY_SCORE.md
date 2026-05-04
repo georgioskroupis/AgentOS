@@ -39,9 +39,13 @@ Use this as a lightweight rubric for harnessed repositories.
   move the issue to review after handoff.
 - Already-satisfied issues can produce an `AgentOS-Outcome: already-satisfied`
   no-op handoff that is persisted and moved to review without a PR.
-- Implemented PRs run automated review before `Human Review`; blocking findings
-  create focused fixer turns, review artifacts are persisted, and repeated or
-  unresolved findings escalate with `reviewStatus: human_required`.
+- Handoffs can represent zero, one, or many PR outputs; optional `prs[]` is the
+  authoritative PR list and legacy `prUrl` is only the first-PR compatibility
+  mirror.
+- PR-producing implemented issues run automated review before `Human Review`;
+  blocking findings create focused fixer turns, review artifacts are persisted,
+  and repeated or unresolved findings escalate with `reviewStatus:
+  human_required`.
 - GitHub CI exists and the merge shepherd requires at least one successful check
   before moving `Merging` issues to `Done`.
 - `scripts/check-harness-contract.mjs` is part of `npm run agent-check` and

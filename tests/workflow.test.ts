@@ -347,6 +347,10 @@ describe("workflow", () => {
       expect(text).toContain("Do not use GitHub app/MCP PR creation tools");
       expect(text).toContain("agent_pr_creation_failed");
       expect(text).toContain("prs[]");
+      expect(text).toContain("Issues are the unit of work");
+      expect(text).toContain("A run may produce zero, one, or many pull requests");
+      expect(text).toContain("workflow expects a PR");
+      expect(text).not.toContain("Open or update a GitHub PR when code or docs changed and validation passes");
     }
   });
 

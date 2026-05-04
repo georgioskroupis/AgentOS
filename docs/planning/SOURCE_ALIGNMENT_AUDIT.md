@@ -37,8 +37,9 @@ The main drift is not conceptual. The drift is ownership and strictness:
   examples.
 - Some repair and feedback loops still escalate earlier than Harness
   Engineering's agent-to-agent model would prefer.
-- Multi-PR and no-PR issue paths are supported in state and tests, but some
-  review and merge paths still behave as if there is one primary PR.
+- Multi-PR and no-PR issue paths are now first-class in workflow wording,
+  handoff parsing, and state tests, but automated review and merge shepherding
+  still operate on one primary PR for compatibility.
 
 The correct target is configurable autonomy: keep safe public defaults, but make
 source-faithful high-trust operation explicit and mechanically validated.
@@ -116,8 +117,8 @@ AgentOS is not yet fully Symphony-faithful:
   `src/orchestrator.ts`, especially lifecycle comments, state transitions,
   review handoff, retry classification, and merge shepherding.
 - Symphony's issue abstraction is broader than PRs. AgentOS supports no-PR and
-  multi-PR state, but automated review and merge shepherding still mostly use a
-  single primary PR.
+  multi-PR handoffs, and PR E recentered workflow wording on issues, but
+  automated review and merge shepherding still use a single primary PR.
 - Symphony calls for authoritative orchestrator state for dispatch, retries, and
   reconciliation. AgentOS has durable run summaries and issue state, but Stage
   9A restart/retry reconstruction is still planning-only.
@@ -200,30 +201,27 @@ comments.
 
 ## 6. Where AgentOS Is More PR-Centric Than Symphony
 
-AgentOS has already corrected the most obvious PR-centric drift:
+AgentOS has corrected the most obvious PR-centric drift:
 
 - Already-satisfied and no-op issues can end without a PR.
 - Handoff parsing supports `prs[]` with zero, one, or many PRs.
 - Validation and issue outcomes do not require PR metadata.
+- `WORKFLOW.md`, templates, skills, and runbooks describe issue outcomes before
+  PR creation.
+- Compatibility paths derive their primary PR from `prs[]` first and fall back
+  to legacy `prUrl`.
 
 Remaining PR-centric pressure:
 
-- Automated review is framed as happening after a run opens or updates a PR.
-- Review prompts and GitHub context currently use a primary PR URL.
+- Automated review is explicitly scoped to PR-producing runs, but it still
+  reviews one primary PR.
+- Review prompts and GitHub context currently use the primary PR URL.
 - Merge shepherding is built around one primary PR per issue.
 - Runbooks and skills still emphasize PR creation heavily because recent
   dogfood blockers were PR-path failures.
-- Investigation-only, planning-only, and follow-up-issue workflows are not as
-  prominent as implementation-with-PR workflows.
-
-PR E should remove unconditional PR creation wording and make these first-class:
-
-- Already-satisfied no-op issue.
-- Investigation-only issue.
-- Planning-only issue.
-- Docs/code issue with one PR.
-- Larger issue with multiple PRs.
-- Issue that generates follow-up issues.
+- Investigation-only, planning-only, and follow-up-issue workflows are now
+  documented, but they need dogfood examples before they are as proven as the
+  implementation-with-PR path.
 
 Deterministic PR creation should stay. It is the correct harness capability
 when a PR is needed.
@@ -344,8 +342,8 @@ Refactor-needed deviations:
   runtime repair-loop behavior remains PR F work.
 - Review and feedback loops should escalate less often for mechanical failures
   when policy allows bounded repair.
-- PR-centric wording should be reduced so no-PR and multi-PR issue paths are as
-  legible as one-PR paths.
+- No-PR and multi-PR issue paths are documented, but need dogfood evidence and
+  richer review/merge handling before they are as mature as one-PR paths.
 - Multi-PR review and merge behavior still relies on a primary PR in several
   code paths.
 - Stage 9A durable retry/startup reconstruction remains necessary before true
@@ -384,8 +382,8 @@ Top three refactor-needed deviations:
    losing idempotency or safety.
 2. Keep automation/repair behavior separate from trust mode and add bounded
    high-throughput repair semantics in PR F.
-3. Recenter prompts/docs/review/merge paths on issues, with no-PR and multi-PR
-   paths treated as first-class.
+3. Mature no-PR and multi-PR runtime behavior beyond the current documented
+   handoff/state semantics, especially review and merge target selection.
 
 ## 13. Recommended Next PRs C-G
 
@@ -412,12 +410,10 @@ PR D: High-throughput automation profile definition.
 
 PR E: Recenter the system on issues, not PRs.
 
-- Remove unconditional PR creation wording from workflow docs, templates, and
-  skills.
-- Make no-op, investigation-only, planning-only, one-PR, multi-PR, and
-  follow-up-issue paths explicit.
-- Ensure `WORKFLOW.md` never implies every issue must create a PR.
-- Keep deterministic PR creation as the recommended path when a PR is needed.
+- Done in PR E for workflow docs, templates, skills, runbooks, state tests, and
+  the primary-PR compatibility path.
+- Remaining follow-up: dogfood no-PR, investigation-only, planning-only, and
+  multi-PR examples before broadening review or merge behavior.
 
 PR F: Make review and feedback loops more agent-to-agent, less human-blocking.
 

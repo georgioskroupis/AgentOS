@@ -45,6 +45,9 @@ For each issue, record:
   mode unless a test explicitly says otherwise.
 - Runtime `.agent-os/` data remains ignored and uncommitted.
 - The agent does not create a PR for already-satisfied work.
+- Investigation-only and planning-only work may finish with a handoff and no PR.
+- Larger issue probes may record multiple PRs in `prs[]`; `prUrl` remains only
+  the first-PR compatibility mirror.
 - PR-producing work uses `scripts/agent-create-pr.sh` or explicit
   non-interactive `gh pr create` arguments, not GitHub app/MCP PR creation.
 - The issue reaches the expected Linear state.
@@ -53,9 +56,10 @@ For each issue, record:
 
 | Issue | Type | Expected outcome | Linear comments | Validation JSON | Runs inspect | Workspace lock | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `<issue>` | docs cleanup | PR or already-satisfied | pass/fail | pass/fail | pass/fail | pass/fail | |
-| `<issue>` | CLI help correction | PR | pass/fail | pass/fail | pass/fail | pass/fail | |
+| `<issue>` | docs cleanup | no-op or PR | pass/fail | pass/fail | pass/fail | pass/fail | |
+| `<issue>` | CLI help correction | already-satisfied or PR | pass/fail | pass/fail | pass/fail | pass/fail | |
 | `<issue>` | test improvement | PR | pass/fail | pass/fail | pass/fail | pass/fail | |
+| `<issue>` | investigation/planning | handoff-only or follow-up issue | pass/fail | pass/fail | pass/fail | pass/fail | |
 
 ## Stop Conditions
 
