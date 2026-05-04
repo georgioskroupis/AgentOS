@@ -17,6 +17,8 @@ const approvalRequestFixtureCommand = `node ${JSON.stringify(fixture)} --approva
 const inputRequestFixtureCommand = `node ${JSON.stringify(fixture)} --input-request`;
 const elicitationRequestFixtureCommand = `node ${JSON.stringify(fixture)} --elicitation-request`;
 const prScriptFailureFixtureCommand = `node ${JSON.stringify(fixture)} --pr-script-failure`;
+const nestedOrchestratorFixtureCommand = `node ${JSON.stringify(fixture)} --nested-orchestrator`;
+const exitBeforeCompletionFixtureCommand = `node ${JSON.stringify(fixture)} --exit-before-completion`;
 
 const issue: Issue = {
   id: "issue-1",
@@ -341,6 +343,62 @@ describe("CodexAppServerRunner", () => {
         payload: expect.objectContaining({
           command: expect.stringContaining("scripts/agent-create-pr.sh"),
           exitCode: 1
+        })
+      })
+    );
+  });
+
+  it("fails promptly when the app server exits before turn completion", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-app-server-exit-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, exitBeforeCompletionFixtureCommand);
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Do work before exiting",
+        attempt: null,
+        workspace,
+        config,
+        onEvent() {}
+      })
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: "codex_app_server_closed: exit 42",
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+  });
+
+  it("stops nested orchestrator commands inside agent turns", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-nested-orchestrator-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, nestedOrchestratorFixtureCommand);
+    const events: Array<{ type: string; message?: string; payload?: unknown }> = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Do not start another scheduler",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push({ type: event.type, message: event.message, payload: event.payload });
+        }
+      })
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: "nested_orchestrator_forbidden",
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "codex_command_stop",
+        message: "nested_orchestrator_forbidden",
+        payload: expect.objectContaining({
+          command: expect.stringContaining("agent-os orchestrator once")
         })
       })
     );

@@ -50,6 +50,10 @@ For each issue, record:
   the first-PR compatibility mirror.
 - PR-producing work uses `scripts/agent-create-pr.sh` or explicit
   non-interactive `gh pr create` arguments, not GitHub app/MCP PR creation.
+- Agents do not start nested `agent-os orchestrator once` or
+  `agent-os orchestrator run` processes from inside an AgentOS-managed turn;
+  follow-up/probe issues are linked in the handoff and dispatched by the
+  top-level scheduler.
 - The issue reaches the expected Linear state.
 
 ## Suggested Table
@@ -73,6 +77,7 @@ Pause the dogfood cycle and file a focused fix issue if any of these occur:
 - Trust-mode policy blocks valid work without a clear operator path.
 - PR creation falls back to MCP elicitation instead of the deterministic
   `gh`-based path.
+- An agent starts a nested AgentOS orchestrator from inside a managed turn.
 - Runtime `.agent-os/` data appears in tracked git changes.
 
 ## After the Cycle

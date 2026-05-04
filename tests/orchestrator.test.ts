@@ -54,6 +54,7 @@ describe("orchestrator", () => {
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
         prompt = input.prompt;
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
         return { status: "succeeded" };
       }
     };
@@ -103,12 +104,7 @@ describe("orchestrator", () => {
     };
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
-        await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
-        await writeFile(
-          join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
-          "### Handoff\n\nValidation passed.\n\nPR: https://github.com/o/r/pull/1",
-          "utf8"
-        );
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "### Handoff\n\nValidation passed.\n\nPR: https://github.com/o/r/pull/1");
         return { status: "succeeded" };
       }
     };
@@ -158,12 +154,7 @@ describe("orchestrator", () => {
     };
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
-        await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
-        await writeFile(
-          join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
-          "### Handoff\n\nValidation passed.\n\nPR: https://github.com/o/r/pull/1",
-          "utf8"
-        );
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "### Handoff\n\nValidation passed.\n\nPR: https://github.com/o/r/pull/1");
         return { status: "succeeded" };
       }
     };
@@ -241,7 +232,9 @@ describe("orchestrator", () => {
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
         prompts.push(input.prompt);
-        return prompts.length === 1 ? { status: "failed", error: "boom" } : { status: "succeeded" };
+        if (prompts.length === 1) return { status: "failed", error: "boom" };
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+        return { status: "succeeded" };
       }
     };
 
@@ -410,8 +403,7 @@ describe("orchestrator", () => {
       async run(input): Promise<AgentRunResult> {
         prompts.push(input.prompt);
         if (prompts.length === 2) {
-          await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
-          await writeFile(join(input.workspace.path, ".agent-os", "handoff-AG-1.md"), "AgentOS-Outcome: already-satisfied", "utf8");
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
         }
         return { status: "succeeded" };
       }
@@ -431,6 +423,133 @@ describe("orchestrator", () => {
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain("AgentOS Continuation");
     expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+  });
+
+  it("does not move handoffs with failed validation evidence to Human Review", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-validation-failed-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nagent:\n  max_turns: 1\n  max_retry_attempts: 1\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nAudit {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const upserts: Array<{ body: string; key: string }> = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async upsertComment(_issue, body, key) {
+        upserts.push({ body, key });
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        const runId = input.prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
+        await mkdir(join(input.workspace.path, ".agent-os", "validation"), { recursive: true });
+        await writeFile(
+          join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
+          "AgentOS-Outcome: already-satisfied\nValidation-JSON: .agent-os/validation/AG-1.json",
+          "utf8"
+        );
+        await writeValidationEvidence(join(input.workspace.path, ".agent-os", "validation", "AG-1.json"), {
+          schemaVersion: 1,
+          issueIdentifier: "AG-1",
+          runId,
+          status: "failed",
+          commands: [
+            {
+              name: "npm run agent-check",
+              exitCode: 1,
+              startedAt: "2026-01-01T00:00:00.000Z",
+              finishedAt: "2026-01-01T00:00:01.000Z"
+            }
+          ]
+        });
+        return { status: "succeeded" };
+      }
+    };
+    const logger = new JsonlLogger(repo);
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> In Progress"]);
+    expect(upserts.find((comment) => comment.key === "retry_scheduled:AG-1")?.body).toContain("validation_failed");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state).toMatchObject({
+      phase: "validation",
+      errorCategory: "validation",
+      validation: expect.objectContaining({ status: "failed" })
+    });
+    expect(state.nextRetryAt).toBeTruthy();
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary).toMatchObject({ status: "failed" });
+    expect(summary.error).toContain("validation_failed");
+    const events = await new RunArtifactStore(repo).replay(summary.runId);
+    expect(events.some((event) => event.type === "validation_failed")).toBe(true);
+    expect(events.some((event) => event.type === "run_succeeded")).toBe(false);
+  });
+
+  it("fails and retries when max turns finish without a handoff", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-missing-handoff-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nagent:\n  max_turns: 2\n  max_retry_attempts: 1\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const prompts: string[] = [];
+    const moves: string[] = [];
+    const upserts: Array<{ body: string; key: string }> = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async upsertComment(_issue, body, key) {
+        upserts.push({ body, key });
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        prompts.push(input.prompt);
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(prompts).toHaveLength(2);
+    expect(moves).toEqual(["AG-1 -> In Progress"]);
+    expect(upserts.find((comment) => comment.key === "retry_scheduled:AG-1")?.body).toContain("missing_handoff");
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary).toMatchObject({ status: "failed", error: "missing_handoff" });
   });
 
   it("records already-satisfied no-op handoffs without requiring a PR", async () => {
@@ -460,9 +579,10 @@ describe("orchestrator", () => {
     };
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
-        await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
-        await writeFile(
-          join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
+        await writePassingHandoff(
+          input.workspace.path,
+          "AG-1",
+          input.prompt,
           [
             "AgentOS-Outcome: already-satisfied",
             "",
@@ -471,8 +591,7 @@ describe("orchestrator", () => {
             "Acceptance criteria are already covered by the current codebase.",
             "",
             "Validation: npm run agent-check passed."
-          ].join("\n"),
-          "utf8"
+          ].join("\n")
         );
         return { status: "succeeded" };
       }
@@ -526,9 +645,10 @@ describe("orchestrator", () => {
     };
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
-        await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
-        await writeFile(
-          join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
+        await writePassingHandoff(
+          input.workspace.path,
+          "AG-1",
+          input.prompt,
           [
             "AgentOS-Outcome: implemented",
             "",
@@ -538,8 +658,7 @@ describe("orchestrator", () => {
             "",
             "PR: https://github.com/o/r/pull/1",
             "Follow-up PR: https://github.com/o/r/pull/2"
-          ].join("\n"),
-          "utf8"
+          ].join("\n")
         );
         return { status: "succeeded" };
       }
@@ -1029,3 +1148,25 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("automated review is not approved");
   });
 });
+
+async function writePassingHandoff(workspacePath: string, issueIdentifier: string, prompt: string, body: string): Promise<void> {
+  const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
+  const validationPath = `.agent-os/validation/${issueIdentifier}.json`;
+  await mkdir(join(workspacePath, ".agent-os", "validation"), { recursive: true });
+  await writeFile(join(workspacePath, ".agent-os", `handoff-${issueIdentifier}.md`), `${body}\n\nValidation-JSON: ${validationPath}`, "utf8");
+  const now = new Date().toISOString();
+  await writeValidationEvidence(join(workspacePath, validationPath), {
+    schemaVersion: 1,
+    issueIdentifier,
+    runId,
+    status: "passed",
+    commands: [
+      {
+        name: "npm run agent-check",
+        exitCode: 0,
+        startedAt: now,
+        finishedAt: now
+      }
+    ]
+  });
+}

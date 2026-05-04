@@ -6,7 +6,7 @@ import { issueStateFromHandoff } from "../src/issue-state.js";
 import { JsonlLogger } from "../src/logging.js";
 import { Orchestrator } from "../src/orchestrator.js";
 import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
-import { fakeIssue, FakeRunner, FakeTracker, writeHandoff } from "./fixtures/agentos-fakes.js";
+import { fakeIssue, FakeRunner, FakeTracker, writePassingHandoff } from "./fixtures/agentos-fakes.js";
 
 describe("current AgentOS characterization", () => {
   it("captures current workflow defaults targeted by hardening", async () => {
@@ -78,8 +78,8 @@ describe("current AgentOS characterization", () => {
 
     const issue = fakeIssue();
     const tracker = new FakeTracker([issue], new Map([[issue.id, issue]]));
-    const runner = new FakeRunner(async (workspace) => {
-      await writeHandoff(workspace, issue.identifier, "AgentOS-Outcome: already-satisfied\n\nValidation: characterized.");
+    const runner = new FakeRunner(async (workspace, input) => {
+      await writePassingHandoff(workspace, issue.identifier, input.prompt, "AgentOS-Outcome: already-satisfied\n\nValidation: characterized.");
       return { status: "succeeded" };
     });
     const logger = new JsonlLogger(repo);

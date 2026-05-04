@@ -173,6 +173,18 @@ If a task is blocked, the agent should report:
 - smallest next human decision
 - current validation state
 
+AgentOS treats a handoff as reviewable only after the referenced
+`Validation-JSON` evidence verifies successfully. Missing or failed validation
+evidence is a run failure and stays in the retry/failure path instead of moving
+the issue to `Human Review`. A successful Codex turn that exhausts
+`agent.max_turns` without writing `.agent-os/handoff-<issue>.md` fails as
+`missing_handoff`.
+
+Do not launch `agent-os orchestrator once` or `agent-os orchestrator run` from
+inside an AgentOS-managed agent turn. If an issue needs follow-up or probe
+issues, create/link them in the handoff and let the top-level scheduler own
+dispatch.
+
 ## Issue Outcomes
 
 Issues are the unit of work. A run may produce zero, one, or many pull requests:

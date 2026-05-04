@@ -80,6 +80,24 @@ rl.on("line", (line) => {
       });
       return;
     }
+    if (process.argv.includes("--nested-orchestrator")) {
+      write({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            command: "bin/agent-os orchestrator once --repo . --workflow WORKFLOW.md",
+            status: "inProgress"
+          }
+        }
+      });
+      return;
+    }
+    if (process.argv.includes("--exit-before-completion")) {
+      process.exit(42);
+    }
     write({
       method: "thread/tokenUsage/updated",
       params: {
