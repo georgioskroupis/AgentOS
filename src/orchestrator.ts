@@ -691,6 +691,26 @@ export class Orchestrator {
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
     const state = await stateStore.read(issue.identifier);
     const mergePr = primaryPullRequestUrl(state);
+    if (state && !mergePr && isNoPrHandoffApproved(state)) {
+      await this.commentIssue(
+        issue,
+        [
+          "### AgentOS merge shepherd",
+          "",
+          "No pull request outputs were recorded for this issue. Treating the Linear `Merging` move as approval of the no-PR handoff.",
+          "",
+          "- Result: moving issue to Done"
+        ].join("\n")
+      );
+      await this.moveIssue(issue, this.config.github.doneState);
+      await this.logger.write({
+        type: "merge_no_pr_succeeded",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: "approved no-PR handoff"
+      });
+      return;
+    }
     if (!state || !mergePr) {
       await this.markMergeFailed(issue, "No pull request metadata was found for this issue.");
       return;
@@ -1045,6 +1065,10 @@ export class Orchestrator {
       })
     );
   }
+}
+
+function isNoPrHandoffApproved(state: IssueState): boolean {
+  return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed");
 }
 
 function linearCommentKey(event: string, issueIdentifier: string): string {
