@@ -270,8 +270,7 @@ export class Orchestrator {
         config: this.config,
         signal,
         onEvent: (event) => {
-          const running = this.running.get(issue.id);
-          if (running) running.lastCodexEventAt = Date.now();
+          this.markRunningActivity(issue.id);
           void this.writeRunEvent(runId, { ...event, runId });
         }
       });
@@ -520,7 +519,10 @@ export class Orchestrator {
           workspace,
           config: readOnlyReviewConfig(this.config, workspaceReviewDir),
           signal,
-          onEvent: (event) => void this.logger.write({ ...event, type: `review_${event.type}` })
+          onEvent: (event) => {
+            this.markRunningActivity(issue.id);
+            void this.logger.write({ ...event, type: `review_${event.type}` });
+          }
         });
         if (result.status !== "succeeded") {
           await this.logger.write({
@@ -681,7 +683,10 @@ export class Orchestrator {
         workspace,
         config: this.config,
         signal,
-        onEvent: (event) => void this.logger.write({ ...event, type: `review_fix_${event.type}` })
+        onEvent: (event) => {
+          this.markRunningActivity(issue.id);
+          void this.logger.write({ ...event, type: `review_fix_${event.type}` });
+        }
       });
       if (fixResult.status !== "succeeded") {
         latestState = await this.recordIssueState(issue, {
@@ -861,6 +866,11 @@ export class Orchestrator {
     return runningInState < stateLimit;
   }
 
+  private markRunningActivity(issueId: string): void {
+    const running = this.running.get(issueId);
+    if (running) running.lastCodexEventAt = Date.now();
+  }
+
   private async handleFailedRun(issue: Issue, workspace: Workspace, previousAttempt: number | null, error: string, runId: string): Promise<void> {
     if (isHumanInputStop(error)) {
       this.completedMarkers.set(issue.id, completionMarker(issue));
@@ -931,7 +941,12 @@ export class Orchestrator {
   }
 
   private async markLinearSucceeded(issue: Issue, workspace: Workspace, handoff: string | null, state?: IssueState): Promise<void> {
-    await this.recordIssueState(issue, { phase: "completed" });
+    await this.recordIssueState(issue, {
+      phase: "completed",
+      lastError: undefined,
+      errorCategory: undefined,
+      nextRetryAt: undefined
+    });
     const reviewLine = state?.reviewStatus
       ? `\n\nAutomated review status: \`${state.reviewStatus}\`${state.reviewIteration ? ` after iteration ${state.reviewIteration}` : ""}.`
       : "";
