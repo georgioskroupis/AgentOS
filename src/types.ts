@@ -11,6 +11,8 @@ export type AutomationRepairPolicy = "conservative" | "mechanical-first";
 export type PullRequestRole = "primary" | "supporting" | "docs" | "follow-up" | "do-not-merge";
 export type ReviewTargetMode = "merge-eligible" | "primary";
 export type MergeTargetMode = "primary";
+export type HumanDecisionType = "approve_as_is" | "fix_findings" | "accept_risk" | "split_follow_up" | "proceed_to_merge_after_supervisor_fix";
+export type HumanDecisionFindingsState = "resolved" | "accepted" | "open" | "unknown";
 
 export interface HarnessChange {
   action: "add" | "overwrite" | "exists" | "missing" | "invalid";
@@ -194,9 +196,18 @@ export interface IssueTracker {
   fetchCandidates(activeStates: string[]): Promise<Issue[]>;
   fetchIssueStates(issueIds: string[]): Promise<Map<string, Issue | null>>;
   fetchTerminalIssues?(terminalStates: string[]): Promise<Issue[]>;
+  fetchIssueComments?(issueIdentifierOrId: string, limit?: number): Promise<IssueComment[]>;
   comment?(issueIdentifierOrId: string, body: string): Promise<void>;
   upsertComment?(issueIdentifierOrId: string, body: string, key: string): Promise<void>;
   move?(issueIdentifierOrId: string, stateName: string): Promise<void>;
+}
+
+export interface IssueComment {
+  id: string;
+  body: string;
+  author?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface IssueState {
@@ -235,11 +246,14 @@ export interface IssueState {
   lastFixedSha?: string | null;
   lastHumanFeedbackAt?: string | null;
   humanOverrideAt?: string | null;
+  humanDecisions?: HumanDecisionState[];
+  lastHumanDecision?: HumanDecisionState | null;
   reviewTargetMode?: ReviewTargetMode;
   reviewTargetUrls?: string[];
   mergeTargetUrl?: string | null;
   mergeTargetRole?: PullRequestRole | null;
   mergeCleanupWarnings?: string[];
+  appProof?: AppProofState;
   validation?: ValidationState;
   updatedAt: string;
 }
@@ -249,6 +263,31 @@ export interface PullRequestRef {
   discoveredAt: string;
   source: "handoff" | "legacy" | "manual";
   role?: PullRequestRole;
+}
+
+export interface AppProofState {
+  updatedAt: string;
+  artifacts: AppProofArtifact[];
+}
+
+export interface AppProofArtifact {
+  label: string;
+  value: string;
+  source: "handoff" | "manual";
+}
+
+export interface HumanDecisionState {
+  type: HumanDecisionType;
+  decidedAt: string;
+  source: "linear-comment" | "handoff" | "manual";
+  actor?: string | null;
+  commentId?: string;
+  body?: string;
+  prHeadSha?: string | null;
+  validationEvidence?: string | null;
+  ciState?: "passed" | "failed" | "pending" | "unknown" | null;
+  findings?: HumanDecisionFindingsState;
+  summary?: string;
 }
 
 export interface ValidationState {
@@ -295,6 +334,8 @@ export type LifecycleStatus =
   | "implementation_failure"
   | "review_escalation"
   | "human_continuation"
+  | "supervisor_continuation"
+  | "externally_fixed"
   | "merge_success"
   | "post_merge_cleanup_warning"
   | "terminal_linear"

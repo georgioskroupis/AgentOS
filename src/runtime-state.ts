@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { exists, readText, writeTextAtomicEnsuringDir } from "./fs-utils.js";
+import type { DaemonPreflightResult } from "./env.js";
 import type { Issue, RunErrorCategory, RunPhase } from "./types.js";
 
 export const RUNTIME_STATE_SCHEMA_VERSION = 1;
@@ -13,6 +14,11 @@ export interface RuntimeDaemonState {
   workflowPath: string;
   freshnessStatus?: "fresh" | "main_advanced";
   freshnessMessage?: string | null;
+  preflightStatus?: DaemonPreflightResult["status"];
+  preflightMessage?: string | null;
+  repoEnvPath?: string | null;
+  repoEnvStatus?: DaemonPreflightResult["repoEnvStatus"];
+  credentialPreflight?: DaemonPreflightResult;
 }
 
 export interface RuntimeActiveRun {

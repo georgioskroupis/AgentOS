@@ -7,6 +7,7 @@ Use this as a lightweight rubric for harnessed repositories.
 | Context | `AGENTS.md`, architecture, workflow, and product docs exist |
 | Validation | One local command verifies the common quality gates |
 | Workflow | Ticket lifecycle and handoff expectations are documented |
+| Application legibility | Start, health, smoke, logs, metrics, traces, CI logs, and UI/browser proof are documented when applicable |
 | Skills | Planning, implementation, bug fixing, review, CI diagnostics, QA smoke, docs, tests, and cleanup workflows are reusable and versioned |
 | Safety | Public behavior, dependencies, and security changes require justification |
 | Orchestration | Linear polling, lifecycle comments, repo-local tracker tools, retries, workspace isolation, audit/no-op handoff, Wiggum review, merge shepherding, and registry-wide scheduling/status are executable |
@@ -17,6 +18,8 @@ Use this as a lightweight rubric for harnessed repositories.
 - `ARCHITECTURE.md`
 - `WORKFLOW.md`
 - `docs/product/README.md`
+- `docs/quality/APP_LEGIBILITY.md`
+- `docs/quality/PROOF_OF_WORK.md`
 - `docs/quality/QUALITY_SCORE.md`
 - `scripts/agent-check.sh`
 - `.agents/skills/fix-bug/SKILL.md`

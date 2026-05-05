@@ -10,6 +10,8 @@ AgentOS combines two layers:
 Start with:
 
 - `docs/product/README.md`
+- `docs/quality/APP_LEGIBILITY.md`
+- `docs/quality/PROOF_OF_WORK.md`
 - `docs/architecture/AGENT_OS.md`
 - `docs/runbooks/LINEAR_SETUP.md`
 - `docs/runbooks/ROLLOUT.md`

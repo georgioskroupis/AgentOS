@@ -9,6 +9,7 @@ import {
   type RegistryRuntimeState
 } from "./registry.js";
 import { Orchestrator, type OrchestratorRunOptions, type OrchestratorRunSummary } from "./orchestrator.js";
+import { resolveRepoEnv } from "./env.js";
 import { RuntimeStateStore, type RuntimeState } from "./runtime-state.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { ProjectConfig, ServiceConfig } from "./types.js";
@@ -191,7 +192,8 @@ export class RegistryOrchestrator {
   private async resolveContext(project: ProjectConfig): Promise<RegistryProjectContext> {
     const paths = resolveRegistryProjectPaths(project, this.registryPath);
     const workflow = await loadWorkflow(paths.workflowPath);
-    const config = resolveServiceConfig(workflow, this.options.env);
+    const resolvedEnv = await resolveRepoEnv(paths.repoRoot, this.options.env ?? process.env);
+    const config = resolveServiceConfig(workflow, resolvedEnv.env);
     const registryLimit = project.maxConcurrency ?? config.agent.maxConcurrentAgents;
     const maxConcurrency = Math.max(1, Math.min(config.agent.maxConcurrentAgents, registryLimit));
     return {

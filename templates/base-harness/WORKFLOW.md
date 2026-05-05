@@ -159,10 +159,14 @@ When assigned a ticket:
    the missing delta.
 5. Implement the smallest coherent change only when work is still needed.
 6. Run validation.
-7. Open or update a PR only when the issue produced repo changes and the
+7. Capture application proof when runtime behavior is in scope. Use
+   `scripts/agent-start-app.sh`, `scripts/agent-smoke-test.sh`,
+   `scripts/agent-capture-logs.sh`, and `scripts/agent-capture-proof.sh` when
+   the project has configured the matching app-legibility commands.
+8. Open or update a PR only when the issue produced repo changes and the
    workflow expects a PR.
-8. Write `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, artifacts, risks, and PR links when PRs exist.
-9. Follow `lifecycle.mode`: in the default `orchestrator-owned` mode, do not
+9. Write `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, artifacts, app proof, risks, and PR links when PRs exist. Use `App-Proof:` or `Proof-Artifact:` lines for proof files or URLs that should be visible in `agent-os inspect`.
+10. Follow `lifecycle.mode`: in the default `orchestrator-owned` mode, do not
    move or comment on the Linear issue directly; the AgentOS orchestrator owns
    Linear lifecycle updates.
 
@@ -308,12 +312,16 @@ Responsibilities:
 4. If partially satisfied, preserve the existing implementation and change only
    the missing delta.
 5. Run `./scripts/agent-check.sh`.
-6. Open or update a GitHub PR only when the issue produced repo changes and the
+6. Capture application proof when runtime behavior is in scope. Use
+   `scripts/agent-start-app.sh`, `scripts/agent-smoke-test.sh`,
+   `scripts/agent-capture-logs.sh`, and `scripts/agent-capture-proof.sh` when
+   the project has configured the matching app-legibility commands.
+7. Open or update a GitHub PR only when the issue produced repo changes and the
    workflow expects a PR, using `scripts/agent-create-pr.sh` or an explicit
    non-interactive `gh pr create` command. Do not use GitHub app/MCP PR creation
    tools.
-7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, final authoritative `status`, and command entries for every `./scripts/agent-check.sh` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
-8. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`.
-9. Follow `lifecycle.mode`: in the default `orchestrator-owned` mode, do not
+8. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, final authoritative `status`, and command entries for every `./scripts/agent-check.sh` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
+9. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, app proof, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`. Use `App-Proof:` or `Proof-Artifact:` lines for proof files or URLs that should be visible in `agent-os inspect`.
+10. Follow `lifecycle.mode`: in the default `orchestrator-owned` mode, do not
    move or comment on the Linear issue directly; the AgentOS orchestrator owns
    Linear lifecycle updates.

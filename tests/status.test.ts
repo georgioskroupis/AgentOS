@@ -20,6 +20,20 @@ describe("issue inspection", () => {
           issueId: "issue-1",
           issueIdentifier: "AG-1",
           phase: "review",
+          reviewStatus: "human_required",
+          appProof: {
+            updatedAt: "2026-05-01T00:02:30.000Z",
+            artifacts: [{ label: "app-proof", value: ".agent-os/proof/latest-proof.md", source: "handoff" }]
+          },
+          lastHumanDecision: {
+            type: "fix_findings",
+            source: "linear-comment",
+            actor: "Supervisor",
+            decidedAt: "2026-05-01T00:02:45.000Z",
+            prHeadSha: "abc123",
+            ciState: "pending",
+            findings: "open"
+          },
           validation: {
             status: "passed",
             finalStatus: "passed",
@@ -52,6 +66,11 @@ describe("issue inspection", () => {
     const output = await inspectIssue(repo, "AG-1");
 
     expect(output).toContain("Validation: passed (final: passed)");
+    expect(output).toContain("Human decision: fix_findings");
+    expect(output).toContain("Decision PR head SHA: abc123");
+    expect(output).toContain("App proof: 2026-05-01T00:02:30.000Z");
+    expect(output).toContain("app-proof: .agent-os/proof/latest-proof.md");
+    expect(output).toContain("Next safe action: redispatch from Todo/In Progress");
     expect(output).toContain("Accepted validation commands:");
     expect(output).toContain("npm run agent-check: exitCode 0");
     expect(output).toContain("Failed historical attempts:");
@@ -118,7 +137,11 @@ describe("issue inspection", () => {
       currentMainGitSha: "new",
       workflowPath: join(repo, "WORKFLOW.md"),
       freshnessStatus: "main_advanced",
-      freshnessMessage: "main advanced from old to new; restart required"
+      freshnessMessage: "main advanced from old to new; restart required",
+      preflightStatus: "missing_credentials",
+      preflightMessage: "tracker.api_key is required after environment resolution",
+      repoEnvPath: join(repo, ".agent-os", "env"),
+      repoEnvStatus: "missing"
     });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -176,6 +199,8 @@ describe("issue inspection", () => {
     expect(output).toContain("Config: trust=danger; lifecycle=orchestrator-owned; automation=high-throughput/mechanical-first");
     expect(output).toContain("Error: tracker_network - fetch failed");
     expect(output).toContain("Daemon: main_advanced - main advanced from old to new; restart required");
+    expect(output).toContain("Daemon preflight: missing_credentials - tracker.api_key is required after environment resolution");
+    expect(output).toContain("Repo env: missing");
     expect(output).toContain("AG-2: waiting on CI - 1 GitHub check(s) still pending");
     expect(output).toContain("AG-1: local full-suite validation timing failure recorded separately; focused test passed; GitHub CI passed at abc123");
   });

@@ -29,6 +29,21 @@ For every code-changing task:
 10. Prepare a handoff with what changed or why no change was needed, tests run,
     risks, PR links when they exist, and follow-ups.
 
+## Application Legibility Checklist
+
+For each project, keep `docs/quality/APP_LEGIBILITY.md` current enough that an
+agent can find or run the relevant:
+
+- start command;
+- health check;
+- smoke test;
+- log capture;
+- metrics access;
+- trace access;
+- CI log access;
+- UI screenshot/video proof if applicable;
+- browser/DOM inspection if applicable.
+
 ## Hard Rules
 
 - Do not introduce new production dependencies without justification.

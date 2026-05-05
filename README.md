@@ -113,6 +113,11 @@ Continuous mode is:
 bin/agent-os orchestrator run --repo <repo> --workflow WORKFLOW.md
 ```
 
+For daemon restarts, place required repo-local environment such as
+`LINEAR_API_KEY` in `.agent-os/env`. The orchestrator loads it before resolving
+`WORKFLOW.md`, records missing/malformed/stale/loaded status in daemon health,
+and refuses dispatch when required credentials are unavailable.
+
 Registry-wide continuous mode is:
 
 ```bash

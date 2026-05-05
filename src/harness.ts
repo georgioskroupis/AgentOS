@@ -116,11 +116,20 @@ async function contractChecks(targetRoot: string, workflowPath = "WORKFLOW.md"):
         changes.push({ action: "invalid", path: workflowPath, message: `missing Wiggum review contract snippet: ${snippet}` });
       }
     }
+    for (const snippet of ["scripts/agent-start-app.sh", "scripts/agent-smoke-test.sh", "scripts/agent-capture-logs.sh", "scripts/agent-capture-proof.sh", "App-Proof:", "Proof-Artifact:"]) {
+      if (!text.includes(snippet)) {
+        changes.push({ action: "invalid", path: workflowPath, message: `missing application legibility contract snippet: ${snippet}` });
+      }
+    }
   }
 
   for (const path of [
     "scripts/agent-check.sh",
     "scripts/agent-create-pr.sh",
+    "scripts/agent-start-app.sh",
+    "scripts/agent-smoke-test.sh",
+    "scripts/agent-capture-logs.sh",
+    "scripts/agent-capture-proof.sh",
     "fix-bug",
     "implement-feature",
     "review-pr",

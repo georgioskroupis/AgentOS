@@ -10,6 +10,7 @@ Use this rubric to make quality expectations explicit.
 | Architecture | Changes respect documented boundaries |
 | Docs | Behavior and public interfaces stay documented |
 | Security | Secrets, auth, and data handling are reviewed when touched |
+| Application legibility | Start, health, smoke, logs, metrics, traces, CI logs, and UI/browser proof are documented when applicable |
 
 ## Minimum Gate
 
@@ -18,3 +19,6 @@ Run:
 ```bash
 ./scripts/agent-check.sh
 ```
+
+Also fill in `docs/quality/APP_LEGIBILITY.md` for the project and attach
+`App-Proof:` or `Proof-Artifact:` lines to handoffs when runtime proof matters.

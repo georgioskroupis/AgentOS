@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ensureDir, exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
-import type { Issue, IssueState, PullRequestRef, PullRequestRole, ReviewTargetMode } from "./types.js";
+import type { AppProofState, HumanDecisionState, HumanDecisionType, Issue, IssueComment, IssueState, PullRequestRef, PullRequestRole, ReviewTargetMode } from "./types.js";
 
 type IssueOutcome = NonNullable<IssueState["outcome"]>;
 export const ISSUE_STATE_SCHEMA_VERSION = 1;
@@ -48,6 +48,8 @@ export class IssueStateStore {
       ...(current ?? { schemaVersion: ISSUE_STATE_SCHEMA_VERSION, issueId: patch.issueId, issueIdentifier: patch.issueIdentifier, updatedAt: new Date().toISOString() }),
       ...patchState,
       prs: mergePullRequestRefs(current?.prs ?? [], patchState.prs ?? []),
+      humanDecisions: mergeHumanDecisions(current?.humanDecisions ?? [], patchState.humanDecisions ?? []),
+      appProof: mergeAppProof(current?.appProof, patchState.appProof),
       updatedAt: new Date().toISOString()
     });
     await this.write(next);
@@ -62,7 +64,9 @@ export class IssueStateStore {
 export function issueStateFromHandoff(issue: Issue, handoff: string): IssueState | null {
   const prs = extractPullRequestRefs(handoff);
   const outcome = extractOutcome(handoff);
-  if (prs.length === 0 && !outcome) return null;
+  const appProof = extractAppProof(handoff);
+  const humanDecision = extractHumanDecision(handoff, { source: "handoff" });
+  if (prs.length === 0 && !outcome && !appProof && !humanDecision) return null;
   const updatedAt = new Date().toISOString();
   const discovered = prs.map((pr) => ({ ...pr, discoveredAt: updatedAt, source: "handoff" as const }));
   return {
@@ -71,6 +75,8 @@ export function issueStateFromHandoff(issue: Issue, handoff: string): IssueState
     issueIdentifier: issue.identifier,
     ...(discovered.length ? { prs: discovered, prUrl: discovered[0].url } : {}),
     ...(outcome ? { outcome } : {}),
+    ...(appProof ? { appProof } : {}),
+    ...(humanDecision ? { humanDecisions: [humanDecision], lastHumanDecision: humanDecision } : {}),
     ...(discovered.length ? { reviewStatus: "pending" as const, reviewIteration: 0 } : {}),
     updatedAt
   };
@@ -194,9 +200,133 @@ export function extractOutcome(text: string): IssueOutcome | null {
   return null;
 }
 
+export function extractAppProof(text: string): AppProofState | null {
+  const artifacts: AppProofState["artifacts"] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/^(App-Proof|Proof-Artifact):\s*(.+)$/i);
+    if (!match) continue;
+    const value = match[2].trim();
+    if (!value) continue;
+    artifacts.push({
+      label: match[1].toLowerCase() === "app-proof" ? "app-proof" : "proof-artifact",
+      value,
+      source: "handoff" as const
+    });
+  }
+  return artifacts.length ? { updatedAt: new Date().toISOString(), artifacts } : null;
+}
+
+export function extractHumanDecision(
+  text: string,
+  metadata: {
+    source: HumanDecisionState["source"];
+    actor?: string | null;
+    commentId?: string;
+    createdAt?: string | null;
+  }
+): HumanDecisionState | null {
+  const fields = decisionFields(text);
+  const rawType = fields.get("agentos-human-decision") ?? fields.get("human-decision") ?? fields.get("decision-type");
+  const type = normalizeHumanDecisionType(rawType);
+  if (!type) return null;
+  const decidedAt = metadata.createdAt && !Number.isNaN(Date.parse(metadata.createdAt)) ? metadata.createdAt : new Date().toISOString();
+  return {
+    type,
+    decidedAt,
+    source: metadata.source,
+    ...(metadata.actor !== undefined ? { actor: metadata.actor } : {}),
+    ...(metadata.commentId ? { commentId: metadata.commentId } : {}),
+    body: text.trim().slice(0, 2000),
+    prHeadSha: fields.get("pr-head-sha") ?? fields.get("head-sha") ?? null,
+    validationEvidence: fields.get("validation-json") ?? fields.get("validation-evidence") ?? null,
+    ciState: normalizeCiState(fields.get("ci-state") ?? fields.get("ci")),
+    findings: normalizeFindingsState(fields.get("findings") ?? fields.get("finding-state")),
+    summary: fields.get("decision-summary") ?? fields.get("summary") ?? undefined
+  };
+}
+
+export function extractHumanDecisionsFromComments(comments: IssueComment[]): HumanDecisionState[] {
+  return comments
+    .map((comment) =>
+      extractHumanDecision(comment.body, {
+        source: "linear-comment",
+        actor: comment.author,
+        commentId: comment.id,
+        createdAt: comment.createdAt ?? comment.updatedAt
+      })
+    )
+    .filter((decision): decision is HumanDecisionState => Boolean(decision))
+    .sort((a, b) => a.decidedAt.localeCompare(b.decidedAt));
+}
+
+export function latestHumanDecision(decisions: HumanDecisionState[] | undefined): HumanDecisionState | null {
+  if (!decisions?.length) return null;
+  const sorted = [...decisions].sort((a, b) => a.decidedAt.localeCompare(b.decidedAt));
+  return sorted[sorted.length - 1] ?? null;
+}
+
 function normalizePullRequestRefs(existing: PullRequestRef[], legacyUrl?: string | null, updatedAt = new Date().toISOString()): PullRequestRef[] {
   const legacy = legacyUrl ? [{ url: legacyUrl, discoveredAt: updatedAt, source: "legacy" as const }] : [];
   return mergePullRequestRefs(existing, legacy);
+}
+
+function mergeHumanDecisions(existing: HumanDecisionState[], incoming: HumanDecisionState[]): HumanDecisionState[] | undefined {
+  const byKey = new Map<string, HumanDecisionState>();
+  for (const decision of [...existing, ...incoming]) {
+    byKey.set(humanDecisionKey(decision), decision);
+  }
+  const merged = [...byKey.values()].sort((a, b) => a.decidedAt.localeCompare(b.decidedAt));
+  return merged.length ? merged : undefined;
+}
+
+function humanDecisionKey(decision: HumanDecisionState): string {
+  return decision.commentId ? `comment:${decision.commentId}` : `${decision.source}:${decision.decidedAt}:${decision.type}:${decision.body ?? ""}`;
+}
+
+function mergeAppProof(existing: AppProofState | undefined, incoming: AppProofState | undefined): AppProofState | undefined {
+  const artifacts = [...(existing?.artifacts ?? []), ...(incoming?.artifacts ?? [])];
+  const byValue = new Map<string, AppProofState["artifacts"][number]>();
+  for (const artifact of artifacts) byValue.set(`${artifact.label}:${artifact.value}`, artifact);
+  if (byValue.size === 0) return undefined;
+  return {
+    updatedAt: incoming?.updatedAt ?? existing?.updatedAt ?? new Date().toISOString(),
+    artifacts: [...byValue.values()]
+  };
+}
+
+function decisionFields(text: string): Map<string, string> {
+  const fields = new Map<string, string>();
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z][A-Za-z0-9 -]*):\s*(.+)$/);
+    if (!match) continue;
+    fields.set(match[1].trim().toLowerCase().replace(/\s+/g, "-"), match[2].trim());
+  }
+  return fields;
+}
+
+function normalizeHumanDecisionType(value: string | null | undefined): HumanDecisionType | null {
+  const normalized = value?.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized) return null;
+  if (["approve", "approved", "approve_as_is", "approve_as_is_no_change"].includes(normalized)) return "approve_as_is";
+  if (["fix", "fix_findings", "changes_requested", "address_feedback"].includes(normalized)) return "fix_findings";
+  if (["accept_risk", "risk_accepted", "accepted_risk"].includes(normalized)) return "accept_risk";
+  if (["split_follow_up", "split_followup", "follow_up", "followup"].includes(normalized)) return "split_follow_up";
+  if (["proceed_to_merge_after_supervisor_fix", "merge_after_supervisor_fix", "supervisor_fixed", "externally_fixed"].includes(normalized)) {
+    return "proceed_to_merge_after_supervisor_fix";
+  }
+  return null;
+}
+
+function normalizeCiState(value: string | null | undefined): HumanDecisionState["ciState"] {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "passed" || normalized === "failed" || normalized === "pending") return normalized;
+  return value ? "unknown" : null;
+}
+
+function normalizeFindingsState(value: string | null | undefined): HumanDecisionState["findings"] {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "resolved" || normalized === "accepted" || normalized === "open") return normalized;
+  return value ? "unknown" : undefined;
 }
 
 function assignDefaultPullRequestRoles<T extends { url: string; role?: PullRequestRole }>(refs: T[]): Array<T & { role: PullRequestRole }> {

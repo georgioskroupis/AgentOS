@@ -28,6 +28,24 @@ bin/agent-os inspect <issue> --repo .
 bin/agent-os runs inspect <run-id> --repo .
 ```
 
+## Daemon Environment Preflight
+
+For controlled restarts, persist required daemon environment in
+`.agent-os/env` inside the target repo:
+
+```bash
+LINEAR_API_KEY=lin_...
+AGENT_OS_SOURCE_REPO=/path/to/agent-os
+```
+
+`agent-os orchestrator once`, `agent-os orchestrator run`, registry
+orchestration, and setup load this file before workflow environment resolution.
+Startup health reports whether the file is missing, malformed, stale, or
+loaded, and the daemon refuses to dispatch when required Linear credentials,
+GitHub merge command configuration, or Codex command configuration are missing.
+Use `bin/agent-os status --registry` or `bin/agent-os inspect <issue> --repo .`
+to see the recorded preflight and next safe action.
+
 ## Checklist
 
 For each issue, record:
@@ -40,6 +58,9 @@ For each issue, record:
   warnings.
 - Artifact hashes stay valid; `runs inspect` reports no unexpected mismatch.
 - Workspace locks do not block normal reuse or cleanup.
+- `.agent-os/env` is loaded when present, and missing, malformed, or placeholder
+  credentials are reported as daemon preflight health rather than product
+  failures.
 - Strict trust mode does not block legitimate small work.
 - Lifecycle smoke checks run in default `lifecycle.mode: orchestrator-owned`
   mode unless a test explicitly says otherwise.

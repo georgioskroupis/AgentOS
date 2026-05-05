@@ -2,12 +2,15 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
+import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPreflightResult, type RepoEnvLoadResult } from "./env.js";
 import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
 import {
   extractPullRequestUrls,
+  extractHumanDecisionsFromComments,
   issueStateFromHandoff,
   IssueStateStore,
+  latestHumanDecision,
   mergeEligiblePullRequests,
   mergeTargetAmbiguityReason,
   mergeTargetPullRequest,
@@ -38,7 +41,7 @@ import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, Issue, IssueState, IssueTracker, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 
 export interface OrchestratorOptions {
@@ -99,6 +102,9 @@ export class Orchestrator {
   private daemonStartGitSha: string | null = null;
   private daemonStartMainGitSha: string | null = null;
   private freshnessWarningMarker: string | null = null;
+  private repoEnv: RepoEnvLoadResult | null = null;
+  private preflight: DaemonPreflightResult | null = null;
+  private preflightWarningMarker: string | null = null;
 
   constructor(private readonly options: OrchestratorOptions) {
     this.logger = options.logger ?? new JsonlLogger(resolve(options.repoRoot));
@@ -107,8 +113,11 @@ export class Orchestrator {
   }
 
   async reload(): Promise<void> {
+    const resolvedEnv = await resolveRepoEnv(resolve(this.options.repoRoot), this.options.env ?? process.env);
+    this.repoEnv = resolvedEnv.repoEnv;
     this.workflow = await loadWorkflow(this.options.workflowPath);
-    this.config = resolveServiceConfig(this.workflow, this.options.env);
+    this.config = resolveServiceConfig(this.workflow, resolvedEnv.env);
+    this.preflight = daemonPreflight(this.config, this.repoEnv);
     if (this.options.maxConcurrentAgents != null && Number.isInteger(this.options.maxConcurrentAgents) && this.options.maxConcurrentAgents > 0) {
       this.config.agent.maxConcurrentAgents = Math.min(this.config.agent.maxConcurrentAgents, this.options.maxConcurrentAgents);
     }
@@ -129,6 +138,14 @@ export class Orchestrator {
     await this.reconstructStartupState();
     await this.cleanupTerminalWorkspaces();
     await this.reconcile();
+    if (this.preflight && !preflightAllowsDispatch(this.preflight)) {
+      await this.logger.write({
+        type: "daemon_preflight_failed",
+        message: this.preflight.message,
+        payload: this.preflight
+      });
+      return { dispatched: 0, retryDispatched: 0, candidateDispatched: 0, candidates: 0 };
+    }
     validateDispatchConfig(this.config);
     retryDispatched = await this.dispatchDueRetries(remainingDispatchCapacity());
     dispatched += retryDispatched;
@@ -192,7 +209,12 @@ export class Orchestrator {
       currentMainGitSha,
       workflowPath: this.workflow.workflowPath,
       freshnessStatus: mainAdvanced ? "main_advanced" : "fresh",
-      freshnessMessage
+      freshnessMessage,
+      preflightStatus: this.preflight?.status,
+      preflightMessage: this.preflight?.message ?? null,
+      repoEnvPath: this.preflight?.repoEnvPath ?? this.repoEnv?.path ?? null,
+      repoEnvStatus: this.preflight?.repoEnvStatus ?? this.repoEnv?.status,
+      credentialPreflight: this.preflight ?? undefined
     });
     if (freshnessMessage && this.freshnessWarningMarker !== freshnessMessage) {
       this.freshnessWarningMarker = freshnessMessage;
@@ -207,6 +229,14 @@ export class Orchestrator {
           currentGitSha,
           currentMainGitSha
         }
+      });
+    }
+    if (this.preflight && !preflightAllowsDispatch(this.preflight) && this.preflightWarningMarker !== this.preflight.message) {
+      this.preflightWarningMarker = this.preflight.message;
+      await this.logger.write({
+        type: "daemon_preflight_warning",
+        message: this.preflight.message,
+        payload: this.preflight
       });
     }
   }
@@ -353,6 +383,21 @@ export class Orchestrator {
       messages.push(`classified stale running run for ${issue.identifier} as already merged`);
       return { stale: true, terminal: true, retryRebuilt: false, messages };
     }
+    if (isSupervisorContinuationPaused(state)) {
+      if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; supervisor continuation is active`).catch(() => undefined);
+      await this.recordIssueState(issue, {
+        phase: "human-required",
+        activeRunId: undefined,
+        nextRetryAt: undefined,
+        retryAttempt: undefined,
+        stopReason: `${reason}; supervisor continuation is active`,
+        lifecycleStatus: state?.lifecycleStatus
+      });
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      messages.push(`cleared stale running run for ${issue.identifier}: supervisor continuation is active`);
+      return { stale: true, terminal: false, retryRebuilt: false, messages };
+    }
     if (state && isLocallySettledIssueState(state)) {
       if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; local issue state is ${state.phase}`).catch(() => undefined);
       await this.recordIssueState(issue, {
@@ -464,8 +509,20 @@ export class Orchestrator {
       });
       return null;
     }
-    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
+    let state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
+    state = await this.ingestHumanDecisions(latest, state);
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
+      return null;
+    }
+    if (isSupervisorContinuationPaused(state)) {
+      await this.runtimeState.clearIssue(latest.id);
+      this.retries.delete(latest.id);
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: latest.id,
+        issueIdentifier: latest.identifier,
+        message: "supervisor continuation or external fix is active"
+      });
       return null;
     }
     return latest;
@@ -480,6 +537,7 @@ export class Orchestrator {
     if (!isStateIn(latest.state, runningAllowedStates(this.config))) return `issue_no_longer_dispatchable:${latest.state}`;
     const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
     if (await this.hasAlreadyMergedPullRequest(state)) return "pull_request_already_merged";
+    if (isSupervisorContinuationPaused(state)) return "supervisor_continuation_active";
     return null;
   }
 
@@ -823,6 +881,7 @@ export class Orchestrator {
       "Include this run ID and the current `git rev-parse HEAD` value in the validation evidence JSON."
     ].join("\n");
     const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
+    const linearReentry = await this.linearReentryContext(issue, state);
     const continuation = turnNumber > 1
       ? [
           "",
@@ -833,12 +892,13 @@ export class Orchestrator {
         ].join("\n")
       : "";
     const existingPr = primaryPullRequestUrl(state);
-    if (!existingPr || issue.state.toLowerCase() !== "todo") return `${base}${runContext}${continuation}`;
+    if (!existingPr || issue.state.toLowerCase() !== "todo") return `${base}${runContext}${linearReentry}${continuation}`;
 
     const feedback = await this.githubFeedbackSummary(existingPr).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
     return [
       base,
       runContext,
+      linearReentry,
       continuation,
       "",
       "## Existing PR Feedback Re-entry",
@@ -851,6 +911,58 @@ export class Orchestrator {
       "",
       "Update the existing branch and PR, rerun validation, and refresh the handoff file."
     ].join("\n");
+  }
+
+  private async linearReentryContext(issue: Issue, currentState: IssueState | null): Promise<string> {
+    if (!this.tracker.fetchIssueComments) return "";
+    const comments = await this.tracker.fetchIssueComments(issue.identifier, 10).catch(async (error: Error) => {
+      await this.logger.write({
+        type: "linear_comment_read_failed",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: error.message
+      });
+      return [];
+    });
+    const state = await this.ingestHumanDecisions(issue, currentState, comments);
+    if (comments.length === 0 && !state?.lastHumanDecision) return "";
+    const latestDecision = state?.lastHumanDecision ?? latestHumanDecision(state?.humanDecisions);
+    return [
+      "",
+      "## Linear Human Decision Re-entry",
+      "",
+      "Recent Linear comments and structured human decisions are re-entry input. A structured human decision has precedence over stale handoff state when they conflict.",
+      latestDecision ? formatHumanDecision(latestDecision) : "Structured human decision: none recorded.",
+      state?.reviewStatus ? `Review status from issue state: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : null,
+      state?.reviewTargetUrls?.length ? `Review targets: ${state.reviewTargetUrls.join(", ")}` : null,
+      "",
+      "Recent Linear comments:",
+      ...comments.slice(-5).map((comment) => formatLinearComment(comment.id, comment.author, comment.createdAt ?? comment.updatedAt, comment.body))
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+  }
+
+  private async ingestHumanDecisions(issue: Issue, currentState: IssueState | null, comments?: IssueComment[]): Promise<IssueState | null> {
+    if (!this.tracker.fetchIssueComments && !comments) return currentState;
+    const fetchedComments = comments ?? (await this.tracker.fetchIssueComments!(issue.identifier, 20).catch(() => []));
+    const decisions = extractHumanDecisionsFromComments(fetchedComments);
+    if (decisions.length === 0) return currentState;
+    const latestDecision = latestHumanDecision(decisions);
+    const state = await this.recordIssueState(issue, {
+      humanDecisions: decisions,
+      lastHumanDecision: latestDecision,
+      lastHumanFeedbackAt: latestDecision?.decidedAt ?? new Date().toISOString(),
+      lifecycleStatus: latestDecision ? lifecycleStatusForHumanDecision(latestDecision) : currentState?.lifecycleStatus
+    });
+    await this.logger.write({
+      type: "human_decision_recorded",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: latestDecision?.type ?? "unknown",
+      payload: { decisions }
+    });
+    return state;
   }
 
   private async githubFeedbackSummary(prUrl: string): Promise<string> {
@@ -1927,6 +2039,50 @@ function isLocallySettledIssueState(state: IssueState): boolean {
   return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required";
 }
 
+function isSupervisorContinuationPaused(state: IssueState | null): boolean {
+  if (!state?.lifecycleStatus) return false;
+  if (!["human_continuation", "supervisor_continuation", "externally_fixed"].includes(state.lifecycleStatus)) return false;
+  const decision = state.lastHumanDecision ?? latestHumanDecision(state.humanDecisions);
+  return decision?.type !== "fix_findings";
+}
+
+function lifecycleStatusForHumanDecision(decision: HumanDecisionState): LifecycleStatus {
+  if (decision.type === "fix_findings") return "human_continuation";
+  if (decision.type === "proceed_to_merge_after_supervisor_fix") return "externally_fixed";
+  return "supervisor_continuation";
+}
+
+function formatHumanDecision(decision: HumanDecisionState): string {
+  return [
+    "Structured human decision:",
+    `- Type: ${decision.type}`,
+    `- Decided at: ${decision.decidedAt}`,
+    decision.actor ? `- Actor: ${decision.actor}` : null,
+    decision.prHeadSha ? `- PR head SHA: ${decision.prHeadSha}` : null,
+    decision.validationEvidence ? `- Validation evidence: ${decision.validationEvidence}` : null,
+    decision.ciState ? `- CI state: ${decision.ciState}` : null,
+    decision.findings ? `- Findings: ${decision.findings}` : null,
+    decision.summary ? `- Summary: ${decision.summary}` : null
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+function formatLinearComment(id: string, author: string | null | undefined, timestamp: string | null | undefined, body: string): string {
+  return [`- Comment ${id}${author ? ` by ${author}` : ""}${timestamp ? ` at ${timestamp}` : ""}:`, indentBlock(truncateForPrompt(body.trim(), 1200))].join("\n");
+}
+
+function indentBlock(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+function truncateForPrompt(text: string, maxLength: number): string {
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 15).trimEnd()}... [truncated]`;
+}
+
 function linearCommentKey(event: string, issueIdentifier: string): string {
   return `${event}:${issueIdentifier}`;
 }
@@ -2176,7 +2332,8 @@ function isDispatchTerminalStop(error: string | undefined): boolean {
     error?.startsWith("issue_became_terminal:") ||
       error?.startsWith("issue_no_longer_dispatchable:") ||
       error === "issue_no_longer_exists" ||
-      error === "pull_request_already_merged"
+      error === "pull_request_already_merged" ||
+      error === "supervisor_continuation_active"
   );
 }
 
