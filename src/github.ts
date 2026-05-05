@@ -67,6 +67,10 @@ export interface MergeReadiness {
   reason: string;
 }
 
+export interface MergeCleanupResult {
+  warnings: string[];
+}
+
 export class GitHubClient {
   constructor(private readonly command = "gh") {}
 
@@ -97,8 +101,27 @@ export class GitHubClient {
 
   async mergePullRequest(url: string, config: ServiceConfig["github"], cwd: string): Promise<void> {
     const methodFlag = config.mergeMethod === "merge" ? "--merge" : config.mergeMethod === "rebase" ? "--rebase" : "--squash";
-    const deleteFlag = config.deleteBranch ? " --delete-branch" : "";
-    await runShell(`${this.command} pr merge ${shellQuote(url)} ${methodFlag}${deleteFlag}`, cwd);
+    await runShell(`${this.command} pr merge ${shellQuote(url)} ${methodFlag}`, cwd);
+  }
+
+  async cleanupMergedPullRequest(status: PullRequestStatus, config: ServiceConfig["github"], cwd: string): Promise<MergeCleanupResult> {
+    const warnings: string[] = [];
+    if (!config.deleteBranch) return { warnings };
+    const branch = status.headRefName;
+    if (!branch) {
+      warnings.push("Skipped branch cleanup because the pull request head branch was unavailable.");
+      return { warnings };
+    }
+    const safety = safeAgentBranchName(branch, status.baseRefName);
+    if (!safety.safe) {
+      warnings.push(`Skipped branch cleanup for ${branch}: ${safety.reason}`);
+      return { warnings };
+    }
+    const localDeleted = await deleteLocalBranchIfPresent(branch, cwd);
+    if (!localDeleted.ok) warnings.push(`Local branch cleanup failed for ${branch}: ${localDeleted.reason}`);
+    const remoteDeleted = await deleteRemoteBranchIfPresent(branch, cwd);
+    if (!remoteDeleted.ok) warnings.push(`Remote branch cleanup failed for ${branch}: ${remoteDeleted.reason}`);
+    return { warnings };
   }
 
   async getPullRequestDiff(url: string, cwd: string): Promise<string> {
@@ -492,6 +515,45 @@ function pullRequestComments(items: unknown[]): PullRequestComment[] {
 
 function firstLine(value: string): string {
   return value.trim().split(/\r?\n/)[0]?.slice(0, 240) ?? "";
+}
+
+function safeAgentBranchName(branch: string, baseRefName: string | null): { safe: true } | { safe: false; reason: string } {
+  if (baseRefName && branch === baseRefName) return { safe: false, reason: "head branch matches the base branch" };
+  if (!/^agent\/[A-Za-z0-9._/-]+$/.test(branch)) return { safe: false, reason: "only AgentOS-managed agent/* branches are deleted automatically" };
+  if (branch.includes("..") || branch.includes("//") || branch.endsWith("/") || branch.startsWith("-")) {
+    return { safe: false, reason: "head branch name is not a safe branch ref" };
+  }
+  return { safe: true };
+}
+
+async function deleteLocalBranchIfPresent(branch: string, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const refExists = await runShell(`git show-ref --verify --quiet refs/heads/${shellQuote(branch)}`, cwd)
+    .then(() => true)
+    .catch(() => false);
+  if (!refExists) return { ok: true };
+  try {
+    await runShell(`git branch -D ${shellQuote(branch)}`, cwd);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: cleanupErrorReason(error) };
+  }
+}
+
+async function deleteRemoteBranchIfPresent(branch: string, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    await runShell(`git push origin --delete ${shellQuote(branch)}`, cwd);
+    return { ok: true };
+  } catch (error) {
+    const reason = cleanupErrorReason(error);
+    if (/remote ref does not exist|unable to delete|not found|does not exist|Couldn't find remote ref/i.test(reason)) {
+      return { ok: true };
+    }
+    return { ok: false, reason };
+  }
+}
+
+function cleanupErrorReason(error: unknown): string {
+  return sanitizeDiagnosticText(error instanceof Error ? error.message : String(error), 500);
 }
 
 function runShell(command: string, cwd: string): Promise<string> {

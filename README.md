@@ -192,6 +192,9 @@ an already-satisfied no-op, investigation-only result, planning-only result,
 one docs/code PR, multiple PRs for a larger issue, or follow-up issue discovery.
 AgentOS records PR outputs in optional `prs[]`; legacy `prUrl` is only the
 first-PR compatibility mirror.
+PR outputs can be role-labeled as `primary`, `supporting`, `docs`,
+`follow-up`, or `do-not-merge`; automated review selects configured review
+targets and merge shepherding only selects merge-eligible primary targets.
 When a handoff references `Validation-JSON`, AgentOS verifies that evidence
 before moving the issue to `Human Review`; missing or failed evidence stays in
 the retry/failure path. Codex App Server exits and stall timeouts fail the turn
@@ -223,7 +226,10 @@ that AgentOS validates and copies into canonical runtime artifacts.
 Public harness defaults leave `github.merge_mode: manual`; AgentOS dogfood opts
 into `shepherd`, where moving an approved issue to `Merging` lets AgentOS read
 the stored PR metadata, require green GitHub checks, squash-merge, delete the
-branch, comment in Linear, and move the issue to `Done`.
+safe AgentOS-managed branch on a best-effort basis, comment in Linear, and move
+the issue to `Done`. Already-merged PRs and successful merge commands are
+authoritative; cleanup warnings are recorded for operators instead of causing a
+merge failure retry.
 
 The runner targets Codex App Server. Run:
 

@@ -62,10 +62,12 @@ describe("workflow", () => {
       requireChecks: true,
       deleteBranch: true,
       doneState: "Done",
-      allowHumanMergeOverride: false
+      allowHumanMergeOverride: false,
+      mergeTarget: "primary"
     });
     expect(config.review).toMatchObject({
       enabled: true,
+      targetMode: "merge-eligible",
       maxIterations: 3,
       requiredReviewers: ["self", "correctness", "tests", "architecture"],
       optionalReviewers: ["security"],

@@ -53,7 +53,7 @@ function checkWorkflow(path) {
   for (const snippet of ["runId", "repoHead", "git rev-parse HEAD"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing validation evidence field ${snippet}`);
   }
-  for (const snippet of ["review:", "max_iterations", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
+  for (const snippet of ["review:", "target_mode:", "merge-eligible", "max_iterations", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing Wiggum review config ${snippet}`);
   }
   for (const snippet of [
@@ -63,6 +63,7 @@ function checkWorkflow(path) {
     "lifecycle:",
     "mode: orchestrator-owned",
     "merge_mode:",
+    "merge_target:",
     "approval_event_policy: deny",
     "user_input_policy: deny",
     "allow_human_merge_override: false",

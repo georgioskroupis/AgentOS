@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
-import { normalizeIssueState, pullRequestUrls } from "./issue-state.js";
+import { normalizeIssueState } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
 import type { ValidationCommandState, ValidationState } from "./types.js";
 
@@ -28,14 +28,16 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     .filter((entry) => entry.issueIdentifier?.toLowerCase() === identifier.toLowerCase())
     .slice(-limit);
   const state = (await exists(statePath)) ? normalizeIssueState(JSON.parse(await readText(statePath))) : null;
-  const prs = pullRequestUrls(state);
+  const prs = state?.prs ?? [];
   const reviewRoot = join(root, ".agent-os", "reviews", safeFileName(identifier));
   const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot) : [];
   const lines = [
     `Issue: ${identifier}`,
     state ? `Phase: ${state.phase ?? "unknown"}` : "Phase: unknown",
-    prs.length ? `PRs:\n${prs.map((url) => `- ${url}`).join("\n")}` : "PRs: none recorded",
+    prs.length ? `PRs:\n${prs.map((pr) => `- ${pr.url}${pr.role ? ` (${pr.role})` : ""}`).join("\n")}` : "PRs: none recorded",
     state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
+    state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
+    state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
     validationDetails(state?.validation),
     state?.lastError ? `Last error: ${state.lastError}` : null,
     state?.nextRetryAt ? `Next retry: ${state.nextRetryAt}` : null,

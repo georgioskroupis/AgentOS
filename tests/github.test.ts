@@ -7,7 +7,7 @@ import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summar
 const fixture = resolve("tests/fixtures/fake-gh.mjs");
 
 describe("GitHubClient", () => {
-  it("reads pull request status and merges with squash/delete branch", async () => {
+  it("reads pull request status and merges without branch deletion side effects", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
     const statePath = join(dir, "state.json");
     await writeFile(
@@ -44,7 +44,7 @@ describe("GitHubClient", () => {
 
     const state = JSON.parse(await readFile(statePath, "utf8")) as { mergedWith: string[] };
     expect(state.mergedWith).toContain("--squash");
-    expect(state.mergedWith).toContain("--delete-branch");
+    expect(state.mergedWith).not.toContain("--delete-branch");
   });
 
   it("rejects PRs with no checks when checks are required", () => {

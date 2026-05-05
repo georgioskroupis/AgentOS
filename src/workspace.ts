@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ensureDir, exists, removePath } from "./fs-utils.js";
 import type { ServiceConfig, Workspace } from "./types.js";
 
@@ -57,7 +57,8 @@ export class WorkspaceManager {
         if (this.config.hooks.beforeRemove) {
           await runHook(this.config.hooks.beforeRemove, this.sourceRepo, this.config.hooks.timeoutMs, hookEnv(this.sourceRepo, path, key)).catch(() => undefined);
         }
-        await removePath(path);
+        const removedWorktree = await removeGitWorktreeIfRegistered(this.sourceRepo, path);
+        if (!removedWorktree) await removePath(path);
       }
     } finally {
       await releaseWorkspaceLock(lockPath);
@@ -173,4 +174,33 @@ function isProcessAlive(pid: number): boolean {
 
 function isAlreadyExistsError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "EEXIST";
+}
+
+async function removeGitWorktreeIfRegistered(sourceRepo: string, workspacePath: string): Promise<boolean> {
+  const listed = await runCommand("git", ["-C", sourceRepo, "worktree", "list", "--porcelain"], sourceRepo).catch(() => null);
+  if (!listed) return false;
+  const target = resolve(workspacePath);
+  const registered = listed
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => resolve(line.slice("worktree ".length).trim()))
+    .some((path) => path === target);
+  if (!registered) return false;
+  await runCommand("git", ["-C", sourceRepo, "worktree", "remove", "--force", workspacePath], sourceRepo);
+  return true;
+}
+
+function runCommand(command: string, args: string[], cwd: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolvePromise(stdout.trim());
+      else reject(new Error(stderr.trim() || `${command} failed`));
+    });
+  });
 }

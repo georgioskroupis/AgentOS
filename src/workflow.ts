@@ -123,10 +123,12 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       requireChecks: booleanAt(github, "require_checks", true),
       deleteBranch: booleanAt(github, "delete_branch", true),
       doneState: stringAt(github, "done_state", "Done"),
-      allowHumanMergeOverride: booleanAt(github, "allow_human_merge_override", false)
+      allowHumanMergeOverride: booleanAt(github, "allow_human_merge_override", false),
+      mergeTarget: mergeTargetAt(github, "merge_target", "primary")
     },
     review: {
       enabled: booleanAt(objectAt(cfg, "review"), "enabled", true),
+      targetMode: reviewTargetModeAt(objectAt(cfg, "review"), "target_mode", "merge-eligible"),
       maxIterations: positiveIntAt(objectAt(cfg, "review"), "max_iterations", 3),
       requiredReviewers: stringListAt(objectAt(cfg, "review"), "required_reviewers", ["self", "correctness", "tests", "architecture"]),
       optionalReviewers: stringListAt(objectAt(cfg, "review"), "optional_reviewers", ["security"]),
@@ -254,6 +256,16 @@ function intAt(value: Record<string, unknown>, key: string, fallback: number): n
 function booleanAt(value: Record<string, unknown>, key: string, fallback: boolean): boolean {
   const found = value[key];
   return typeof found === "boolean" ? found : fallback;
+}
+
+function reviewTargetModeAt(value: Record<string, unknown>, key: string, fallback: "merge-eligible" | "primary"): "merge-eligible" | "primary" {
+  const found = value[key];
+  return found === "merge-eligible" || found === "primary" ? found : fallback;
+}
+
+function mergeTargetAt(value: Record<string, unknown>, key: string, fallback: "primary"): "primary" {
+  const found = value[key];
+  return found === "primary" ? found : fallback;
 }
 
 function codexEventPolicyAt(value: Record<string, unknown>, key: string, fallback: CodexEventPolicy): CodexEventPolicy {
