@@ -113,6 +113,8 @@ stable tool path. In `hybrid` and experimental `agent-owned`, configure
 and `lifecycle.fallback_behavior` to let agents own substantive comments, PR
 metadata, and handoff posting. Keep `orchestrator-owned` as the default unless a
 project explicitly opts into that source-aligned boundary.
+Lifecycle `--file` arguments must be relative paths inside the repository, and
+`record-handoff` reads only `.agent-os/handoff-<resolved issue>.md`.
 
 ## Automation And Repair Policy
 

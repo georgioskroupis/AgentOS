@@ -97,3 +97,5 @@ Configure the matching `lifecycle.allowed_tracker_tools`, marker format,
 allowed transitions, duplicate-comment behavior, and fallback behavior before
 enabling those modes. `orchestrator-owned` remains the default and does not
 allow agent tracker writes through these lifecycle wrappers.
+Lifecycle file inputs must stay inside the repository, and handoff posting reads
+the resolved issue's `.agent-os/handoff-<issue>.md` artifact.

@@ -62,7 +62,11 @@ describe("LinearClient", () => {
     const client = new LinearClient(trackerConfig, fetchImpl);
     await client.comment("ver-5", "handoff");
 
-    expect(requests[0].variables.filter).toEqual({ team: { key: { eq: "VER" } }, number: { eq: 5 } });
+    expect(requests[0].variables.filter).toEqual({
+      team: { key: { eq: "VER" } },
+      number: { eq: 5 },
+      project: agentOsProjectFilter()
+    });
     expect(requests[1].variables.input).toEqual({ issueId: "issue-5", body: "handoff" });
   });
 
@@ -172,7 +176,7 @@ describe("LinearClient", () => {
     const client = new LinearClient(trackerConfig, fetchImpl);
     await client.move(issueId, "Human Review");
 
-    expect(requests[0].variables.filter).toEqual({ id: { eq: issueId } });
+    expect(requests[0].variables.filter).toEqual({ id: { eq: issueId }, project: agentOsProjectFilter() });
     expect(requests[2].variables).toEqual({ id: issueId, input: { stateId: "state-review" } });
   });
 
@@ -209,6 +213,12 @@ function fakeFetch(requests: Array<Record<string, any>>, responses: unknown[]): 
       headers: { "Content-Type": "application/json" }
     });
   }) as typeof fetch;
+}
+
+function agentOsProjectFilter(): Record<string, unknown> {
+  return {
+    or: [{ slugId: { eq: "AgentOS" } }, { name: { eq: "AgentOS" } }]
+  };
 }
 
 function issueNode(

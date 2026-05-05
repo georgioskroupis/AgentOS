@@ -44,17 +44,19 @@ describe("agent lifecycle tools", () => {
   });
 
   it("rejects disallowed tracker state transitions before moving the issue", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-transition-"));
     const tracker = new MemoryTracker({ state: "In Progress" });
     await expect(
       moveWithAgentLifecycleTool(
-        { repoRoot: ".", config: lifecycleConfig(), tracker },
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
         { issue: "AG-1", state: "Done", tool: "scripts/agent-linear-move.sh" }
       )
     ).rejects.toThrow("disallowed_tracker_state_transition: In Progress -> Done");
     expect(tracker.moves).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
   });
 
-  it("writes a fallback handoff when tracker writes fail", async () => {
+  it("writes a fallback handoff with the resolved issue identifier when tracker writes fail", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-fallback-"));
     const tracker = new MemoryTracker();
     const token = linearToken();
@@ -63,15 +65,72 @@ describe("agent lifecycle tools", () => {
     await expect(
       commentWithAgentLifecycleTool(
         { repoRoot: repo, config: lifecycleConfig(), tracker },
-        { issue: "AG-1", event: "status_update", tool: "scripts/agent-linear-comment.sh", body: "handoff" }
+        { issue: "issue-1", event: "status_update", tool: "scripts/agent-linear-comment.sh", body: "handoff" }
       )
     ).rejects.toThrow("agent_tracker_tool_failed: comment: Linear rejected [REDACTED]");
 
     const fallback = await readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8");
     expect(fallback).toContain("AgentOS-Outcome: partially-satisfied");
     expect(fallback).toContain("Tracker Tool Fallback");
+    expect(fallback).toContain("- Issue: AG-1");
     expect(fallback).toContain("Linear rejected [REDACTED]");
     expect(fallback).not.toContain(token);
+    await expect(readFile(join(repo, ".agent-os", "handoff-issue-1.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("rejects orchestrator-owned tracker writes before lookup, tracker writes, or fallback", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-owned-"));
+    const tracker = new MemoryTracker();
+
+    await expect(
+      commentWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+        { issue: "AG-1", event: "status_update", tool: "scripts/agent-linear-comment.sh", body: "handoff" }
+      )
+    ).rejects.toThrow("lifecycle.mode=orchestrator-owned rejects agent tracker writes");
+
+    expect(tracker.lookups).toEqual([]);
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("rejects unallowed tracker tools before tracker writes or local issue-state writes", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-tool-"));
+    const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    await writeFile(handoffPath, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/14\n", "utf8");
+    const tracker = new MemoryTracker();
+
+    await expect(
+      recordHandoffWithAgentLifecycleTool(
+        {
+          repoRoot: repo,
+          config: lifecycleConfig({ allowedTrackerTools: ["scripts/agent-linear-comment.sh"] }),
+          tracker
+        },
+        { issue: "AG-1", handoffPath, tool: "scripts/agent-linear-handoff.sh" }
+      )
+    ).rejects.toThrow("lifecycle.allowed_tracker_tools does not include scripts/agent-linear-handoff.sh");
+
+    expect(tracker.lookups).toEqual([]);
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("rejects invalid marker tokens without writing fallback handoffs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-marker-"));
+    const tracker = new MemoryTracker();
+
+    await expect(
+      commentWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
+        { issue: "AG-1", event: "bad event", tool: "scripts/agent-linear-comment.sh", body: "handoff" }
+      )
+    ).rejects.toThrow("event must contain only letters, numbers, dot, underscore, colon, or hyphen");
+
+    expect(tracker.lookups).toEqual(["AG-1"]);
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
   });
 
   it("records PR metadata locally and posts a marker-backed PR update", async () => {
@@ -122,16 +181,36 @@ describe("agent lifecycle tools", () => {
     expect(state.prUrl).toBe("https://github.com/o/r/pull/13");
     expect(tracker.comments[0].body).toContain("Summary with token [REDACTED]");
   });
+
+  it("only records handoffs from the resolved issue handoff path", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-handoff-path-"));
+    const handoffPath = join(repo, ".agent-os", "handoff-issue-1.md");
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    await writeFile(handoffPath, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/15\n", "utf8");
+    const tracker = new MemoryTracker();
+
+    await expect(
+      recordHandoffWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
+        { issue: "issue-1", handoffPath, tool: "scripts/agent-linear-handoff.sh" }
+      )
+    ).rejects.toThrow("handoff file must be .agent-os/handoff-AG-1.md");
+
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8")).rejects.toThrow();
+  });
 });
 
 class MemoryTracker implements AgentLifecycleTracker {
   comments: Array<{ issue: string; body: string; marker: string; duplicateBehavior?: string }> = [];
   moves: Array<{ issue: string; state: string }> = [];
+  lookups: string[] = [];
   failComment: Error | null = null;
 
   constructor(private readonly issue: Partial<LinearIssueReference> = {}) {}
 
-  async findIssueReference(): Promise<LinearIssueReference> {
+  async findIssueReference(issueIdentifierOrId: string): Promise<LinearIssueReference> {
+    this.lookups.push(issueIdentifierOrId);
     return {
       id: "issue-1",
       identifier: "AG-1",

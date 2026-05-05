@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { addProject, loadRegistry, removeProject } from "./registry.js";
 import { readText } from "./fs-utils.js";
@@ -335,9 +335,10 @@ linearLifecycle
   .option("--repo <path>", "repository root", process.cwd())
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle comment")
   .action(async (issue, body, options) => {
+    const tool = lifecycleToolForAction("comment", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
     const text = await bodyFromArgsOrFile(body, options.file, context.repoRoot, "comment body");
-    console.log(formatAgentLifecycleResult(await commentWithAgentLifecycleTool(context, { issue, body: text, event: options.event, tool: options.tool })));
+    console.log(formatAgentLifecycleResult(await commentWithAgentLifecycleTool(context, { issue, body: text, event: options.event, tool })));
   });
 
 linearLifecycle
@@ -348,8 +349,9 @@ linearLifecycle
   .option("--repo <path>", "repository root", process.cwd())
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle move")
   .action(async (issue, state, options) => {
+    const tool = lifecycleToolForAction("move", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
-    console.log(formatAgentLifecycleResult(await moveWithAgentLifecycleTool(context, { issue, state, tool: options.tool })));
+    console.log(formatAgentLifecycleResult(await moveWithAgentLifecycleTool(context, { issue, state, tool })));
   });
 
 linearLifecycle
@@ -361,8 +363,9 @@ linearLifecycle
   .option("--repo <path>", "repository root", process.cwd())
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle attach-pr")
   .action(async (issue, url, options) => {
+    const tool = lifecycleToolForAction("attach-pr", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
-    console.log(formatAgentLifecycleResult(await attachPrWithAgentLifecycleTool(context, { issue, prUrl: url, event: options.event, tool: options.tool })));
+    console.log(formatAgentLifecycleResult(await attachPrWithAgentLifecycleTool(context, { issue, prUrl: url, event: options.event, tool })));
   });
 
 linearLifecycle
@@ -374,9 +377,10 @@ linearLifecycle
   .option("--repo <path>", "repository root", process.cwd())
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle record-handoff")
   .action(async (issue, options) => {
+    const tool = lifecycleToolForAction("record-handoff", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
-    const handoffPath = resolveFromRepo(context.repoRoot, options.file);
-    console.log(formatAgentLifecycleResult(await recordHandoffWithAgentLifecycleTool(context, { issue, handoffPath, event: options.event, tool: options.tool })));
+    const handoffPath = resolveRepoLocalInputPath(context.repoRoot, options.file, "handoff file");
+    console.log(formatAgentLifecycleResult(await recordHandoffWithAgentLifecycleTool(context, { issue, handoffPath, event: options.event, tool })));
   });
 
 linear
@@ -490,7 +494,7 @@ async function agentLifecycleContextFromOptions(options: { repo: string; workflo
 }
 
 async function bodyFromArgsOrFile(body: string[] | undefined, file: string | undefined, repoRoot: string, label: string): Promise<string> {
-  const text = file ? await readText(resolveFromRepo(repoRoot, file)) : (body ?? []).join(" ");
+  const text = file ? await readText(resolveRepoLocalInputPath(repoRoot, file, `${label} file`)) : (body ?? []).join(" ");
   if (!text.trim()) throw new Error(`${label} is required; pass text or --file <path>`);
   return text;
 }
@@ -501,6 +505,41 @@ function formatAgentLifecycleResult(result: { status: string; issueIdentifier: s
 
 function resolveFromRepo(repoRoot: string, path: string): string {
   return isAbsolute(path) ? path : resolve(repoRoot, path);
+}
+
+type LifecycleCliAction = "comment" | "move" | "attach-pr" | "record-handoff";
+
+function lifecycleToolForAction(action: LifecycleCliAction, tool: string): string {
+  const lifecycleToolIdentities: Record<LifecycleCliAction, string[]> = {
+    comment: ["agent-os linear lifecycle comment", "scripts/agent-linear-comment.sh"],
+    move: ["agent-os linear lifecycle move", "scripts/agent-linear-move.sh"],
+    "attach-pr": ["agent-os linear lifecycle attach-pr", "scripts/agent-linear-pr.sh"],
+    "record-handoff": ["agent-os linear lifecycle record-handoff", "scripts/agent-linear-handoff.sh"]
+  };
+  const allowed = lifecycleToolIdentities[action];
+  const normalizedTool = normalizeLifecycleToolIdentity(tool);
+  const identity = allowed.find((candidate) => normalizeLifecycleToolIdentity(candidate) === normalizedTool);
+  if (!identity) {
+    throw new Error(`lifecycle tool/action mismatch: ${action} cannot use ${tool}`);
+  }
+  return identity;
+}
+
+function normalizeLifecycleToolIdentity(value: string): string {
+  return value.trim().replace(/^\.\//, "");
+}
+
+function resolveRepoLocalInputPath(repoRoot: string, path: string, label: string): string {
+  if (isAbsolute(path)) {
+    throw new Error(`${label} must be relative to the repository root`);
+  }
+  const root = resolve(repoRoot);
+  const resolvedPath = resolve(root, path);
+  const relativePath = relative(root, resolvedPath);
+  if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new Error(`${label} must stay within the repository root`);
+  }
+  return resolvedPath;
 }
 
 const roadmapTitles = [

@@ -165,7 +165,10 @@ scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md
 
 These tools use marker-backed comment upserts, configured duplicate behavior,
 configured allowed state transitions, redaction, local PR metadata persistence,
-and fallback handoff writing when `lifecycle.fallback_behavior` declares it.
+project-scoped issue lookup, repo-local `--file` reads, and fallback handoff
+writing only after lifecycle policy checks pass and a tracker write fails.
+`record-handoff` reads the resolved issue's `.agent-os/handoff-<issue>.md`
+artifact only.
 
 ## Current Integration Notes
 

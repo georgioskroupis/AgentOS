@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
 import { issueStateFromHandoff, IssueStateStore } from "./issue-state.js";
 import type { LinearCommentWriteResult, LinearIssueReference } from "./linear.js";
@@ -57,11 +57,11 @@ export async function commentWithAgentLifecycleTool(
   context: AgentLifecycleContext,
   input: AgentCommentInput
 ): Promise<AgentLifecycleResult> {
-  return runWithFallback(context, input, "comment", async () => {
-    assertAgentTrackerWriteAllowed(context.config, input.tool);
-    const issue = await context.tracker.findIssueReference(input.issue);
-    const marker = agentTrackerMarker(context.config, input.event ?? "agent_comment", issue.identifier);
-    const body = redactText(input.body);
+  assertAgentTrackerWriteAllowed(context.config, input.tool);
+  const issue = await context.tracker.findIssueReference(input.issue);
+  const marker = agentTrackerMarker(context.config, input.event ?? "agent_comment", issue.identifier);
+  const body = redactText(input.body);
+  return runWithFallback(context, issue.identifier, input.tool, "comment", async () => {
     const status = await context.tracker.upsertCommentWithMarker(
       issue.identifier,
       body,
@@ -76,13 +76,13 @@ export async function moveWithAgentLifecycleTool(
   context: AgentLifecycleContext,
   input: AgentMoveInput
 ): Promise<AgentLifecycleResult> {
-  return runWithFallback(context, input, "move", async () => {
-    assertAgentTrackerWriteAllowed(context.config, input.tool);
-    const issue = await context.tracker.findIssueReference(input.issue);
-    assertAllowedTransition(context.config, issue.state, input.state);
-    if (sameState(issue.state, input.state)) {
-      return { status: "skipped", issueIdentifier: issue.identifier };
-    }
+  assertAgentTrackerWriteAllowed(context.config, input.tool);
+  const issue = await context.tracker.findIssueReference(input.issue);
+  assertAllowedTransition(context.config, issue.state, input.state);
+  if (sameState(issue.state, input.state)) {
+    return { status: "skipped", issueIdentifier: issue.identifier };
+  }
+  return runWithFallback(context, issue.identifier, input.tool, "move", async () => {
     await context.tracker.move(issue.identifier, input.state);
     return { status: "moved", issueIdentifier: issue.identifier };
   });
@@ -92,19 +92,19 @@ export async function attachPrWithAgentLifecycleTool(
   context: AgentLifecycleContext,
   input: AgentAttachPrInput
 ): Promise<AgentLifecycleResult> {
-  return runWithFallback(context, input, "attach-pr", async () => {
-    assertAgentTrackerWriteAllowed(context.config, input.tool);
-    const issue = await context.tracker.findIssueReference(input.issue);
-    const now = new Date().toISOString();
-    const pr: PullRequestRef = { url: input.prUrl, discoveredAt: now, source: "manual" };
-    await new IssueStateStore(context.repoRoot).merge(issue.identifier, {
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      prs: [pr],
-      prUrl: pr.url
-    });
-    const marker = agentTrackerMarker(context.config, input.event ?? "pr_metadata", issue.identifier);
-    const body = redactText(["### AgentOS PR metadata", "", `- PR: ${input.prUrl}`].join("\n"));
+  assertAgentTrackerWriteAllowed(context.config, input.tool);
+  const issue = await context.tracker.findIssueReference(input.issue);
+  const now = new Date().toISOString();
+  const pr: PullRequestRef = { url: input.prUrl, discoveredAt: now, source: "manual" };
+  await new IssueStateStore(context.repoRoot).merge(issue.identifier, {
+    issueId: issue.id,
+    issueIdentifier: issue.identifier,
+    prs: [pr],
+    prUrl: pr.url
+  });
+  const marker = agentTrackerMarker(context.config, input.event ?? "pr_metadata", issue.identifier);
+  const body = redactText(["### AgentOS PR metadata", "", `- PR: ${input.prUrl}`].join("\n"));
+  return runWithFallback(context, issue.identifier, input.tool, "attach-pr", async () => {
     const status = await context.tracker.upsertCommentWithMarker(
       issue.identifier,
       body,
@@ -119,15 +119,16 @@ export async function recordHandoffWithAgentLifecycleTool(
   context: AgentLifecycleContext,
   input: AgentRecordHandoffInput
 ): Promise<AgentLifecycleResult> {
-  return runWithFallback(context, input, "record-handoff", async () => {
-    assertAgentTrackerWriteAllowed(context.config, input.tool);
-    const issue = await context.tracker.findIssueReference(input.issue);
-    const handoff = redactText(await readText(input.handoffPath));
-    const issueState = issueStateFromHandoff(toIssue(issue), handoff);
-    if (issueState) {
-      await new IssueStateStore(context.repoRoot).merge(issue.identifier, issueState);
-    }
-    const marker = agentTrackerMarker(context.config, input.event ?? "run_handoff", issue.identifier);
+  assertAgentTrackerWriteAllowed(context.config, input.tool);
+  const issue = await context.tracker.findIssueReference(input.issue);
+  assertExpectedHandoffPath(context.repoRoot, input.handoffPath, issue.identifier);
+  const handoff = redactText(await readText(input.handoffPath));
+  const issueState = issueStateFromHandoff(toIssue(issue), handoff);
+  if (issueState) {
+    await new IssueStateStore(context.repoRoot).merge(issue.identifier, issueState);
+  }
+  const marker = agentTrackerMarker(context.config, input.event ?? "run_handoff", issue.identifier);
+  return runWithFallback(context, issue.identifier, input.tool, "record-handoff", async () => {
     const status = await context.tracker.upsertCommentWithMarker(
       issue.identifier,
       handoff,
@@ -180,7 +181,8 @@ export function parseAllowedStateTransition(value: string): { from: string; to: 
 
 async function runWithFallback(
   context: AgentLifecycleContext,
-  input: AgentLifecycleToolOptions,
+  issueIdentifier: string,
+  tool: string,
   operation: string,
   fn: () => Promise<AgentLifecycleResult>
 ): Promise<AgentLifecycleResult> {
@@ -188,7 +190,7 @@ async function runWithFallback(
     return await fn();
   } catch (error) {
     const message = redactText(error instanceof Error ? error.message : String(error));
-    const fallbackPath = await writeFallbackHandoff(context, input.issue, operation, input.tool, message);
+    const fallbackPath = await writeFallbackHandoff(context, issueIdentifier, operation, tool, message);
     throw new Error(`agent_tracker_tool_failed: ${operation}: ${message}${fallbackPath ? `; fallback=${fallbackPath}` : ""}`);
   }
 }
@@ -246,6 +248,14 @@ function normalizeState(value: string): string {
 
 function sameState(a: string, b: string): boolean {
   return normalizeState(a) === normalizeState(b);
+}
+
+function assertExpectedHandoffPath(repoRoot: string, handoffPath: string, issueIdentifier: string): void {
+  const expected = resolve(repoRoot, ".agent-os", `handoff-${stableMarkerToken(issueIdentifier, "issue")}.md`);
+  const actual = resolve(repoRoot, handoffPath);
+  if (actual !== expected) {
+    throw new Error(`handoff file must be ${relative(repoRoot, expected)}`);
+  }
 }
 
 function toIssue(issue: LinearIssueReference): Issue {

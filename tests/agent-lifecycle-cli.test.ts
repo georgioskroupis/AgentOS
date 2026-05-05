@@ -1,0 +1,182 @@
+import { chmod, copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { describe, expect, it } from "vitest";
+
+const cliScript = resolve("src/cli.ts");
+const sourceScripts = resolve("scripts");
+
+describe("agent lifecycle CLI", () => {
+  it("passes stable lifecycle action and tool arguments from repo-local wrappers", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-wrapper-"));
+    const fakeBin = join(repo, "fake-bin");
+    const capture = join(repo, "capture.log");
+    await mkdir(join(repo, "scripts"), { recursive: true });
+    await writeFakeAgentOs(fakeBin, capture);
+
+    const cases = [
+      {
+        script: "agent-linear-comment.sh",
+        args: ["AG-1", "--event", "status_update", "Body"],
+        expected: `args: <linear> <lifecycle> <comment> <--repo> <${repo}> <--tool> <scripts/agent-linear-comment.sh> <AG-1> <--event> <status_update> <Body>`
+      },
+      {
+        script: "agent-linear-move.sh",
+        args: ["AG-1", "Human Review"],
+        expected: `args: <linear> <lifecycle> <move> <--repo> <${repo}> <--tool> <scripts/agent-linear-move.sh> <AG-1> <Human Review>`
+      },
+      {
+        script: "agent-linear-pr.sh",
+        args: ["AG-1", "https://github.com/o/r/pull/36"],
+        expected: `args: <linear> <lifecycle> <attach-pr> <--repo> <${repo}> <--tool> <scripts/agent-linear-pr.sh> <AG-1> <https://github.com/o/r/pull/36>`
+      },
+      {
+        script: "agent-linear-handoff.sh",
+        args: ["AG-1", "--file", ".agent-os/handoff-AG-1.md"],
+        expected: `args: <linear> <lifecycle> <record-handoff> <--repo> <${repo}> <--tool> <scripts/agent-linear-handoff.sh> <AG-1> <--file> <.agent-os/handoff-AG-1.md>`
+      }
+    ];
+
+    for (const item of cases) {
+      const target = join(repo, "scripts", item.script);
+      await copyFile(join(sourceScripts, item.script), target);
+      await chmod(target, 0o755);
+      await execOk(target, item.args, {
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        AGENT_OS_WRAPPER_CAPTURE: capture
+      });
+    }
+
+    const logged = await readFile(capture, "utf8");
+    for (const item of cases) {
+      expect(logged).toContain(item.expected);
+    }
+  });
+
+  it("rejects direct lifecycle action/tool mismatches before loading workflow config", async () => {
+    const result = await execCliFail([
+      "linear",
+      "lifecycle",
+      "move",
+      "AG-1",
+      "Human Review",
+      "--tool",
+      "scripts/agent-linear-comment.sh"
+    ]);
+
+    expect(result.stderr).toContain("lifecycle tool/action mismatch: move cannot use scripts/agent-linear-comment.sh");
+  });
+
+  it("rejects lifecycle comment files that are absolute or escape the repo", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-file-"));
+    const outside = join(await mkdtemp(join(tmpdir(), "agent-os-lifecycle-secret-")), "secret.md");
+    await writeWorkflow(repo);
+    await writeFile(outside, "secret", "utf8");
+
+    const absolute = await execCliFail([
+      "linear",
+      "lifecycle",
+      "comment",
+      "AG-1",
+      "--event",
+      "status_update",
+      "--repo",
+      repo,
+      "--workflow",
+      "WORKFLOW.md",
+      "--tool",
+      "scripts/agent-linear-comment.sh",
+      "--file",
+      outside
+    ]);
+    expect(absolute.stderr).toContain("comment body file must be relative to the repository root");
+
+    const escaped = await execCliFail([
+      "linear",
+      "lifecycle",
+      "comment",
+      "AG-1",
+      "--event",
+      "status_update",
+      "--repo",
+      repo,
+      "--workflow",
+      "WORKFLOW.md",
+      "--tool",
+      "scripts/agent-linear-comment.sh",
+      "--file",
+      "../secret.md"
+    ]);
+    expect(escaped.stderr).toContain("comment body file must stay within the repository root");
+  });
+});
+
+async function execOk(command: string, args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(command, args, { env: { ...process.env, ...env } }, (error, stdout, stderr) => {
+      if (error) {
+        reject(Object.assign(error, { stdout, stderr }));
+        return;
+      }
+      resolvePromise({ stdout, stderr });
+    });
+  });
+}
+
+async function execFail(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(command, args, (error, stdout, stderr) => {
+      if (!error) {
+        reject(new Error(`expected command to fail: ${command} ${args.join(" ")}`));
+        return;
+      }
+      resolvePromise({ stdout, stderr });
+    });
+  });
+}
+
+async function execCliFail(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return execFail(process.execPath, ["--import", "tsx", cliScript, ...args]);
+}
+
+async function writeFakeAgentOs(fakeBin: string, capture: string): Promise<void> {
+  await mkdir(fakeBin, { recursive: true });
+  const path = join(fakeBin, "agent-os");
+  await writeFile(
+    path,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "mkdir -p \"$(dirname \"$AGENT_OS_WRAPPER_CAPTURE\")\"",
+      "{",
+      "  printf 'args:'",
+      "  for arg in \"$@\"; do printf ' <%s>' \"$arg\"; done",
+      "  printf '\\n'",
+      "} >> \"$AGENT_OS_WRAPPER_CAPTURE\"",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  await chmod(path, 0o755);
+}
+
+async function writeWorkflow(repo: string): Promise<void> {
+  await writeFile(
+    join(repo, "WORKFLOW.md"),
+    [
+      "---",
+      "lifecycle:",
+      "  mode: hybrid",
+      "  allowed_tracker_tools:",
+      "    - scripts/agent-linear-comment.sh",
+      "tracker:",
+      "  kind: linear",
+      "  api_key: lin_test",
+      "  project_slug: AgentOS",
+      "---",
+      "Do work"
+    ].join("\n"),
+    "utf8"
+  );
+}

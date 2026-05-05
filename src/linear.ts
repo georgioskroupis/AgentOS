@@ -268,7 +268,10 @@ export class LinearClient implements IssueTracker {
 
   async findIssueReference(issueIdentifierOrId: string): Promise<LinearIssueReference> {
     const trimmed = issueIdentifierOrId.trim();
-    const filter = isLinearIdentifier(trimmed) ? identifierFilter(trimmed) : { id: { eq: trimmed } };
+    const filter = {
+      ...(isLinearIdentifier(trimmed) ? identifierFilter(trimmed) : { id: { eq: trimmed } }),
+      project: projectFilter(this.projectSlug)
+    };
     const data = await this.request<{ issues: { nodes: LinearIssueReference[] } }>(
       `query AgentOSFindIssue($filter: IssueFilter) {
         issues(filter: $filter, first: 1) {
