@@ -236,6 +236,46 @@ describe("workflow", () => {
     );
   });
 
+  it("rejects unsupported review and merge target selection values", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-target-invalid-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "review:",
+        "  target_mode: primay",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
+      "unsupported_review_target_mode: primay"
+    );
+
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "github:",
+        "  merge_target: docs",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
+      "unsupported_github_merge_target: docs"
+    );
+  });
+
   it("strictly gates experimental agent-owned lifecycle mode", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-lifecycle-"));
     const workflowPath = join(repo, "WORKFLOW.md");

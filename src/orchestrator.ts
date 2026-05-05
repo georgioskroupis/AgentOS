@@ -11,6 +11,7 @@ import {
   mergeTargetAmbiguityReason,
   mergeTargetPullRequest,
   primaryPullRequestUrl,
+  pullRequestUrls,
   reviewTargetPullRequests
 } from "./issue-state.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
@@ -35,7 +36,7 @@ import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, Issue, IssueState, IssueTracker, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, Issue, IssueState, IssueTracker, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 
 export interface OrchestratorOptions {
@@ -455,11 +456,13 @@ export class Orchestrator {
   private async reviewIfNeeded(issue: Issue, workspace: Workspace, state: IssueState | null, attempt: number | null, signal?: AbortSignal): Promise<IssueState | null> {
     if (!this.config.review.enabled) return state;
     const reviewTargetMode = this.config.review.targetMode ?? "merge-eligible";
-    const reviewTargets = reviewTargetPullRequests(state, reviewTargetMode);
-    const reviewPr = reviewTargets[0]?.url;
-    if (!state || !reviewPr || state.outcome === "already_satisfied") return state;
-    const reviewTargetUrls = reviewTargets.map((target) => target.url);
-    const reviewTargetList = formatPullRequestTargets(reviewTargets);
+    if (!state || state.outcome === "already_satisfied") return state;
+    const initialReviewTargets = reviewTargetPullRequests(state, reviewTargetMode);
+    if (initialReviewTargets.length === 0) {
+      return pullRequestUrls(state).length > 0 ? this.recordReviewTargetSelectionFailure(issue, state, reviewTargetMode) : state;
+    }
+    const initialReviewTargetUrls = initialReviewTargets.map((target) => target.url);
+    const initialReviewTargetList = formatPullRequestTargets(initialReviewTargets);
 
     await this.commentIssue(
       issue,
@@ -469,7 +472,7 @@ export class Orchestrator {
         "The Ralph Wiggum loop is reviewing the selected PR target(s) before moving the issue to Human Review.",
         "",
         `- Review target mode: ${reviewTargetMode}`,
-        reviewTargetList,
+        initialReviewTargetList,
         `- Required reviewers: ${this.config.review.requiredReviewers.join(", ")}`,
         `- Max iterations: ${this.config.review.maxIterations}`
       ].join("\n")
@@ -482,9 +485,16 @@ export class Orchestrator {
       reviewStatus: "pending",
       reviewIteration: state.reviewIteration ?? 0,
       reviewTargetMode,
-      reviewTargetUrls
+      reviewTargetUrls: initialReviewTargetUrls
     });
     for (let iteration = (state.reviewIteration ?? 0) + 1; iteration <= this.config.review.maxIterations; iteration += 1) {
+      const reviewTargets = reviewTargetPullRequests(latestState, reviewTargetMode);
+      if (reviewTargets.length === 0) {
+        return pullRequestUrls(latestState).length > 0 ? this.recordReviewTargetSelectionFailure(issue, latestState, reviewTargetMode) : latestState;
+      }
+      const reviewPr = reviewTargets[0].url;
+      const reviewTargetUrls = reviewTargets.map((target) => target.url);
+      const reviewTargetList = formatPullRequestTargets(reviewTargets);
       const workspaceReviewDir = await ensureReviewIterationDir(workspace.path, issue.identifier, iteration);
       const githubContext = await this.githubReviewContext(reviewTargets).catch(async (error: Error) => {
         latestState = await this.recordIssueState(issue, {
@@ -742,13 +752,45 @@ export class Orchestrator {
             phase: "fix",
             reviewIteration: iteration,
             lastFixedSha: joinedHeadShas(githubContext.entries),
-            reviewTargetMode,
-            reviewTargetUrls
+            reviewTargetMode
           });
         }
       }
       previousFindings = findings;
     }
+    return latestState;
+  }
+
+  private async recordReviewTargetSelectionFailure(issue: Issue, state: IssueState, reviewTargetMode: ReviewTargetMode): Promise<IssueState> {
+    const recordedPrUrls = pullRequestUrls(state);
+    const error = reviewTargetSelectionError(state, reviewTargetMode);
+    const latestState = await this.recordIssueState(issue, {
+      phase: "review",
+      reviewStatus: "human_required",
+      lastError: error,
+      errorCategory: "review",
+      reviewTargetMode,
+      reviewTargetUrls: []
+    });
+    await this.commentIssue(
+      issue,
+      [
+        "### AgentOS automated review needs human judgment",
+        "",
+        "AgentOS could not select a pull request target for automated review.",
+        "",
+        `- Review target mode: ${reviewTargetMode}`,
+        formatRecordedPullRequests(state),
+        `- Error: ${error}`
+      ].join("\n")
+    );
+    await this.logger.write({
+      type: "review_human_required",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: error,
+      payload: { prUrls: recordedPrUrls, reviewTargetMode }
+    });
     return latestState;
   }
 
@@ -1038,9 +1080,13 @@ export class Orchestrator {
   private async markLinearSucceeded(issue: Issue, workspace: Workspace, handoff: string | null, state?: IssueState): Promise<void> {
     await this.recordIssueState(issue, {
       phase: "completed",
-      lastError: undefined,
-      errorCategory: undefined,
-      nextRetryAt: undefined
+      nextRetryAt: undefined,
+      ...(state?.reviewStatus === "human_required"
+        ? {}
+        : {
+            lastError: undefined,
+            errorCategory: undefined
+          })
     });
     const reviewLine = state?.reviewStatus
       ? `\n\nAutomated review status: \`${state.reviewStatus}\`${state.reviewIteration ? ` after iteration ${state.reviewIteration}` : ""}.`
@@ -1270,6 +1316,23 @@ function formatPullRequestTargets(targets: PullRequestRef[]): string {
   if (targets.length === 0) return "- PRs: none";
   if (targets.length === 1) return `- PR: ${targets[0].url} (${targets[0].role ?? "supporting"})`;
   return ["- PRs:", ...targets.map((target) => `  - ${target.url} (${target.role ?? "supporting"})`)].join("\n");
+}
+
+function formatRecordedPullRequests(state: IssueState): string {
+  if (state.prs?.length) return formatPullRequestTargets(state.prs);
+  const urls = pullRequestUrls(state);
+  if (urls.length === 0) return "- PRs: none";
+  if (urls.length === 1) return `- PR: ${urls[0]}`;
+  return ["- PRs:", ...urls.map((url) => `  - ${url}`)].join("\n");
+}
+
+function reviewTargetSelectionError(state: IssueState, reviewTargetMode: ReviewTargetMode): string {
+  if (reviewTargetMode === "primary") {
+    const primaryCount = state.prs?.filter((pr) => pr.role === "primary").length ?? 0;
+    if (primaryCount === 0) return "review.target_mode=primary requires exactly one primary PR, but no primary PR was recorded.";
+    return `review.target_mode=primary requires exactly one primary PR, but ${primaryCount} primary PRs were recorded.`;
+  }
+  return "review.target_mode=merge-eligible requires at least one primary or docs PR, but no merge-eligible PR was recorded.";
 }
 
 function joinedHeadShas(entries: Array<{ status: Awaited<ReturnType<GitHubClient["getPullRequest"]>> }>): string | null {

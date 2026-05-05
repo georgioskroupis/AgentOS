@@ -260,12 +260,16 @@ function booleanAt(value: Record<string, unknown>, key: string, fallback: boolea
 
 function reviewTargetModeAt(value: Record<string, unknown>, key: string, fallback: "merge-eligible" | "primary"): "merge-eligible" | "primary" {
   const found = value[key];
-  return found === "merge-eligible" || found === "primary" ? found : fallback;
+  if (found == null || found === "") return fallback;
+  if (found === "merge-eligible" || found === "primary") return found;
+  throw new Error(`unsupported_review_target_mode: ${String(found)}`);
 }
 
 function mergeTargetAt(value: Record<string, unknown>, key: string, fallback: "primary"): "primary" {
   const found = value[key];
-  return found === "primary" ? found : fallback;
+  if (found == null || found === "") return fallback;
+  if (found === "primary") return found;
+  throw new Error(`unsupported_github_merge_target: ${String(found)}`);
 }
 
 function codexEventPolicyAt(value: Record<string, unknown>, key: string, fallback: CodexEventPolicy): CodexEventPolicy {
