@@ -9,7 +9,7 @@ Use this as a lightweight rubric for harnessed repositories.
 | Workflow | Ticket lifecycle and handoff expectations are documented |
 | Skills | Planning, implementation, bug fixing, review, CI diagnostics, QA smoke, docs, tests, and cleanup workflows are reusable and versioned |
 | Safety | Public behavior, dependencies, and security changes require justification |
-| Orchestration | Linear polling, lifecycle comments, repo-local tracker tools, retries, workspace isolation, audit/no-op handoff, Wiggum review, and merge shepherding are executable |
+| Orchestration | Linear polling, lifecycle comments, repo-local tracker tools, retries, workspace isolation, audit/no-op handoff, Wiggum review, merge shepherding, and registry-wide scheduling/status are executable |
 
 ## Minimum Passing Harness
 
@@ -65,6 +65,12 @@ Use this as a lightweight rubric for harnessed repositories.
   before merging the selected primary target and moving `Merging` issues to
   `Done`; post-merge cleanup failures are operator-visible warnings, not
   implementation retries.
+- `agent-os orchestrator once-registry`, `agent-os orchestrator run-registry`,
+  and `agent-os status --registry` coordinate multiple registered projects with
+  global and per-project capacity, fair dispatch, project runner locks,
+  project-level workflow config, transient tracker/network error summaries,
+  CI/review/merge/retry wait visibility, daemon freshness, and local validation
+  timing evidence.
 - `scripts/check-harness-contract.mjs` is part of `npm run agent-check` and
   enforces canonical states, the handoff contract, Wiggum config, and approved
   production dependencies.

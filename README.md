@@ -99,10 +99,24 @@ Runs one Symphony-style scheduling pass:
     issues, startup cleanup, and reconciliation
 13. write `.agent-os/runs/agent-os.jsonl` and per-run artifacts
 
+Registry-wide one-shot mode reads `agent-os.yml`, applies global and
+per-project concurrency, and fairly gives each registered project a chance to
+dispatch work:
+
+```bash
+bin/agent-os orchestrator once-registry --registry agent-os.yml --max-concurrency 2
+```
+
 Continuous mode is:
 
 ```bash
 bin/agent-os orchestrator run --repo <repo> --workflow WORKFLOW.md
+```
+
+Registry-wide continuous mode is:
+
+```bash
+bin/agent-os orchestrator run-registry --registry agent-os.yml --max-concurrency 2
 ```
 
 ### `status` and `inspect`
@@ -112,8 +126,14 @@ issue state, PR metadata, review state, recent events, and review artifacts.
 
 ```bash
 bin/agent-os status --repo <repo>
+bin/agent-os status --registry
 bin/agent-os inspect VER-28 --repo <repo>
 ```
+
+`status --registry` combines registry runtime state with each project workflow,
+runtime, issue state, and recent run logs. It reports project-level config,
+capacity, transient tracker/network errors, daemon freshness, retry/review/CI
+wait states, and local validation timing splits when evidence records them.
 
 ### `runs list`, `runs inspect`, `runs simulate`, and `runs replay`
 

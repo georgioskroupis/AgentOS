@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./harness.js";
 export * from "./registry.js";
+export * from "./registry-orchestrator.js";
 export * from "./workflow.js";
 export * from "./linear.js";
 export * from "./github.js";

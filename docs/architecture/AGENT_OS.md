@@ -60,6 +60,11 @@ It keeps orchestration logic narrow:
   Linear `Merging` human override, treats already-merged PRs and successful
   merge commands as authoritative, records best-effort cleanup warnings, and
   moves Linear issues to `Done`.
+- Registry-wide orchestration reads `agent-os.yml`, resolves each project's
+  workflow path, and runs project-local orchestrator passes under a global
+  concurrency cap, per-project concurrency cap, and project runner lock. The
+  registry scheduler is fair across projects: exhausted or blocked projects do
+  not prevent another project from dispatching while capacity remains.
 - Runtime state is schema-versioned in `.agent-os/state/runtime.json`. On
   startup, AgentOS rebuilds due retries, marks orphaned running summaries
   stale or canceled, clears retry metadata for terminal or already-merged work,
@@ -71,6 +76,11 @@ It keeps orchestration logic narrow:
 - `agent-os inspect <issue>` reads durable state, recent logs, PR metadata, and
   review artifacts so Linear comments remain high-level while the harness keeps
   detailed evidence locally.
+- `agent-os status --registry` reads registry runtime summaries plus each
+  project's workflow, runtime, issue state, and recent logs. It separates
+  transient tracker/network failures from issue run failures, surfaces daemon
+  freshness after `main` advances, shows CI/review/merge/retry waits, and
+  preserves local validation timing evidence alongside GitHub CI authority.
 
 ## Replication Layer
 

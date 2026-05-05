@@ -24,6 +24,8 @@ export interface ProjectRegistry {
   defaults?: {
     prProvider?: "github";
     workspaceRoot?: string;
+    maxConcurrency?: number;
+    pollingIntervalMs?: number;
   };
   projects: ProjectConfig[];
 }
@@ -256,7 +258,9 @@ export interface ValidationState {
   checkedAt: string;
   finalStatus?: "passed" | "failed";
   acceptedCommands?: ValidationCommandState[];
+  additionalPassingCommands?: ValidationCommandState[];
   failedHistoricalAttempts?: ValidationCommandState[];
+  githubCi?: ValidationCiState;
 }
 
 export interface ValidationCommandState {
@@ -264,6 +268,13 @@ export interface ValidationCommandState {
   exitCode: number;
   startedAt: string;
   finishedAt: string;
+}
+
+export interface ValidationCiState {
+  status: "passed" | "failed" | "pending";
+  headSha?: string | null;
+  source?: string;
+  checkedAt?: string;
 }
 
 export type RunPhase =

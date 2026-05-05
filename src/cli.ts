@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
-import { addProject, loadRegistry, removeProject } from "./registry.js";
+import { acquireProjectRunnerLock, addProject, loadRegistry, releaseProjectRunnerLock, removeProject } from "./registry.js";
 import { readText } from "./fs-utils.js";
 import {
   attachPrWithAgentLifecycleTool,
@@ -12,16 +12,25 @@ import {
   recordHandoffWithAgentLifecycleTool
 } from "./agent-lifecycle.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
-import { getStatus, inspectIssue } from "./status.js";
+import { getRegistryStatus, getStatus, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
 import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
+import { RegistryOrchestrator } from "./registry-orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
 import { formatRunInspect, formatRunReplay, RunArtifactStore } from "./runs.js";
 import { formatSetupReport, runSetupWizard } from "./setup-wizard.js";
 
 const program = new Command();
+
+const parsePositiveIntegerOption = (label: string) => (value: string): number => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0 || String(parsed) !== value.trim()) {
+    throw new InvalidArgumentError(`${label} must be a positive integer`);
+  }
+  return parsed;
+};
 
 program
   .name("agent-os")
@@ -135,7 +144,7 @@ project
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .option("--profile <profile>", "harness profile", "base")
   .option("--linear-project <slug>", "Linear project slug")
-  .option("--max-concurrency <number>", "max concurrency", "1")
+  .option("--max-concurrency <number>", "max concurrency", parsePositiveIntegerOption("max-concurrency"), 1)
   .option("--registry <path>", "registry path", "agent-os.yml")
   .action(async (name, repo, options) => {
     await addProject({
@@ -144,7 +153,7 @@ project
       workflow: options.workflow,
       harnessProfile: assertHarnessProfile(options.profile),
       projectSlug: options.linearProject,
-      maxConcurrency: Number.parseInt(options.maxConcurrency, 10),
+      maxConcurrency: options.maxConcurrency,
       registryPath: options.registry
     });
     console.log(`project added: ${name}`);
@@ -168,8 +177,10 @@ orchestrator
   .action(async (options) => {
     const repo = resolve(options.repo);
     const workflow = resolve(repo, options.workflow);
-    const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
-    await service.runOnce(true);
+    await withProjectRunnerLock(repo, "single-project:once", async () => {
+      const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
+      await service.runOnce(true);
+    });
   });
 
 orchestrator
@@ -182,15 +193,54 @@ orchestrator
     process.on("SIGTERM", () => controller.abort());
     const repo = resolve(options.repo);
     const workflow = resolve(repo, options.workflow);
-    const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
+    await withProjectRunnerLock(repo, "single-project:run", async () => {
+      const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
+      await service.runUntilStopped(controller.signal);
+    });
+  });
+
+orchestrator
+  .command("once-registry")
+  .option("--registry <path>", "registry path", "agent-os.yml")
+  .option("--max-concurrency <number>", "global registry concurrency cap", parsePositiveIntegerOption("max-concurrency"))
+  .action(async (options) => {
+    const service = new RegistryOrchestrator({
+      registryPath: options.registry,
+      maxConcurrency: options.maxConcurrency
+    });
+    const result = await service.runOnce(true);
+    for (const summary of result.summaries) {
+      console.log(`${summary.name}\t${summary.status}\tdispatched=${summary.dispatched ?? 0}\tactive=${summary.activeRuns}/${summary.maxConcurrency}`);
+    }
+  });
+
+orchestrator
+  .command("run-registry")
+  .option("--registry <path>", "registry path", "agent-os.yml")
+  .option("--max-concurrency <number>", "global registry concurrency cap", parsePositiveIntegerOption("max-concurrency"))
+  .option("--poll-interval-ms <number>", "registry polling interval in milliseconds", parsePositiveIntegerOption("poll-interval-ms"))
+  .action(async (options) => {
+    const controller = new AbortController();
+    process.on("SIGINT", () => controller.abort());
+    process.on("SIGTERM", () => controller.abort());
+    const service = new RegistryOrchestrator({
+      registryPath: options.registry,
+      maxConcurrency: options.maxConcurrency,
+      pollingIntervalMs: options.pollIntervalMs
+    });
     await service.runUntilStopped(controller.signal);
   });
 
 program
   .command("status")
   .option("--repo <path>", "repository path", process.cwd())
+  .option("--registry [path]", "show registry-wide status from agent-os.yml")
   .option("--limit <number>", "number of recent log lines", "20")
   .action(async (options) => {
+    if (options.registry !== undefined) {
+      console.log(await getRegistryStatus(typeof options.registry === "string" ? options.registry : "agent-os.yml", Number.parseInt(options.limit, 10)));
+      return;
+    }
     console.log(await getStatus(options.repo, Number.parseInt(options.limit, 10)));
   });
 
@@ -474,6 +524,15 @@ try {
 function parseSimulationStatus(value: string): "succeeded" | "failed" | "timed_out" | "stalled" | "canceled" | "stale" {
   if (value === "succeeded" || value === "failed" || value === "timed_out" || value === "stalled" || value === "canceled" || value === "stale") return value;
   throw new Error(`unsupported simulation status: ${value}`);
+}
+
+async function withProjectRunnerLock<T>(repoRoot: string, owner: string, action: () => Promise<T>): Promise<T> {
+  const lockPath = await acquireProjectRunnerLock(repoRoot, owner);
+  try {
+    return await action();
+  } finally {
+    await releaseProjectRunnerLock(lockPath);
+  }
 }
 
 async function linearClientFromWorkflow(workflowPath: string): Promise<LinearClient> {

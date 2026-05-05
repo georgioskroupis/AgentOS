@@ -83,8 +83,22 @@ bin/agent-os project add my-project ../my-project \
 bin/agent-os orchestrator once --repo ../my-project --workflow WORKFLOW.md
 ```
 
+For every registered project in `agent-os.yml`, use the registry pass:
+
+```bash
+bin/agent-os orchestrator once-registry --registry agent-os.yml --max-concurrency 2
+```
+
 ## Start Continuous Orchestration
 
 ```bash
 bin/agent-os orchestrator run --repo ../my-project --workflow WORKFLOW.md
+```
+
+Registry-wide continuous orchestration keeps project-local workflow authority
+while applying global/per-project concurrency and project runner locks:
+
+```bash
+bin/agent-os orchestrator run-registry --registry agent-os.yml --max-concurrency 2
+bin/agent-os status --registry
 ```

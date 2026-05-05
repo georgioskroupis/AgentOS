@@ -29,6 +29,10 @@ layers:
 - `src/runner/app-server.ts` targets Codex App Server through JSON-RPC.
 - `src/orchestrator.ts` schedules issues, runs agents, reconciles state, and
   records observability events.
+- `src/registry-orchestrator.ts` coordinates registered projects from
+  `agent-os.yml`, applying global/per-project concurrency and per-project
+  locks while delegating actual issue dispatch to the single-project
+  orchestrator.
 
 ## Boundaries
 
@@ -45,6 +49,10 @@ layers:
   to `Human Review`.
 - Linear pagination, dependency blocking, retries, and successful unchanged
   issue suppression are code paths, not prose-only policy.
+- Registry-wide orchestration is a coordinator layer over project-local
+  workflows. Project trust, lifecycle, automation, tracker, workspace, review,
+  and merge settings stay in each project's `WORKFLOW.md`; the registry adds
+  cross-project fairness, capacity, lock ownership, and status summaries.
 
 <!-- AGENTOS:BEGIN -->
 ## AgentOS Architecture Notes
@@ -61,6 +69,7 @@ src/github.ts shells through gh for PR status and squash merge workflows.
 src/runtime-state.ts persists active-run, retry-queue, claimed-issue, daemon freshness, and startup recovery state.
 src/runner/app-server.ts targets Codex App Server through JSON-RPC.
 src/orchestrator.ts schedules Linear issues, runs Codex agents, reconciles state, records events, runs automated review, and shepherds merges.
+src/registry-orchestrator.ts coordinates registry-wide orchestration across multiple registered projects while preserving project-local workflow authority.
 scripts/agent-check.sh is the primary project harness check and validates required files, shell syntax, harness contract, typecheck, tests, and build when node_modules exists.
 GitHub Actions CI is present and documented as running npm ci followed by npm run agent-check.
 

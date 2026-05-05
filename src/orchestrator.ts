@@ -48,6 +48,18 @@ export interface OrchestratorOptions {
   runner?: AgentRunner;
   logger?: JsonlLogger;
   env?: NodeJS.ProcessEnv;
+  maxConcurrentAgents?: number;
+}
+
+export interface OrchestratorRunOptions {
+  dispatchLimit?: number;
+}
+
+export interface OrchestratorRunSummary {
+  dispatched: number;
+  retryDispatched: number;
+  candidateDispatched: number;
+  candidates: number;
 }
 
 interface RunningEntry {
@@ -97,23 +109,35 @@ export class Orchestrator {
   async reload(): Promise<void> {
     this.workflow = await loadWorkflow(this.options.workflowPath);
     this.config = resolveServiceConfig(this.workflow, this.options.env);
+    if (this.options.maxConcurrentAgents != null && Number.isInteger(this.options.maxConcurrentAgents) && this.options.maxConcurrentAgents > 0) {
+      this.config.agent.maxConcurrentAgents = Math.min(this.config.agent.maxConcurrentAgents, this.options.maxConcurrentAgents);
+    }
     this.tracker = this.options.tracker ?? new LinearClient(this.config.tracker);
     this.runner = this.options.runner ?? new CodexAppServerRunner();
   }
 
-  async runOnce(waitForWorkers = true): Promise<void> {
+  async runOnce(waitForWorkers = true, options: OrchestratorRunOptions = {}): Promise<OrchestratorRunSummary> {
     await this.reload();
+    let dispatched = 0;
+    let retryDispatched = 0;
+    let candidateDispatched = 0;
+    const remainingDispatchCapacity = (): number => {
+      if (options.dispatchLimit == null) return Number.POSITIVE_INFINITY;
+      return Math.max(0, options.dispatchLimit - dispatched);
+    };
     await this.refreshDaemonRuntimeState();
     await this.reconstructStartupState();
     await this.cleanupTerminalWorkspaces();
     await this.reconcile();
     validateDispatchConfig(this.config);
-    await this.dispatchDueRetries();
+    retryDispatched = await this.dispatchDueRetries(remainingDispatchCapacity());
+    dispatched += retryDispatched;
     if (this.config.github.mergeMode !== "manual") {
       await this.shepherdMergingIssues();
     }
     const candidates = await this.tracker.fetchCandidates(this.config.tracker.activeStates);
     for (const issue of candidates) {
+      if (remainingDispatchCapacity() <= 0) break;
       if (!this.isEligible(issue)) continue;
       if (this.running.size >= this.config.agent.maxConcurrentAgents) break;
       if (!this.hasSlot(issue.state)) continue;
@@ -121,10 +145,13 @@ export class Orchestrator {
       const prepared = await this.prepareForDispatch(issue);
       if (!prepared) continue;
       await this.dispatch(prepared, retry && retry.dueAtMs <= Date.now() ? retry.attempt : null);
+      dispatched += 1;
+      candidateDispatched += 1;
     }
     if (waitForWorkers) {
       await Promise.allSettled([...this.running.values()].map((entry) => entry.promise));
     }
+    return { dispatched, retryDispatched, candidateDispatched, candidates: candidates.length };
   }
 
   async runUntilStopped(signal: AbortSignal): Promise<void> {
@@ -833,14 +860,17 @@ export class Orchestrator {
     return summarizeFeedback(status, threads);
   }
 
-  private async dispatchDueRetries(): Promise<void> {
+  private async dispatchDueRetries(maxDispatches = Number.POSITIVE_INFINITY): Promise<number> {
+    if (maxDispatches <= 0) return 0;
     const due = [...this.retries.values()]
       .filter((retry) => retry.dueAtMs <= Date.now())
       .sort((a, b) => a.dueAtMs - b.dueAtMs);
-    if (due.length === 0) return;
+    if (due.length === 0) return 0;
 
     const states = await this.tracker.fetchIssueStates(due.map((retry) => retry.issueId)).catch(() => null);
+    let dispatched = 0;
     for (const retry of due) {
+      if (dispatched >= maxDispatches) break;
       if (this.running.size >= this.config.agent.maxConcurrentAgents) break;
       if (this.running.has(retry.issueId) || this.claimed.has(retry.issueId)) continue;
       const current = states?.get(retry.issueId);
@@ -859,7 +889,9 @@ export class Orchestrator {
       const prepared = await this.prepareForDispatch(issue);
       if (!prepared) continue;
       await this.dispatch(prepared, retry.attempt);
+      dispatched += 1;
     }
+    return dispatched;
   }
 
   private async cleanupTerminalWorkspaces(): Promise<void> {
