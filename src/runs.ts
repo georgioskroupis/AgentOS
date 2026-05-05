@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureDir, exists, writeTextEnsuringDir } from "./fs-utils.js";
+import { ensureDir, exists, writeTextAtomicEnsuringDir, writeTextEnsuringDir } from "./fs-utils.js";
 import { redactText, redactValue } from "./redaction.js";
 import type { AgentEvent, AgentRunResult, Issue, Workspace } from "./types.js";
 
@@ -15,8 +15,10 @@ export interface RunSummary {
   attempt: number | null;
   status: "running" | AgentRunResult["status"];
   startedAt: string;
+  lastEventAt?: string;
   finishedAt?: string;
   workspacePath?: string;
+  stopReason?: string;
   error?: string;
   metrics: {
     tokens: {
@@ -34,6 +36,8 @@ export interface RunSummary {
 }
 
 export class RunArtifactStore {
+  private summaryQueues = new Map<string, Promise<void>>();
+
   constructor(private readonly repoRoot: string) {}
 
   async startRun(input: { issue: Issue; attempt: number | null; workspace?: Workspace }): Promise<RunSummary> {
@@ -47,6 +51,7 @@ export class RunArtifactStore {
       attempt: input.attempt,
       status: "running",
       startedAt,
+      lastEventAt: startedAt,
       workspacePath: input.workspace?.path,
       metrics: {
         tokens: {},
@@ -65,8 +70,7 @@ export class RunArtifactStore {
   }
 
   async setWorkspace(runId: string, workspace: Workspace): Promise<void> {
-    const current = await this.readSummary(runId);
-    await this.writeSummary({ ...current, workspacePath: workspace.path });
+    await this.updateSummary(runId, (current) => ({ ...current, workspacePath: workspace.path }));
   }
 
   async writeHandoff(runId: string, handoff: string): Promise<void> {
@@ -76,14 +80,15 @@ export class RunArtifactStore {
   async writeEvent(runId: string, event: AgentEvent & { runId?: string }): Promise<void> {
     await ensureDir(this.runDir(runId));
     await appendFile(this.pathFor(runId, "events.jsonl"), `${JSON.stringify(redactValue({ ...event, runId }))}\n`, "utf8");
+    await this.touchEvent(runId, event.timestamp);
   }
 
   async completeRun(runId: string, result: AgentRunResult): Promise<RunSummary> {
-    const current = await this.readSummary(runId);
-    const summary: RunSummary = {
+    return this.updateSummary(runId, async (current) => ({
       ...current,
       status: result.status,
       finishedAt: new Date().toISOString(),
+      stopReason: result.error ?? (result.status === "succeeded" ? undefined : result.status),
       error: result.error,
       metrics: {
         tokens: {
@@ -98,16 +103,23 @@ export class RunArtifactStore {
         rateLimits: result.rateLimits ?? current.metrics.rateLimits
       },
       artifactHashes: await this.hashArtifacts(runId)
-    };
-    await this.writeSummary(summary);
-    return summary;
+    }));
   }
 
   async failRun(runId: string, error: string): Promise<RunSummary> {
     return this.completeRun(runId, { status: "failed", error });
   }
 
+  async markRunStale(runId: string, reason: string): Promise<RunSummary> {
+    return this.completeRun(runId, { status: "stale", error: reason });
+  }
+
+  async markRunCanceled(runId: string, reason: string): Promise<RunSummary> {
+    return this.completeRun(runId, { status: "canceled", error: reason });
+  }
+
   async inspect(runId: string): Promise<{ summary: RunSummary; warnings: string[] }> {
+    await this.summaryQueues.get(runId);
     const summary = await this.readSummary(runId);
     const actualHashes = await this.hashArtifacts(runId);
     const warnings = Object.entries(summary.artifactHashes)
@@ -182,8 +194,33 @@ export class RunArtifactStore {
     return JSON.parse(await readFile(this.pathFor(runId, "summary.json"), "utf8")) as RunSummary;
   }
 
+  private async touchEvent(runId: string, timestamp: string): Promise<void> {
+    const path = this.pathFor(runId, "summary.json");
+    if (!(await exists(path))) return;
+    await this.updateSummary(runId, (current) => (current.status === "running" ? { ...current, lastEventAt: timestamp } : current));
+  }
+
   private async writeSummary(summary: RunSummary): Promise<void> {
-    await writeTextEnsuringDir(this.pathFor(summary.runId, "summary.json"), `${JSON.stringify(redactValue(summary), null, 2)}\n`);
+    await writeTextAtomicEnsuringDir(this.pathFor(summary.runId, "summary.json"), `${JSON.stringify(redactValue(summary), null, 2)}\n`);
+  }
+
+  private async updateSummary(runId: string, mutator: (current: RunSummary) => RunSummary | Promise<RunSummary>): Promise<RunSummary> {
+    const previous = this.summaryQueues.get(runId) ?? Promise.resolve();
+    let nextSummary!: RunSummary;
+    const next = previous.then(async () => {
+      const current = await this.readSummary(runId);
+      nextSummary = await mutator(current);
+      await this.writeSummary(nextSummary);
+    });
+    this.summaryQueues.set(
+      runId,
+      next.then(
+        () => undefined,
+        () => undefined
+      )
+    );
+    await next;
+    return nextSummary;
   }
 
   private async hashArtifacts(runId: string): Promise<Record<string, string>> {

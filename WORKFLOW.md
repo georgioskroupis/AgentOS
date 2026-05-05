@@ -129,7 +129,7 @@ policy:
 - `agent-owned`: experimental only. Strict workflow validation requires
   configured tracker tools, idempotency marker format, allowed transitions,
   duplicate-comment behavior, tracker-write fallback behavior, and an explicit
-  acknowledgement that durable retry/startup reconstruction is not yet complete.
+  acknowledgement that agent-owned durable recovery remains experimental.
 
 Repo-local Linear lifecycle tools are available for source-aligned modes:
 

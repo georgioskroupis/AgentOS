@@ -1,6 +1,6 @@
-import { access, chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { constants, existsSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function packageRoot(): string {
@@ -49,6 +49,13 @@ export async function copyFileEnsuringDir(source: string, target: string): Promi
 export async function writeTextEnsuringDir(path: string, content: string): Promise<void> {
   await ensureDir(dirname(path));
   await writeFile(path, content, "utf8");
+}
+
+export async function writeTextAtomicEnsuringDir(path: string, content: string): Promise<void> {
+  await ensureDir(dirname(path));
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+  await writeFile(tmp, content, "utf8");
+  await rename(tmp, path);
 }
 
 export async function readText(path: string): Promise<string> {

@@ -321,7 +321,7 @@ describe("workflow", () => {
         "    - In Progress -> Human Review",
         "  duplicate_comment_behavior: upsert",
         "  fallback_behavior: write handoff and stop human_required",
-        "  maturity_acknowledgement: durable retry/startup reconstruction is not yet complete",
+        "  maturity_acknowledgement: agent-owned durable recovery remains experimental",
         "tracker:",
         "  api_key: $LINEAR_API_KEY",
         "  project_slug: AgentOS",

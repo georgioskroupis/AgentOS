@@ -18,8 +18,8 @@ needed, and writes `.agent-os/handoff-<issue>.md`.
 but expects substantive handoff/update content to be owned by agent artifacts or
 tracker tools. `agent-owned` is experimental; strict workflow validation rejects
 it unless tracker tools, idempotency markers, allowed transitions,
-duplicate-comment behavior, fallback behavior, and the durable-recovery maturity
-acknowledgement are declared.
+duplicate-comment behavior, fallback behavior, and the agent-owned durable
+recovery maturity acknowledgement are declared.
 
 For PR-producing work, Codex should create or find the pull request through
 the repo-local non-interactive harness script:
@@ -56,6 +56,12 @@ remove the issue worktree, delete safe `agent/*` branches on a best-effort
 basis, comment in Linear, and move the issue to `Done`. A cleanup failure after
 a successful or already-completed merge is reported as an operator-visible
 warning, not as a failed merge or implementation retry.
+
+On startup, AgentOS reconstructs `.agent-os/state/runtime.json`, stale run
+summaries, issue state, workspace locks, and known PR merge state before
+dispatching. Terminal Linear issues, canceled/duplicate issues, already-merged
+PRs, and stale review runs are classified locally instead of being sent back
+through implementation.
 
 This flow is dogfooded by the AgentOS project before being reused elsewhere.
 For successful dogfood PR probes, confirm the pull request was created through

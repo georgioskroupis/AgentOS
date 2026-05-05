@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
@@ -31,11 +32,12 @@ import {
   writeReviewArtifact
 } from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
-import { RunArtifactStore } from "./runs.js";
+import { RunArtifactStore, type RunSummary } from "./runs.js";
+import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary, type RuntimeRetryEntry } from "./runtime-state.js";
 import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
-import { WorkspaceManager } from "./workspace.js";
+import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, Issue, IssueState, IssueTracker, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 
@@ -51,6 +53,7 @@ export interface OrchestratorOptions {
 interface RunningEntry {
   issue: Issue;
   startedAt: number;
+  runId: string | null;
   lastCodexEventAt: number | null;
   abortController: AbortController;
   promise: Promise<void>;
@@ -72,16 +75,23 @@ export class Orchestrator {
   private runner!: AgentRunner;
   private logger: JsonlLogger;
   private runArtifacts: RunArtifactStore;
+  private runtimeState: RuntimeStateStore;
   private running = new Map<string, RunningEntry>();
   private claimed = new Set<string>();
   private retries = new Map<string, RetryEntry>();
   private completedMarkers = new Map<string, string>();
   private mergeWaitingMarkers = new Map<string, string>();
   private startupCleanupDone = false;
+  private startupReconstructionDone = false;
+  private daemonStartedAt = new Date().toISOString();
+  private daemonStartGitSha: string | null = null;
+  private daemonStartMainGitSha: string | null = null;
+  private freshnessWarningMarker: string | null = null;
 
   constructor(private readonly options: OrchestratorOptions) {
     this.logger = options.logger ?? new JsonlLogger(resolve(options.repoRoot));
     this.runArtifacts = new RunArtifactStore(resolve(options.repoRoot));
+    this.runtimeState = new RuntimeStateStore(resolve(options.repoRoot));
   }
 
   async reload(): Promise<void> {
@@ -93,6 +103,8 @@ export class Orchestrator {
 
   async runOnce(waitForWorkers = true): Promise<void> {
     await this.reload();
+    await this.refreshDaemonRuntimeState();
+    await this.reconstructStartupState();
     await this.cleanupTerminalWorkspaces();
     await this.reconcile();
     validateDispatchConfig(this.config);
@@ -106,7 +118,9 @@ export class Orchestrator {
       if (this.running.size >= this.config.agent.maxConcurrentAgents) break;
       if (!this.hasSlot(issue.state)) continue;
       const retry = this.retries.get(issue.id);
-      this.dispatch(issue, retry && retry.dueAtMs <= Date.now() ? retry.attempt : null);
+      const prepared = await this.prepareForDispatch(issue);
+      if (!prepared) continue;
+      await this.dispatch(prepared, retry && retry.dueAtMs <= Date.now() ? retry.attempt : null);
     }
     if (waitForWorkers) {
       await Promise.allSettled([...this.running.values()].map((entry) => entry.promise));
@@ -133,18 +147,435 @@ export class Orchestrator {
     await this.runArtifacts.writeEvent(runId, payload);
   }
 
-  private dispatch(issue: Issue, attempt: number | null): void {
+  private async refreshDaemonRuntimeState(): Promise<void> {
+    const repoRoot = resolve(this.options.repoRoot);
+    this.daemonStartGitSha ??= await gitRevParse(repoRoot, "HEAD");
+    this.daemonStartMainGitSha ??= await gitRevParse(repoRoot, "main").then((sha) => sha ?? gitRevParse(repoRoot, "origin/main"));
+    const currentGitSha = await gitRevParse(repoRoot, "HEAD");
+    const currentMainGitSha = await gitRevParse(repoRoot, "main").then((sha) => sha ?? gitRevParse(repoRoot, "origin/main"));
+    const mainAdvanced = Boolean(this.daemonStartMainGitSha && currentMainGitSha && this.daemonStartMainGitSha !== currentMainGitSha);
+    const freshnessMessage = mainAdvanced
+      ? `main advanced from ${this.daemonStartMainGitSha} to ${currentMainGitSha}; restart the long-running AgentOS daemon after self-modifying code lands`
+      : null;
+    await this.runtimeState.setDaemon({
+      startedAt: this.daemonStartedAt,
+      startGitSha: this.daemonStartGitSha,
+      startMainGitSha: this.daemonStartMainGitSha,
+      currentGitSha,
+      currentMainGitSha,
+      workflowPath: this.workflow.workflowPath,
+      freshnessStatus: mainAdvanced ? "main_advanced" : "fresh",
+      freshnessMessage
+    });
+    if (freshnessMessage && this.freshnessWarningMarker !== freshnessMessage) {
+      this.freshnessWarningMarker = freshnessMessage;
+      await this.logger.write({
+        type: "daemon_freshness_warning",
+        message: freshnessMessage,
+        payload: {
+          daemonStartedAt: this.daemonStartedAt,
+          workflowPath: this.workflow.workflowPath,
+          startGitSha: this.daemonStartGitSha,
+          startMainGitSha: this.daemonStartMainGitSha,
+          currentGitSha,
+          currentMainGitSha
+        }
+      });
+    }
+  }
+
+  private async reconstructStartupState(): Promise<void> {
+    if (this.startupReconstructionDone) return;
+    this.startupReconstructionDone = true;
+
+    const runtime = await this.runtimeState.read();
+    const issueStore = new IssueStateStore(resolve(this.options.repoRoot));
+    const issueStates = await issueStore.list();
+    const runningSummaries = (await this.runArtifacts.listRuns()).filter((summary) => summary.status === "running");
+    const knownIssueIds = uniqueStrings([
+      ...runtime.retryQueue.map((entry) => entry.issueId),
+      ...runtime.activeRuns.map((entry) => entry.issueId),
+      ...runtime.claimedIssues.map((entry) => entry.issueId),
+      ...issueStates.map((state) => state.issueId).filter(Boolean),
+      ...runningSummaries.map((summary) => summary.issueId)
+    ]);
+    const states = knownIssueIds.length > 0 ? await this.tracker.fetchIssueStates(knownIssueIds).catch(() => null) : null;
+    const messages: string[] = [];
+    let staleRuns = 0;
+    let retriesRebuilt = 0;
+    let terminalIssues = 0;
+    let locksReleased = 0;
+    let freshnessWarnings = runtime.daemon?.freshnessStatus === "main_advanced" ? 1 : 0;
+
+    const lockRecoveries = await recoverWorkspaceLocks(this.config.workspace.root).catch(async (error: Error) => {
+      await this.logger.write({ type: "startup_recovery_warning", message: `workspace lock recovery failed: ${error.message}` });
+      return [];
+    });
+    locksReleased = lockRecoveries.filter((entry) => entry.recovered).length;
+    for (const recovery of lockRecoveries.filter((entry) => entry.recovered)) {
+      messages.push(`released stale workspace lock ${recovery.workspaceKey}: ${recovery.reason}`);
+    }
+
+    for (const state of issueStates) {
+      const current = state.issueId ? states?.get(state.issueId) : undefined;
+      if (current && isStateIn(current.state, this.config.tracker.terminalStates)) {
+        await this.classifyTerminalIssue(current, `startup recovery: Linear state is ${current.state}`);
+        terminalIssues += 1;
+        messages.push(`reconciled ${current.identifier} to terminal Linear state ${current.state}`);
+        continue;
+      }
+      const issue = current ?? issueFromState(state);
+      if (issue && (await this.classifyAlreadyMergedIssue(issue, state, "startup recovery: recorded pull request is already merged"))) {
+        terminalIssues += 1;
+        messages.push(`reconciled ${issue.identifier} to already-merged PR truth`);
+      }
+    }
+
+    const activeByRunId = new Map(runtime.activeRuns.filter((entry) => entry.runId).map((entry) => [entry.runId!, entry]));
+    const activeEntries: RuntimeActiveRun[] = [...runtime.activeRuns];
+    for (const summary of runningSummaries) {
+      if (activeByRunId.has(summary.runId)) continue;
+      const issue = issueFromRunSummary(summary);
+      activeEntries.push({
+        issueId: summary.issueId,
+        identifier: summary.issueIdentifier,
+        issue,
+        attempt: summary.attempt,
+        runId: summary.runId,
+        startedAt: summary.startedAt,
+        lastEventAt: summary.lastEventAt,
+        workspacePath: summary.workspacePath
+      });
+    }
+    for (const active of activeEntries) {
+      const current = states?.get(active.issueId);
+      const issue = current ?? active.issue;
+      const result = await this.classifyStaleActiveRun(active, runningSummaries.find((summary) => summary.runId === active.runId), issue);
+      if (result.stale) staleRuns += 1;
+      if (result.terminal) terminalIssues += 1;
+      if (result.retryRebuilt) retriesRebuilt += 1;
+      messages.push(...result.messages);
+    }
+
+    const runtimeAfterStale = await this.runtimeState.read();
+    for (const retry of runtimeAfterStale.retryQueue) {
+      const current = states?.get(retry.issueId);
+      if (current === null) {
+        await this.runtimeState.clearIssue(retry.issueId);
+        this.retries.delete(retry.issueId);
+        messages.push(`cleared retry for ${retry.identifier}: issue no longer exists in tracker`);
+        continue;
+      }
+      const issue = current ?? retry.issue;
+      if (isStateIn(issue.state, this.config.tracker.terminalStates)) {
+        await this.classifyTerminalIssue(issue, `startup recovery: retry cleared because Linear state is ${issue.state}`);
+        terminalIssues += 1;
+        messages.push(`cleared retry for terminal issue ${issue.identifier}`);
+        continue;
+      }
+      const state = issueStates.find((item) => item.issueId === retry.issueId || item.issueIdentifier === retry.identifier) ?? null;
+      if (await this.classifyAlreadyMergedIssue(issue, state, "startup recovery: retry cleared because PR is already merged")) {
+        terminalIssues += 1;
+        messages.push(`cleared retry for already-merged issue ${issue.identifier}`);
+        continue;
+      }
+      this.retries.set(retry.issueId, runtimeRetryToMemory(retry));
+      retriesRebuilt += 1;
+      messages.push(`rebuilt retry for ${retry.identifier} due ${retry.dueAt}`);
+    }
+
+    const runtimeAfterRetries = await this.runtimeState.read();
+    for (const claim of runtimeAfterRetries.claimedIssues) {
+      if (runtimeAfterRetries.activeRuns.some((entry) => entry.issueId === claim.issueId)) continue;
+      await this.runtimeState.removeClaim(claim.issueId);
+      messages.push(`released stale claimed issue ${claim.identifier}`);
+    }
+
+    const summary: RuntimeRecoverySummary = {
+      recoveredAt: new Date().toISOString(),
+      messages,
+      staleRuns,
+      retriesRebuilt,
+      terminalIssues,
+      locksReleased,
+      freshnessWarnings
+    };
+    await this.runtimeState.recordRecovery(summary);
+    await this.logger.write({
+      type: "startup_recovery",
+      message: messages.length ? messages.join("; ") : "startup recovery completed with no stale runtime state",
+      payload: summary
+    });
+  }
+
+  private async classifyStaleActiveRun(active: RuntimeActiveRun, summary: RunSummary | undefined, issue: Issue): Promise<{ stale: boolean; terminal: boolean; retryRebuilt: boolean; messages: string[] }> {
+    const messages: string[] = [];
+    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(active.identifier);
+    const runId = active.runId ?? summary?.runId ?? state?.lastRunId;
+    const reason = `startup_recovery: run ${runId ?? "unknown"} was left running by a previous daemon process`;
+    const workspacePath = active.workspacePath ?? summary?.workspacePath ?? state?.workspacePath;
+    const workspaceMissing = Boolean(workspacePath && !(await exists(workspacePath)));
+    if (isStateIn(issue.state, this.config.tracker.terminalStates)) {
+      if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; Linear state is ${issue.state}`).catch(() => undefined);
+      await this.classifyTerminalIssue(issue, `${reason}; Linear state is ${issue.state}`);
+      messages.push(`classified stale running run for ${issue.identifier} as terminal (${issue.state})`);
+      return { stale: true, terminal: true, retryRebuilt: false, messages };
+    }
+    if (await this.classifyAlreadyMergedIssue(issue, state, `${reason}; PR already merged`)) {
+      if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; PR already merged`).catch(() => undefined);
+      messages.push(`classified stale running run for ${issue.identifier} as already merged`);
+      return { stale: true, terminal: true, retryRebuilt: false, messages };
+    }
+    if (state && isLocallySettledIssueState(state)) {
+      if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; local issue state is ${state.phase}`).catch(() => undefined);
+      await this.recordIssueState(issue, {
+        activeRunId: undefined,
+        nextRetryAt: undefined,
+        retryAttempt: undefined,
+        stopReason: reason
+      });
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      if (state.reviewStatus === "human_required" || state.phase === "human-required") {
+        await this.moveIssue(issue, this.config.tracker.reviewState);
+      }
+      messages.push(`cleared stale running run for ${issue.identifier}: local issue state is already ${state.phase}`);
+      return { stale: true, terminal: state.phase === "completed" && state.reviewStatus !== "human_required", retryRebuilt: false, messages };
+    }
+    if (runId) await this.runArtifacts.markRunStale(runId, workspaceMissing ? `${reason}; workspace is missing` : reason).catch(() => undefined);
+    await this.runtimeState.removeActiveRun(issue.id);
+
+    if (workspaceMissing) {
+      await this.recordIssueState(issue, {
+        phase: "needs-input",
+        lastError: `${reason}; workspace is missing`,
+        errorCategory: "workspace",
+        lifecycleStatus: "implementation_failure",
+        stopReason: `${reason}; workspace is missing`,
+        workspaceMissingAt: new Date().toISOString()
+      });
+      messages.push(`marked stale run for ${issue.identifier}: workspace is missing`);
+    }
+
+    if (state?.phase === "review" || state?.phase === "fix" || (pullRequestUrls(state).length > 0 && state?.reviewStatus !== "approved")) {
+      await this.recordIssueState(issue, {
+        phase: "human-required",
+        reviewStatus: "human_required",
+        lifecycleStatus: "review_escalation",
+        lastError: reason,
+        errorCategory: state?.phase === "fix" ? "fix" : "review",
+        stopReason: reason,
+        nextRetryAt: undefined,
+        retryAttempt: undefined
+      });
+      await this.moveIssue(issue, this.config.tracker.reviewState);
+      await this.runtimeState.clearIssue(issue.id);
+      messages.push(`escalated stale review/fix run for ${issue.identifier} to human review`);
+      return { stale: true, terminal: false, retryRebuilt: false, messages };
+    }
+
+    const previousAttempt = active.attempt ?? summary?.attempt ?? null;
+    const nextAttempt = previousAttempt == null ? 1 : previousAttempt + 1;
+    if (nextAttempt > this.config.agent.maxRetryAttempts) {
+      await this.recordIssueState(issue, {
+        phase: "needs-input",
+        lastError: reason,
+        errorCategory: "canceled",
+        lifecycleStatus: "implementation_failure",
+        stopReason: reason,
+        nextRetryAt: undefined,
+        retryAttempt: undefined
+      });
+      await this.moveIssue(issue, this.config.tracker.needsInputState);
+      await this.runtimeState.clearIssue(issue.id);
+      messages.push(`stale run for ${issue.identifier} exhausted retry budget`);
+      return { stale: true, terminal: false, retryRebuilt: false, messages };
+    }
+
+    const workspace = workspaceFromRuntime(active, summary, this.config.workspace.root);
+    const retry = await this.scheduleRetry(issue, previousAttempt, reason, 0, runId, workspace);
+    await this.recordIssueState(issue, {
+      lastError: reason,
+      errorCategory: "canceled",
+      lifecycleStatus: "implementation_failure",
+      stopReason: reason,
+      retryAttempt: retry.attempt,
+      nextRetryAt: new Date(retry.dueAtMs).toISOString()
+    });
+    await this.markLinearRetryScheduled(issue, workspace, retry);
+    messages.push(`scheduled startup retry for stale run ${issue.identifier}`);
+    return { stale: true, terminal: false, retryRebuilt: false, messages };
+  }
+
+  private async prepareForDispatch(issue: Issue): Promise<Issue | null> {
+    const states = await this.tracker.fetchIssueStates([issue.id]).catch(() => null);
+    const current = states?.get(issue.id);
+    if (current === null) {
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: "issue no longer exists in tracker"
+      });
+      return null;
+    }
+    const latest = current ?? issue;
+    if (isStateIn(latest.state, this.config.tracker.terminalStates)) {
+      await this.classifyTerminalIssue(latest, `dispatch skipped because Linear state is ${latest.state}`);
+      return null;
+    }
+    if (!isStateIn(latest.state, this.config.tracker.activeStates)) {
+      await this.runtimeState.clearIssue(latest.id);
+      this.retries.delete(latest.id);
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: latest.id,
+        issueIdentifier: latest.identifier,
+        message: `issue state ${latest.state} is not active`
+      });
+      return null;
+    }
+    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
+    if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
+      return null;
+    }
+    return latest;
+  }
+
+  private async preTurnCheck(issue: Issue): Promise<string | null> {
+    const states = await this.tracker.fetchIssueStates([issue.id]).catch(() => null);
+    const current = states?.get(issue.id);
+    if (current === null) return "issue_no_longer_exists";
+    const latest = current ?? issue;
+    if (isStateIn(latest.state, this.config.tracker.terminalStates)) return `issue_became_terminal:${latest.state}`;
+    if (!isStateIn(latest.state, runningAllowedStates(this.config))) return `issue_no_longer_dispatchable:${latest.state}`;
+    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
+    if (await this.hasAlreadyMergedPullRequest(state)) return "pull_request_already_merged";
+    return null;
+  }
+
+  private async classifyTerminalIssue(issue: Issue, reason: string): Promise<void> {
+    const phase: IssueState["phase"] = issue.state.toLowerCase() === this.config.github.doneState.toLowerCase() ? "completed" : "canceled";
+    const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
+    const workspacePath = join(this.config.workspace.root, issue.identifier.replace(/[^A-Za-z0-9._-]/g, "_"));
+    const missingWorkspace = !(await exists(workspacePath));
+    await workspaceManager.remove(issue.identifier).catch((error: Error) =>
+      this.logger.write({
+        type: "startup_recovery_warning",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: `terminal workspace cleanup failed: ${error.message}`
+      })
+    );
+    await this.recordIssueState(issue, {
+      phase,
+      lifecycleStatus: missingWorkspace ? "terminal_missing_workspace" : "terminal_linear",
+      terminalState: issue.state,
+      terminalReason: reason,
+      terminalAt: new Date().toISOString(),
+      activeRunId: undefined,
+      nextRetryAt: undefined,
+      retryAttempt: undefined,
+      stopReason: reason,
+      ...(missingWorkspace ? { workspaceMissingAt: new Date().toISOString() } : {})
+    });
+    await this.runtimeState.clearIssue(issue.id);
+    this.retries.delete(issue.id);
+    this.completedMarkers.set(issue.id, completionMarker(issue));
+    await this.logger.write({
+      type: "issue_terminal_reconciled",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: reason,
+      payload: { state: issue.state, phase, missingWorkspace }
+    });
+  }
+
+  private async classifyAlreadyMergedIssue(issue: Issue, state: IssueState | null, reason: string): Promise<boolean> {
+    const prUrl = await this.alreadyMergedPullRequestUrl(state);
+    if (!prUrl) return false;
+    const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
+    await workspaceManager.remove(issue.identifier).catch((error: Error) =>
+      this.logger.write({
+        type: "startup_recovery_warning",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: `already-merged workspace cleanup failed: ${error.message}`
+      })
+    );
+    await this.recordIssueState(issue, {
+      phase: "completed",
+      lifecycleStatus: "already_merged_pr",
+      mergedAt: new Date().toISOString(),
+      terminalReason: reason,
+      terminalAt: new Date().toISOString(),
+      activeRunId: undefined,
+      nextRetryAt: undefined,
+      retryAttempt: undefined,
+      stopReason: reason
+    });
+    await this.runtimeState.clearIssue(issue.id);
+    this.retries.delete(issue.id);
+    this.completedMarkers.set(issue.id, completionMarker(issue));
+    if (!isStateIn(issue.state, this.config.tracker.terminalStates)) {
+      await this.moveIssue(issue, this.config.github.doneState);
+    }
+    await this.logger.write({
+      type: "issue_already_merged_reconciled",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: reason,
+      payload: { prUrl }
+    });
+    return true;
+  }
+
+  private async hasAlreadyMergedPullRequest(state: IssueState | null): Promise<boolean> {
+    return Boolean(await this.alreadyMergedPullRequestUrl(state));
+  }
+
+  private async alreadyMergedPullRequestUrl(state: IssueState | null): Promise<string | null> {
+    const urls = uniqueStrings([mergeTargetPullRequest(state)?.url].filter((url): url is string => Boolean(url)));
+    if (urls.length === 0) return null;
+    const github = new GitHubClient(this.config.github.command);
+    const repoRoot = resolve(this.options.repoRoot);
+    for (const url of urls) {
+      const status = await github.getPullRequest(url, repoRoot).catch(async (error: Error) => {
+        await this.logger.write({
+          type: "github_status_warning",
+          message: `could not read PR merge state for ${url}: ${error.message}`
+        });
+        return null;
+      });
+      if (status?.merged) return url;
+    }
+    return null;
+  }
+
+  private async dispatch(issue: Issue, attempt: number | null): Promise<void> {
     this.claimed.add(issue.id);
     this.retries.delete(issue.id);
     this.completedMarkers.delete(issue.id);
     const abortController = new AbortController();
-    const promise = this.runIssue(issue, attempt, abortController).finally(() => {
+    const claimedAt = new Date().toISOString();
+    await this.runtimeState.removeRetry(issue.id);
+    await this.runtimeState.upsertClaim({
+      issueId: issue.id,
+      identifier: issue.identifier,
+      issue,
+      claimedAt
+    });
+    const promise = this.runIssue(issue, attempt, abortController).finally(async () => {
       this.running.delete(issue.id);
       this.claimed.delete(issue.id);
+      await this.runtimeState.removeActiveRun(issue.id);
     });
     this.running.set(issue.id, {
       issue,
       startedAt: Date.now(),
+      runId: null,
       lastCodexEventAt: null,
       abortController,
       promise
@@ -154,6 +585,20 @@ export class Orchestrator {
   private async runIssue(issue: Issue, attempt: number | null, abortController: AbortController): Promise<void> {
     const run = await this.runArtifacts.startRun({ issue, attempt });
     const runId = run.runId;
+    const running = this.running.get(issue.id);
+    if (running) {
+      running.runId = runId;
+    }
+    await this.runtimeState.upsertActiveRun({
+      issueId: issue.id,
+      identifier: issue.identifier,
+      issue,
+      attempt,
+      runId,
+      startedAt: run.startedAt,
+      lastEventAt: run.startedAt,
+      phase: "workspace"
+    });
     await this.writeRunEvent(runId, {
       type: "run_started",
       issueId: issue.id,
@@ -161,9 +606,24 @@ export class Orchestrator {
       message: issue.title
     });
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
-    await this.recordIssueState(issue, { phase: "workspace", lastRunId: runId });
+    await this.recordIssueState(issue, {
+      phase: "workspace",
+      lastRunId: runId,
+      activeRunId: runId,
+      retryAttempt: attempt ?? 0,
+      lastCodexEventAt: run.startedAt,
+      stopReason: undefined
+    });
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     const workspace = await workspaceManager.createOrReuse(issue.identifier);
+    await this.runtimeState.patchActiveRun(issue.id, {
+      workspacePath: workspace.path,
+      workspaceKey: workspace.workspaceKey
+    });
+    await this.recordIssueState(issue, {
+      workspacePath: workspace.path,
+      workspaceKey: workspace.workspaceKey
+    });
     await this.runArtifacts.setWorkspace(runId, workspace);
     try {
       await this.markLinearStarted(issue, workspace, attempt);
@@ -177,6 +637,11 @@ export class Orchestrator {
           message: result.error ?? result.status,
           payload: result
         });
+        if (isDispatchTerminalStop(result.error)) {
+          await this.handleTerminalStoppedRun(issue, result.error ?? result.status, runId);
+          await this.runArtifacts.completeRun(runId, result);
+          return;
+        }
         await this.handleFailedRun(issue, workspace, attempt, result.error ?? result.status, runId);
       } else {
         this.completedMarkers.set(issue.id, completionMarker(issue));
@@ -274,6 +739,8 @@ export class Orchestrator {
   private async runImplementationTurns(issue: Issue, attempt: number | null, workspace: Workspace, signal: AbortSignal | undefined, runId: string): Promise<AgentRunResult> {
     let result: AgentRunResult = { status: "failed", error: "no_turn_started" };
     for (let turnNumber = 1; turnNumber <= this.config.agent.maxTurns; turnNumber += 1) {
+      const preTurnStop = await this.preTurnCheck(issue);
+      if (preTurnStop) return { status: "canceled", error: preTurnStop };
       await this.recordIssueState(issue, { phase: "prompt" });
       const prompt = await this.implementationPrompt(issue, attempt, turnNumber, runId);
       await this.runArtifacts.writePrompt(runId, prompt);
@@ -286,7 +753,7 @@ export class Orchestrator {
         config: this.config,
         signal,
         onEvent: (event) => {
-          this.markRunningActivity(issue.id);
+          this.markRunningActivity(issue.id, event.timestamp);
           void this.writeRunEvent(runId, { ...event, runId });
         }
       });
@@ -383,11 +850,15 @@ export class Orchestrator {
       }
       const issue = current ?? retry.issue;
       if (isStateIn(issue.state, this.config.tracker.terminalStates)) {
+        await this.classifyTerminalIssue(issue, "retry skipped because Linear state is terminal");
         this.retries.delete(retry.issueId);
+        await this.runtimeState.clearIssue(retry.issueId);
         continue;
       }
       if (!this.hasSlot(issue.state)) continue;
-      this.dispatch(issue, retry.attempt);
+      const prepared = await this.prepareForDispatch(issue);
+      if (!prepared) continue;
+      await this.dispatch(prepared, retry.attempt);
     }
   }
 
@@ -562,7 +1033,7 @@ export class Orchestrator {
           config: readOnlyReviewConfig(this.config, workspaceReviewDir),
           signal,
           onEvent: (event) => {
-            this.markRunningActivity(issue.id);
+            this.markRunningActivity(issue.id, event.timestamp);
             void this.logger.write({ ...event, type: `review_${event.type}` });
           }
         });
@@ -729,7 +1200,7 @@ export class Orchestrator {
         config: this.config,
         signal,
         onEvent: (event) => {
-          this.markRunningActivity(issue.id);
+          this.markRunningActivity(issue.id, event.timestamp);
           void this.logger.write({ ...event, type: `review_fix_${event.type}` });
         }
       });
@@ -927,6 +1398,15 @@ export class Orchestrator {
       });
       if (pr.merged) {
         const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
+        await this.recordIssueState(issue, {
+          phase: "completed",
+          lifecycleStatus: "already_merged_pr",
+          mergedAt: new Date().toISOString(),
+          nextRetryAt: undefined,
+          retryAttempt: undefined,
+          stopReason: undefined
+        });
+        await this.runtimeState.clearIssue(issue.id);
         await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged. Treating that as authoritative and completing the issue.\n\n- PR: ${mergePr}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
         await this.moveIssue(issue, this.config.github.doneState);
         return;
@@ -942,6 +1422,8 @@ export class Orchestrator {
           await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
             ...state,
             humanOverrideAt: overrideAt,
+            humanContinuationAt: overrideAt,
+            lifecycleStatus: "human_continuation",
             updatedAt: overrideAt
           });
           await this.commentIssue(
@@ -963,6 +1445,11 @@ export class Orchestrator {
             payload: { prUrl: mergePr }
           });
         }
+        const validationFresh = state.validation?.status === "passed" || state.validation?.finalStatus === "passed";
+        if (!validationFresh) {
+          await this.markMergeFailed(issue, "human continuation requires fresh passing validation evidence before merge progression", mergePr);
+          return;
+        }
       }
 
       const readiness = evaluateMergeReadiness(pr, this.config.github.requireChecks);
@@ -978,6 +1465,15 @@ export class Orchestrator {
       await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
       await github.mergePullRequest(mergePr, this.config.github, repoRoot);
       const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
+      await this.recordIssueState(issue, {
+        phase: "completed",
+        lifecycleStatus: cleanupWarnings.length ? "post_merge_cleanup_warning" : "merge_success",
+        mergedAt: new Date().toISOString(),
+        nextRetryAt: undefined,
+        retryAttempt: undefined,
+        stopReason: undefined
+      });
+      await this.runtimeState.clearIssue(issue.id);
       await this.commentIssue(issue, `### AgentOS merge complete\n\nMerged successfully.\n\n- PR: ${mergePr}\n- Method: ${this.config.github.mergeMethod}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
       await this.moveIssue(issue, this.config.github.doneState);
       await this.logger.write({
@@ -1001,7 +1497,10 @@ export class Orchestrator {
     const cleanup = await github.cleanupMergedPullRequest(pr, this.config.github, resolve(this.options.repoRoot));
     warnings.push(...cleanup.warnings);
     if (warnings.length > 0) {
-      await this.recordIssueState(issue, { mergeCleanupWarnings: warnings });
+      await this.recordIssueState(issue, {
+        mergeCleanupWarnings: warnings,
+        lifecycleStatus: "post_merge_cleanup_warning"
+      });
       await this.logger.write({
         type: "merge_cleanup_warning",
         issueId: issue.id,
@@ -1038,9 +1537,58 @@ export class Orchestrator {
     return runningInState < stateLimit;
   }
 
-  private markRunningActivity(issueId: string): void {
+  private markRunningActivity(issueId: string, timestamp = new Date().toISOString()): void {
     const running = this.running.get(issueId);
-    if (running) running.lastCodexEventAt = Date.now();
+    if (running) {
+      running.lastCodexEventAt = Date.now();
+      void this.runtimeState.patchActiveRun(issueId, { lastEventAt: timestamp }).catch((error: Error) =>
+        this.logger.write({
+          type: "runtime_state_warning",
+          issueId,
+          message: `activity update failed: ${error.message}`
+        })
+      );
+    }
+  }
+
+  private async handleTerminalStoppedRun(issue: Issue, reason: string, runId: string): Promise<void> {
+    const states = await this.tracker.fetchIssueStates([issue.id]).catch(() => null);
+    const fetched = states?.get(issue.id);
+    const latest = fetched ?? issue;
+    if (fetched === null) {
+      await this.recordIssueState(issue, {
+        phase: "canceled",
+        lastRunId: runId,
+        lastError: reason,
+        errorCategory: "canceled",
+        stopReason: reason,
+        nextRetryAt: undefined,
+        retryAttempt: undefined
+      });
+      await this.runtimeState.clearIssue(issue.id);
+    } else if (isStateIn(latest.state, this.config.tracker.terminalStates)) {
+      await this.classifyTerminalIssue(latest, reason);
+    } else {
+      const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
+      if (!(await this.classifyAlreadyMergedIssue(latest, state, reason))) {
+        await this.recordIssueState(latest, {
+          phase: "human-required",
+          lastRunId: runId,
+          lastError: reason,
+          errorCategory: "canceled",
+          stopReason: reason,
+          nextRetryAt: undefined,
+          retryAttempt: undefined
+        });
+        await this.runtimeState.clearIssue(latest.id);
+      }
+    }
+    await this.writeRunEvent(runId, {
+      type: "run_skipped_terminal",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: reason
+    });
   }
 
   private async handleFailedRun(issue: Issue, workspace: Workspace, previousAttempt: number | null, error: string, runId: string): Promise<void> {
@@ -1056,7 +1604,10 @@ export class Orchestrator {
       await this.recordIssueState(issue, {
         phase: "needs-input",
         lastError: error,
-        errorCategory: "human-input"
+        errorCategory: "human-input",
+        stopReason: error,
+        nextRetryAt: undefined,
+        retryAttempt: undefined
       });
       await this.markLinearNeedsInput(issue, workspace, previousAttempt, error);
       return;
@@ -1065,21 +1616,27 @@ export class Orchestrator {
     if (nextAttempt > this.config.agent.maxRetryAttempts) {
       await this.recordIssueState(issue, {
         lastError: error,
-        errorCategory: categorizeRunError(error)
+        errorCategory: categorizeRunError(error),
+        lifecycleStatus: "implementation_failure",
+        stopReason: error,
+        nextRetryAt: undefined
       });
       await this.markLinearFailed(issue, workspace, previousAttempt, error);
       return;
     }
-    const retry = this.scheduleRetry(issue, previousAttempt, error);
+    const retry = await this.scheduleRetry(issue, previousAttempt, error, undefined, runId, workspace);
     await this.recordIssueState(issue, {
       lastError: error,
       errorCategory: categorizeRunError(error),
+      lifecycleStatus: "implementation_failure",
+      stopReason: error,
+      retryAttempt: retry.attempt,
       nextRetryAt: new Date(retry.dueAtMs).toISOString()
     });
     await this.markLinearRetryScheduled(issue, workspace, retry);
   }
 
-  private scheduleRetry(issue: Issue, previousAttempt: number | null, error: string | null, overrideDelayMs?: number): RetryEntry {
+  private async scheduleRetry(issue: Issue, previousAttempt: number | null, error: string | null, overrideDelayMs?: number, runId?: string, workspace?: Workspace): Promise<RetryEntry> {
     const attempt = previousAttempt == null ? 1 : previousAttempt + 1;
     const delay = overrideDelayMs ?? Math.min(10_000 * 2 ** Math.max(attempt - 1, 0), this.config.agent.maxRetryBackoffMs);
     const retry = {
@@ -1091,6 +1648,19 @@ export class Orchestrator {
       error
     };
     this.retries.set(issue.id, retry);
+    await this.runtimeState.upsertRetry({
+      issueId: issue.id,
+      identifier: issue.identifier,
+      issue,
+      attempt,
+      dueAt: new Date(retry.dueAtMs).toISOString(),
+      error,
+      errorCategory: error ? categorizeRunError(error) : undefined,
+      scheduledAt: new Date().toISOString(),
+      runId,
+      workspacePath: workspace?.path,
+      workspaceKey: workspace?.workspaceKey
+    });
     return retry;
   }
 
@@ -1115,7 +1685,10 @@ export class Orchestrator {
   private async markLinearSucceeded(issue: Issue, workspace: Workspace, handoff: string | null, state?: IssueState): Promise<void> {
     await this.recordIssueState(issue, {
       phase: "completed",
+      activeRunId: undefined,
       nextRetryAt: undefined,
+      retryAttempt: undefined,
+      stopReason: undefined,
       ...(state?.reviewStatus === "human_required"
         ? {}
         : {
@@ -1266,11 +1839,21 @@ export class Orchestrator {
   }
 
   private async recordIssueState(issue: Issue, patch: Partial<IssueState>): Promise<IssueState> {
-    return new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
+    const state = await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       ...patch
     });
+    const activePatch: Partial<RuntimeActiveRun> = {};
+    if (patch.phase) activePatch.phase = patch.phase;
+    if (patch.stopReason !== undefined) activePatch.stopReason = patch.stopReason;
+    if (patch.lastCodexEventAt) activePatch.lastEventAt = patch.lastCodexEventAt;
+    if (patch.workspacePath !== undefined) activePatch.workspacePath = patch.workspacePath;
+    if (patch.workspaceKey !== undefined) activePatch.workspaceKey = patch.workspaceKey;
+    if (Object.keys(activePatch).length > 0) {
+      await this.runtimeState.patchActiveRun(issue.id, activePatch);
+    }
+    return state;
   }
 
   private async moveIssue(issue: Issue, stateName: string | null): Promise<void> {
@@ -1306,6 +1889,10 @@ export class Orchestrator {
 
 function isNoPrHandoffApproved(state: IssueState): boolean {
   return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed");
+}
+
+function isLocallySettledIssueState(state: IssueState): boolean {
+  return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required";
 }
 
 function linearCommentKey(event: string, issueIdentifier: string): string {
@@ -1493,6 +2080,74 @@ function validationFailureMessage(validation: NonNullable<IssueState["validation
   return `validation_failed: ${reason}`;
 }
 
+function runtimeRetryToMemory(retry: RuntimeRetryEntry): RetryEntry {
+  const due = Date.parse(retry.dueAt);
+  return {
+    issueId: retry.issueId,
+    identifier: retry.identifier,
+    issue: retry.issue,
+    attempt: retry.attempt,
+    dueAtMs: Number.isFinite(due) ? due : Date.now(),
+    error: retry.error
+  };
+}
+
+function issueFromState(state: IssueState): Issue {
+  return {
+    id: state.issueId,
+    identifier: state.issueIdentifier,
+    title: state.issueIdentifier,
+    description: null,
+    priority: null,
+    state: state.terminalState ?? "",
+    branch_name: null,
+    url: null,
+    labels: [],
+    blocked_by: [],
+    created_at: null,
+    updated_at: state.updatedAt
+  };
+}
+
+function issueFromRunSummary(summary: RunSummary): Issue {
+  return {
+    id: summary.issueId,
+    identifier: summary.issueIdentifier,
+    title: summary.issueIdentifier,
+    description: null,
+    priority: null,
+    state: "",
+    branch_name: null,
+    url: null,
+    labels: [],
+    blocked_by: [],
+    created_at: null,
+    updated_at: summary.startedAt
+  };
+}
+
+function workspaceFromRuntime(active: RuntimeActiveRun, summary: RunSummary | undefined, workspaceRoot: string): Workspace {
+  const workspaceKey = active.workspaceKey ?? active.identifier.replace(/[^A-Za-z0-9._-]/g, "_");
+  return {
+    path: active.workspacePath ?? summary?.workspacePath ?? join(workspaceRoot, workspaceKey),
+    workspaceKey,
+    createdNow: false
+  };
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function isDispatchTerminalStop(error: string | undefined): boolean {
+  return Boolean(
+    error?.startsWith("issue_became_terminal:") ||
+      error?.startsWith("issue_no_longer_dispatchable:") ||
+      error === "issue_no_longer_exists" ||
+      error === "pull_request_already_merged"
+  );
+}
+
 function categorizeRunError(message: string): RunErrorCategory {
   const normalized = message.toLowerCase();
   if (isHumanInputStop(normalized)) return "human-input";
@@ -1524,4 +2179,16 @@ async function readHandoff(workspacePath: string, identifier: string): Promise<s
   if (!(await exists(path))) return null;
   const text = await readText(path);
   return text.trim() ? text : null;
+}
+
+function gitRevParse(cwd: string, ref: string): Promise<string | null> {
+  return new Promise((resolvePromise) => {
+    const child = spawn("git", ["-C", cwd, "rev-parse", ref], { stdio: ["ignore", "pipe", "ignore"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.on("error", () => resolvePromise(null));
+    child.on("close", (code) => resolvePromise(code === 0 ? stdout.trim() || null : null));
+  });
 }

@@ -1,7 +1,8 @@
 # Stage 9A: Durable Retry/Startup Reconstruction
 
-This is a planning note only. Do not implement Stage 9A while using this
-document to plan.
+This is the historical planning note for the VER-48 implementation. Keep it as
+design context; current runtime behavior lives in `src/runtime-state.ts`,
+`src/orchestrator.ts`, and the orchestration runbooks.
 
 Stage 9A should happen before true multi-project daemon scheduling. The goal is
 to make single-project orchestration restart behavior explicit, durable, and

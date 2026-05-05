@@ -81,4 +81,30 @@ describe("run artifacts", () => {
     expect(replay).toContain("simulation_started - local simulation");
     expect(replay).toContain("run_succeeded - simulation complete");
   });
+
+  it("keeps terminal summaries terminal when event touches race with completion", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-race-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: null,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    await Promise.all([
+      ...Array.from({ length: 50 }, (_, index) =>
+        store.writeEvent(summary.runId, {
+          type: "item/agentMessage/delta",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          timestamp: `2026-05-01T00:00:${String(index).padStart(2, "0")}.000Z`
+        })
+      ),
+      store.completeRun(summary.runId, { status: "succeeded", threadId: "thread-1", turnId: "turn-1" })
+    ]);
+
+    const inspected = await store.inspect(summary.runId);
+    expect(inspected.summary.status).toBe("succeeded");
+    expect(inspected.summary.finishedAt).toBeTruthy();
+  });
 });

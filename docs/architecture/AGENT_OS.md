@@ -60,6 +60,12 @@ It keeps orchestration logic narrow:
   Linear `Merging` human override, treats already-merged PRs and successful
   merge commands as authoritative, records best-effort cleanup warnings, and
   moves Linear issues to `Done`.
+- Runtime state is schema-versioned in `.agent-os/state/runtime.json`. On
+  startup, AgentOS rebuilds due retries, marks orphaned running summaries
+  stale or canceled, clears retry metadata for terminal or already-merged work,
+  releases stale workspace locks, reconciles issue phases to terminal truth,
+  records daemon start SHA/workflow freshness, and writes a recovery summary to
+  the run log.
 - Successful unchanged issues are not re-dispatched inside the same service run;
   a Linear update or state transition is the signal for fresh work.
 - `agent-os inspect <issue>` reads durable state, recent logs, PR metadata, and

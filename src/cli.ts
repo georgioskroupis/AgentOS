@@ -471,8 +471,8 @@ try {
   process.exitCode = 1;
 }
 
-function parseSimulationStatus(value: string): "succeeded" | "failed" | "timed_out" | "stalled" | "canceled" {
-  if (value === "succeeded" || value === "failed" || value === "timed_out" || value === "stalled" || value === "canceled") return value;
+function parseSimulationStatus(value: string): "succeeded" | "failed" | "timed_out" | "stalled" | "canceled" | "stale" {
+  if (value === "succeeded" || value === "failed" || value === "timed_out" || value === "stalled" || value === "canceled" || value === "stale") return value;
   throw new Error(`unsupported simulation status: ${value}`);
 }
 

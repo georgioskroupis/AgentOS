@@ -95,7 +95,8 @@ Runs one Symphony-style scheduling pass:
 10. run the Ralph Wiggum review/fix loop for PR-producing issues before
    `Human Review`
 11. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
-12. track retries, unchanged successful issues, startup cleanup, and reconciliation
+12. track durable retries, stale runtime reconstruction, unchanged successful
+    issues, startup cleanup, and reconciliation
 13. write `.agent-os/runs/agent-os.jsonl` and per-run artifacts
 
 Continuous mode is:
@@ -197,10 +198,13 @@ PR outputs can be role-labeled as `primary`, `supporting`, `docs`,
 targets and merge shepherding only selects merge-eligible primary targets.
 When a handoff references `Validation-JSON`, AgentOS verifies that evidence
 before moving the issue to `Human Review`; missing or failed evidence stays in
-the retry/failure path. Codex App Server exits and stall timeouts fail the turn
-promptly instead of waiting for the full turn timeout. Stall reconciliation is
-based on the last Codex event, so active validation output is not mistaken for a
-stale run just because the overall turn is long.
+the retry/failure path. Runtime state is persisted in `.agent-os/state/runtime.json`
+so startup can rebuild retry queues, classify stale running summaries, release
+stale workspace locks, clear retries for terminal or already-merged issues, and
+write an operator-visible recovery summary. Codex App Server exits and stall
+timeouts fail the turn promptly instead of waiting for the full turn timeout.
+Stall reconciliation is based on the last Codex event, so active validation
+output is not mistaken for a stale run just because the overall turn is long.
 Agent-managed turns are also blocked from launching nested
 `agent-os orchestrator once`/`run` processes, so Linear remains the single
 control plane and the top-level scheduler owns dispatch.

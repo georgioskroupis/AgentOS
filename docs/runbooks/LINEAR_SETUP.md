@@ -95,6 +95,13 @@ deletes the matching remote branch only when safe, tolerates already-absent
 remote branches, and records cleanup warnings instead of scheduling an
 implementation retry.
 
+The orchestrator persists runtime state in `.agent-os/state/runtime.json`.
+After a restart it rebuilds due retries, cancels or marks stale orphaned
+running summaries, releases stale workspace locks, clears retry metadata for
+terminal or already-merged issues, and logs a startup recovery summary. If the
+long-running daemon sees `main` advance after it started, it logs a freshness
+warning so the operator can restart onto the self-modifying AgentOS code.
+
 For `hybrid` and experimental `agent-owned` projects, agents can use the
 repo-local Linear lifecycle wrappers instead of MCP tracker writes:
 

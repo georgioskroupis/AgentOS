@@ -43,7 +43,10 @@ Use this as a lightweight rubric for harnessed repositories.
   experimental `agent-owned` projects.
 - Handoffs that reference `Validation-JSON` are not moved to review unless the
   evidence verifies successfully; missing handoffs and dead/stalled Codex App
-  Server turns fail through the retry/failure path.
+  Server turns fail through the retry/failure path. Durable runtime state lets
+  startup rebuild retries, classify stale running summaries, release stale
+  workspace locks, and clear retry metadata for terminal or already-merged
+  issues before dispatch.
 - Stall detection is event-based: active Codex output refreshes the running
   attempt, while truly silent attempts are still aborted and retried.
 - Agent turns do not recursively launch nested AgentOS orchestrators; follow-up
