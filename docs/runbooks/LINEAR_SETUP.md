@@ -81,7 +81,19 @@ write the no-op handoff. AgentOS persists that state and moves the issue to
 Issues do not always need PRs. Investigation-only and planning-only issues may
 finish with a handoff-only result, while code/docs issues may list one or many
 PR URLs. AgentOS records PR outputs in optional `prs[]`; legacy `prUrl` is only
-the first-PR compatibility mirror.
+the first-PR compatibility mirror. In multi-PR handoffs, label URLs as
+`Primary PR:`, `Supporting PR:`, `Docs PR:`, `Follow-up PR:`, or
+`Do not merge PR:` so automated review and merge target selection are explicit.
+By default AgentOS reviews merge-eligible `primary` and `docs` PRs and only
+merges the selected primary merge target; supporting, follow-up, and
+do-not-merge PRs are review-only metadata.
+
+When merge shepherding succeeds or discovers that the selected PR is already
+merged, the issue can move to `Done` even if branch cleanup is incomplete.
+AgentOS removes the issue worktree before deleting a local `agent/*` branch,
+deletes the matching remote branch only when safe, tolerates already-absent
+remote branches, and records cleanup warnings instead of scheduling an
+implementation retry.
 
 For `hybrid` and experimental `agent-owned` projects, agents can use the
 repo-local Linear lifecycle wrappers instead of MCP tracker writes:

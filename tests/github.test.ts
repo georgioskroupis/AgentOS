@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -7,7 +8,7 @@ import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summar
 const fixture = resolve("tests/fixtures/fake-gh.mjs");
 
 describe("GitHubClient", () => {
-  it("reads pull request status and merges with squash/delete branch", async () => {
+  it("reads pull request status and merges without branch deletion side effects", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
     const statePath = join(dir, "state.json");
     await writeFile(
@@ -44,7 +45,7 @@ describe("GitHubClient", () => {
 
     const state = JSON.parse(await readFile(statePath, "utf8")) as { mergedWith: string[] };
     expect(state.mergedWith).toContain("--squash");
-    expect(state.mergedWith).toContain("--delete-branch");
+    expect(state.mergedWith).not.toContain("--delete-branch");
   });
 
   it("rejects PRs with no checks when checks are required", () => {
@@ -57,6 +58,8 @@ describe("GitHubClient", () => {
           mergeable: "MERGEABLE",
           baseRefName: "main",
           headRefName: "agent/AG-2",
+          headRepository: null,
+          isCrossRepository: null,
           headSha: null,
           merged: false,
           checkSummary: summarizeChecks([]),
@@ -396,4 +399,61 @@ describe("GitHubClient", () => {
     expect(summary).not.toContain("command_failed");
     expect(summary.length).toBeLessThan(1000);
   });
+
+  it("skips branch cleanup when the PR head repository is a fork with the same branch name", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-cleanup-fork-"));
+    const statePath = join(dir, "state.json");
+    await run("git", ["init"], dir);
+    await run("git", ["remote", "add", "origin", "https://github.com/o/r.git"], dir);
+    await writeFile(join(dir, "README.md"), "test\n", "utf8");
+    await run("git", ["add", "README.md"], dir);
+    await run("git", ["-c", "user.name=AgentOS", "-c", "user.email=agentos@example.com", "commit", "-m", "init"], dir);
+    await run("git", ["branch", "agent/AG-1"], dir);
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/11",
+          state: "MERGED",
+          isDraft: false,
+          mergeable: null,
+          baseRefName: "main",
+          headRefName: "agent/AG-1",
+          headRepository: { name: "fork", owner: { login: "other" } },
+          headRepositoryOwner: { login: "other" },
+          isCrossRepository: true,
+          headRefOid: "abc123",
+          mergedAt: "2026-05-05T08:00:00Z",
+          statusCheckRollup: []
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/11", dir);
+    const cleanup = await client.cleanupMergedPullRequest(
+      status,
+      { command: "gh", mergeMode: "shepherd", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
+      dir
+    );
+
+    expect(cleanup.warnings.join("\n")).toContain("does not match current repository o/r");
+    await run("git", ["show-ref", "--verify", "refs/heads/agent/AG-1"], dir);
+  });
 });
+
+function run(command: string, args: string[], cwd: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolvePromise(stdout.trim());
+      else reject(new Error(stderr.trim() || `${command} failed`));
+    });
+  });
+}

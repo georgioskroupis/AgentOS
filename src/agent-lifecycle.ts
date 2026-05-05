@@ -1,7 +1,6 @@
-import { execFile } from "node:child_process";
 import { join, relative, resolve } from "node:path";
-import { promisify } from "node:util";
 import { exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
+import { assertPullRequestUrlMatchesRepo } from "./github-repository.js";
 import { extractPullRequestUrls, issueStateFromHandoff, IssueStateStore, pullRequestUrls } from "./issue-state.js";
 import { validateLifecycleConfig } from "./lifecycle.js";
 import type { LinearCommentWriteResult, LinearIssueReference } from "./linear.js";
@@ -9,7 +8,6 @@ import { redactText } from "./redaction.js";
 import type { Issue, LifecycleDuplicateCommentBehavior, PullRequestRef, ServiceConfig } from "./types.js";
 
 export const DEFAULT_AGENT_TRACKER_MARKER_FORMAT = "<!-- agentos:event={event} issue={issue} -->";
-const execFileAsync = promisify(execFile);
 
 export interface AgentLifecycleTracker {
   findIssueReference(issueIdentifierOrId: string): Promise<LinearIssueReference>;
@@ -276,46 +274,6 @@ async function assertHandoffPullRequestsMatchRepo(repoRoot: string, handoff: str
   for (const url of extractPullRequestUrls(handoff)) {
     await assertPullRequestUrlMatchesRepo(repoRoot, url);
   }
-}
-
-async function assertPullRequestUrlMatchesRepo(repoRoot: string, url: string): Promise<void> {
-  const parsed = parseGitHubPullRequestUrl(url);
-  const repo = await currentGitHubRepository(repoRoot);
-  if (parsed.owner.toLowerCase() !== repo.owner.toLowerCase() || parsed.repo.toLowerCase() !== repo.repo.toLowerCase()) {
-    throw new Error(`pull request URL must belong to current repository ${repo.owner}/${repo.repo}: ${url}`);
-  }
-}
-
-function parseGitHubPullRequestUrl(url: string): { owner: string; repo: string; number: string } {
-  const match = url.match(/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)$/);
-  if (!match) {
-    throw new Error(`invalid_github_pull_request_url: ${url}`);
-  }
-  return { owner: match[1], repo: match[2], number: match[3] };
-}
-
-async function currentGitHubRepository(repoRoot: string): Promise<{ owner: string; repo: string }> {
-  let remote = "";
-  try {
-    const result = await execFileAsync("git", ["-C", repoRoot, "remote", "get-url", "origin"], { encoding: "utf8" });
-    remote = result.stdout.trim();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`current repository remote origin is required for PR URL validation: ${message}`);
-  }
-  const parsed = parseGitHubRemote(remote);
-  if (!parsed) {
-    throw new Error(`unsupported_github_remote_origin: ${remote}`);
-  }
-  return parsed;
-}
-
-function parseGitHubRemote(remote: string): { owner: string; repo: string } | null {
-  const https = remote.match(/^https:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
-  if (https) return { owner: https[1], repo: https[2] };
-  const ssh = remote.match(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+)\/(.+?)(?:\.git)?$/);
-  if (ssh) return { owner: ssh[1], repo: ssh[2] };
-  return null;
 }
 
 function toIssue(issue: LinearIssueReference): Issue {

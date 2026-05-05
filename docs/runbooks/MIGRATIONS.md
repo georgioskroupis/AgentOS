@@ -11,6 +11,9 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   runs, then write the current shape on the next state update.
 - Issue state lazily migrates legacy `prUrl` to `prs[]` and keeps `prUrl` only
   as the first-PR compatibility mirror while downstream code moves to `prs[]`.
+  Existing PR refs that lack a role are normalized with the first PR as
+  `primary` and later PRs as `supporting`; explicit handoff labels preserve
+  `primary`, `supporting`, `docs`, `follow-up`, and `do-not-merge` roles.
 - Run summaries live under `.agent-os/runs/<run-id>/summary.json`, include
   `schemaVersion`, and record hashes for prompt/event/handoff artifacts.
 - Review artifacts are written with `schemaVersion: 1`; readers normalize older

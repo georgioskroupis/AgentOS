@@ -2,7 +2,17 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractOutcome, extractPullRequestUrls, issueStateFromHandoff, IssueStateStore, primaryPullRequestUrl, pullRequestUrls } from "../src/issue-state.js";
+import {
+  extractOutcome,
+  extractPullRequestUrls,
+  issueStateFromHandoff,
+  IssueStateStore,
+  mergeTargetAmbiguityReason,
+  mergeTargetPullRequest,
+  primaryPullRequestUrl,
+  pullRequestUrls,
+  reviewTargetPullRequests
+} from "../src/issue-state.js";
 import type { Issue } from "../src/types.js";
 
 const issue: Issue = {
@@ -54,7 +64,7 @@ describe("issue state handoff parsing", () => {
     expect(state).toMatchObject({
       schemaVersion: 1,
       prUrl: "https://github.com/o/r/pull/1",
-      prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff" }],
+      prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary" }],
       outcome: "implemented",
       reviewStatus: "pending",
       reviewIteration: 0
@@ -96,8 +106,79 @@ describe("issue state handoff parsing", () => {
     );
 
     expect(state?.prs?.map((pr) => pr.url)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
+    expect(state?.prs?.map((pr) => pr.role)).toEqual(["primary", "follow-up"]);
     expect(state?.prUrl).toBe("https://github.com/o/r/pull/1");
     expect(pullRequestUrls(state)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
+  });
+
+  it("parses explicit PR roles and selects review and merge targets", () => {
+    const state = issueStateFromHandoff(
+      issue,
+      [
+        "AgentOS-Outcome: implemented",
+        "Primary PR: https://github.com/o/r/pull/1",
+        "Supporting PR: https://github.com/o/r/pull/2",
+        "Docs PR: https://github.com/o/r/pull/3",
+        "Do not merge PR: https://github.com/o/r/pull/4"
+      ].join("\n")
+    );
+
+    expect(state?.prs?.map((pr) => [pr.url, pr.role])).toEqual([
+      ["https://github.com/o/r/pull/1", "primary"],
+      ["https://github.com/o/r/pull/2", "supporting"],
+      ["https://github.com/o/r/pull/3", "docs"],
+      ["https://github.com/o/r/pull/4", "do-not-merge"]
+    ]);
+    expect(reviewTargetPullRequests(state).map((pr) => pr.url)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/3"]);
+    expect(reviewTargetPullRequests(state, "primary").map((pr) => pr.url)).toEqual(["https://github.com/o/r/pull/1"]);
+    expect(mergeTargetPullRequest(state)?.url).toBe("https://github.com/o/r/pull/1");
+  });
+
+  it("does not select review-only PR roles for merge", () => {
+    const state = issueStateFromHandoff(
+      issue,
+      [
+        "AgentOS-Outcome: implemented",
+        "Supporting PR: https://github.com/o/r/pull/2",
+        "Follow-up PR: https://github.com/o/r/pull/3",
+        "Do-not-merge PR: https://github.com/o/r/pull/4"
+      ].join("\n")
+    );
+
+    expect(reviewTargetPullRequests(state)).toEqual([]);
+    expect(mergeTargetPullRequest(state)).toBeNull();
+  });
+
+  it("requires exactly one primary PR for primary review target mode", () => {
+    const supportingOnly = issueStateFromHandoff(
+      issue,
+      ["AgentOS-Outcome: implemented", "Supporting PR: https://github.com/o/r/pull/2"].join("\n")
+    );
+    const multiplePrimary = issueStateFromHandoff(
+      issue,
+      [
+        "AgentOS-Outcome: implemented",
+        "Primary PR: https://github.com/o/r/pull/1",
+        "Primary PR: https://github.com/o/r/pull/2"
+      ].join("\n")
+    );
+
+    expect(reviewTargetPullRequests(supportingOnly, "primary")).toEqual([]);
+    expect(reviewTargetPullRequests(multiplePrimary, "primary")).toEqual([]);
+  });
+
+  it("treats multiple primary PRs as an ambiguous merge target", () => {
+    const state = issueStateFromHandoff(
+      issue,
+      [
+        "AgentOS-Outcome: implemented",
+        "Primary PR: https://github.com/o/r/pull/1",
+        "Primary PR: https://github.com/o/r/pull/2"
+      ].join("\n")
+    );
+
+    expect(mergeTargetPullRequest(state)).toBeNull();
+    expect(mergeTargetAmbiguityReason(state)).toContain("Multiple primary pull requests");
   });
 
   it("uses prs as authoritative while preserving legacy prUrl as a mirror", () => {
@@ -146,5 +227,22 @@ describe("issue state handoff parsing", () => {
     const persisted = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(persisted.schemaVersion).toBe(1);
     expect(persisted.prs.map((pr: { url: string }) => pr.url)).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
+  });
+
+  it("lets the latest handoff role override a persisted default role for the same PR URL", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-issue-state-relabel-"));
+    const store = new IssueStateStore(repo);
+    const first = issueStateFromHandoff(issue, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+    const second = issueStateFromHandoff(issue, "AgentOS-Outcome: implemented\n\nDo not merge PR: https://github.com/o/r/pull/1");
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+
+    await store.merge("AG-1", first!);
+    await store.merge("AG-1", second!);
+
+    const persisted = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(persisted.prs).toMatchObject([{ url: "https://github.com/o/r/pull/1", role: "do-not-merge" }]);
+    expect(reviewTargetPullRequests(persisted)).toEqual([]);
+    expect(mergeTargetPullRequest(persisted)).toBeNull();
   });
 });

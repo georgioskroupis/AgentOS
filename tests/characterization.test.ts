@@ -26,6 +26,8 @@ describe("current AgentOS characterization", () => {
     expect(config.github.allowHumanMergeOverride).toBe(false);
     expect(config.github.mergeMethod).toBe("squash");
     expect(config.github.requireChecks).toBe(true);
+    expect(config.github.mergeTarget).toBe("primary");
+    expect(config.review.targetMode).toBe("merge-eligible");
   });
 
   it("captures multi-PR handoff parsing behavior", () => {
@@ -45,8 +47,8 @@ describe("current AgentOS characterization", () => {
       issueIdentifier: "AG-1",
       prUrl: "https://github.com/o/r/pull/1",
       prs: [
-        { url: "https://github.com/o/r/pull/1", source: "handoff" },
-        { url: "https://github.com/o/r/pull/2", source: "handoff" }
+        { url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary" },
+        { url: "https://github.com/o/r/pull/2", source: "handoff", role: "follow-up" }
       ],
       reviewStatus: "pending"
     });

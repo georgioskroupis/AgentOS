@@ -44,10 +44,18 @@ changes, and AgentOS moves the issue to `Human Review` with validation evidence.
 Investigation-only and planning-only issues may also finish with a handoff and
 no PR. Larger issues may list multiple PR URLs; AgentOS records them in optional
 `prs[]`, while legacy `prUrl` remains only the first-PR compatibility mirror.
+Use explicit PR labels in the handoff when there are multiple outputs:
+`Primary PR:`, `Supporting PR:`, `Docs PR:`, `Follow-up PR:`, and
+`Do not merge PR:`. The default review policy reviews merge-eligible `primary`
+and `docs` PRs; the merge shepherd only selects the primary merge target and
+will not merge supporting, follow-up, or do-not-merge PRs.
 
 After human review of PR-producing issues, move the Linear issue to `Merging`.
-AgentOS will require a green GitHub check, squash-merge the primary PR, delete
-the branch, comment in Linear, and move the issue to `Done`.
+AgentOS will require a green GitHub check, squash-merge the selected primary PR,
+remove the issue worktree, delete safe `agent/*` branches on a best-effort
+basis, comment in Linear, and move the issue to `Done`. A cleanup failure after
+a successful or already-completed merge is reported as an operator-visible
+warning, not as a failed merge or implementation retry.
 
 This flow is dogfooded by the AgentOS project before being reused elsewhere.
 For successful dogfood PR probes, confirm the pull request was created through

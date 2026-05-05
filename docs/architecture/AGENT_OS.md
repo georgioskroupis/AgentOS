@@ -42,7 +42,9 @@ It keeps orchestration logic narrow:
   state, and moved to review without requiring a PR.
 - Issue handoffs may carry zero, one, or many PR outputs. AgentOS treats
   optional `prs[]` as authoritative and keeps legacy `prUrl` only as a first-PR
-  compatibility mirror.
+  compatibility mirror. PR refs can declare roles (`primary`, `supporting`,
+  `docs`, `follow-up`, `do-not-merge`) so automated review and merge
+  shepherding select explicit targets.
 - PR-producing implemented issues run through the Ralph Wiggum loop while
   Linear remains `In Progress`: self, correctness, tests, architecture, and
   conditional security reviewers write machine-readable findings to a
@@ -54,8 +56,10 @@ It keeps orchestration logic narrow:
   ambiguous, or logless failures escalate to `Human Review` with
   `reviewStatus: human_required`.
 - The merge shepherd watches `Merging`, validates GitHub PR checks, squash-merges
-  safe PRs, respects Wiggum review state or an explicit Linear `Merging` human
-  override, and moves Linear issues to `Done`.
+  the selected primary merge target, respects Wiggum review state or an explicit
+  Linear `Merging` human override, treats already-merged PRs and successful
+  merge commands as authoritative, records best-effort cleanup warnings, and
+  moves Linear issues to `Done`.
 - Successful unchanged issues are not re-dispatched inside the same service run;
   a Linear update or state transition is the signal for fresh work.
 - `agent-os inspect <issue>` reads durable state, recent logs, PR metadata, and

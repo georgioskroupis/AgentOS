@@ -8,6 +8,9 @@ export type LifecycleMode = "orchestrator-owned" | "hybrid" | "agent-owned";
 export type LifecycleDuplicateCommentBehavior = "upsert" | "skip" | "error";
 export type AutomationProfile = "conservative" | "high-throughput";
 export type AutomationRepairPolicy = "conservative" | "mechanical-first";
+export type PullRequestRole = "primary" | "supporting" | "docs" | "follow-up" | "do-not-merge";
+export type ReviewTargetMode = "merge-eligible" | "primary";
+export type MergeTargetMode = "primary";
 
 export interface HarnessChange {
   action: "add" | "overwrite" | "exists" | "missing" | "invalid";
@@ -133,9 +136,11 @@ export interface ServiceConfig {
     deleteBranch: boolean;
     doneState: string;
     allowHumanMergeOverride: boolean;
+    mergeTarget?: MergeTargetMode;
   };
   review: {
     enabled: boolean;
+    targetMode?: ReviewTargetMode;
     maxIterations: number;
     requiredReviewers: string[];
     optionalReviewers: string[];
@@ -215,6 +220,11 @@ export interface IssueState {
   lastFixedSha?: string | null;
   lastHumanFeedbackAt?: string | null;
   humanOverrideAt?: string | null;
+  reviewTargetMode?: ReviewTargetMode;
+  reviewTargetUrls?: string[];
+  mergeTargetUrl?: string | null;
+  mergeTargetRole?: PullRequestRole | null;
+  mergeCleanupWarnings?: string[];
   validation?: ValidationState;
   updatedAt: string;
 }
@@ -223,6 +233,7 @@ export interface PullRequestRef {
   url: string;
   discoveredAt: string;
   source: "handoff" | "legacy" | "manual";
+  role?: PullRequestRole;
 }
 
 export interface ValidationState {

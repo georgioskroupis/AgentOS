@@ -62,10 +62,12 @@ describe("workflow", () => {
       requireChecks: true,
       deleteBranch: true,
       doneState: "Done",
-      allowHumanMergeOverride: false
+      allowHumanMergeOverride: false,
+      mergeTarget: "primary"
     });
     expect(config.review).toMatchObject({
       enabled: true,
+      targetMode: "merge-eligible",
       maxIterations: 3,
       requiredReviewers: ["self", "correctness", "tests", "architecture"],
       optionalReviewers: ["security"],
@@ -231,6 +233,46 @@ describe("workflow", () => {
     );
     expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
       "unsupported_automation_repair_policy: unbounded"
+    );
+  });
+
+  it("rejects unsupported review and merge target selection values", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-target-invalid-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "review:",
+        "  target_mode: primay",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
+      "unsupported_review_target_mode: primay"
+    );
+
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "github:",
+        "  merge_target: docs",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
+      "unsupported_github_merge_target: docs"
     );
   });
 

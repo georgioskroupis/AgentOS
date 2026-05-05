@@ -16,6 +16,7 @@ export interface ReviewerArtifact {
 export interface ReviewContext {
   issue: Issue;
   prUrl: string;
+  reviewTargets?: string[];
   iteration: number;
   reviewer: string;
   artifactPath: string;
@@ -138,7 +139,9 @@ export function reviewerPrompt(context: ReviewContext): string {
     "",
     "Review target:",
     `- Issue: ${context.issue.identifier} ${context.issue.title}`,
-    `- PR: ${context.prUrl}`,
+    ...(context.reviewTargets?.length && context.reviewTargets.length > 1
+      ? [`- PRs: ${context.reviewTargets.join(", ")}`]
+      : [`- PR: ${context.prUrl}`]),
     `- Iteration: ${context.iteration}`,
     "",
     "GitHub context:",
@@ -179,6 +182,7 @@ export function reviewerPrompt(context: ReviewContext): string {
 export function fixPrompt(input: {
   issue: Issue;
   prUrl: string;
+  reviewTargets?: string[];
   iteration: number;
   findings: ReviewFinding[];
   handoffPath: string;
@@ -188,7 +192,7 @@ export function fixPrompt(input: {
     `You are fixing blocking automated review findings for ${input.issue.identifier}.`,
     "",
     "Stay on the existing branch and update the existing pull request. Do not start a parallel implementation.",
-    `PR: ${input.prUrl}`,
+    input.reviewTargets?.length && input.reviewTargets.length > 1 ? `PRs under review: ${input.reviewTargets.join(", ")}` : `PR: ${input.prUrl}`,
     `Iteration: ${input.iteration}`,
     input.feedbackSummary ? ["", "Human/agent feedback to include:", input.feedbackSummary].join("\n") : "",
     "",

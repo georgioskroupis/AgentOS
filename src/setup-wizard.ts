@@ -289,11 +289,13 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
       require_checks: typeof github.require_checks === "boolean" ? github.require_checks : true,
       delete_branch: typeof github.delete_branch === "boolean" ? github.delete_branch : true,
       done_state: typeof github.done_state === "string" ? github.done_state : "Done",
-      allow_human_merge_override: typeof github.allow_human_merge_override === "boolean" ? github.allow_human_merge_override : false
+      allow_human_merge_override: typeof github.allow_human_merge_override === "boolean" ? github.allow_human_merge_override : false,
+      merge_target: github.merge_target === "primary" ? "primary" : "primary"
     },
     review: {
       ...review,
       enabled: typeof review.enabled === "boolean" ? review.enabled : true,
+      target_mode: review.target_mode === "primary" ? "primary" : "merge-eligible",
       max_iterations: typeof review.max_iterations === "number" ? review.max_iterations : 3,
       required_reviewers: stringList(review.required_reviewers, ["self", "correctness", "tests", "architecture"]),
       optional_reviewers: stringList(review.optional_reviewers, ["security"]),

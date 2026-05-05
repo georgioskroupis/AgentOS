@@ -53,13 +53,15 @@ Use this as a lightweight rubric for harnessed repositories.
   no-op handoff that is persisted and moved to review without a PR.
 - Handoffs can represent zero, one, or many PR outputs; optional `prs[]` is the
   authoritative PR list and legacy `prUrl` is only the first-PR compatibility
-  mirror.
+  mirror. PR roles make review and merge targets explicit.
 - PR-producing implemented issues run automated review before `Human Review`;
   blocking findings create focused fixer turns, review artifacts are persisted,
   and repeated or unresolved findings escalate with `reviewStatus:
   human_required`.
 - GitHub CI exists and the merge shepherd requires at least one successful check
-  before moving `Merging` issues to `Done`.
+  before merging the selected primary target and moving `Merging` issues to
+  `Done`; post-merge cleanup failures are operator-visible warnings, not
+  implementation retries.
 - `scripts/check-harness-contract.mjs` is part of `npm run agent-check` and
   enforces canonical states, the handoff contract, Wiggum config, and approved
   production dependencies.

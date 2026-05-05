@@ -50,12 +50,14 @@ github:
   command: gh
   merge_mode: shepherd
   merge_method: squash
+  merge_target: primary
   require_checks: true
   delete_branch: true
   done_state: Done
   allow_human_merge_override: false
 review:
   enabled: true
+  target_mode: merge-eligible
   max_iterations: 3
   required_reviewers:
     - self
@@ -237,6 +239,16 @@ Issues are the unit of work. A run may produce zero, one, or many pull requests:
 `prs[]` is the optional, authoritative list of PR outputs for an issue and may be
 empty, contain one PR, or contain multiple PRs. Legacy `prUrl` is only a
 compatibility mirror of the first PR.
+Each PR may carry a role: `primary`, `supporting`, `docs`, `follow-up`, or
+`do-not-merge`. Unannotated handoffs default the first PR to `primary` and later
+PRs to `supporting`; lines such as `Primary PR:`, `Docs PR:`, `Follow-up PR:`,
+or `Do not merge PR:` are parsed as explicit roles.
+Review targets are selected by `review.target_mode`: the default
+`merge-eligible` reviews `primary` and `docs` PRs, while `primary` reviews only
+the configured primary PR. Merge shepherding uses `github.merge_target:
+primary`; it selects the `primary` PR, or the only merge-eligible PR when there
+is exactly one. `supporting`, `follow-up`, and `do-not-merge` PRs are never
+merged by the shepherd.
 
 ## PR Creation Contract
 
@@ -290,10 +302,21 @@ After a PR-producing run opens or updates a PR, AgentOS keeps the issue in
   path shown in the review prompt, under
   `.agent-os/reviews/<issue>/iteration-<n>/`; AgentOS validates that JSON and
   stores the canonical runtime copy.
+- When `review.target_mode` is `merge-eligible`, reviewer prompts include every
+  selected merge-eligible PR and exclude review-only/supporting PRs.
 - If blocking findings remain, AgentOS runs a focused fixer turn on the same PR
   and repeats review up to `review.max_iterations`.
 - If review cannot converge, AgentOS moves to `Human Review` with
   `reviewStatus: human_required` and a Linear comment explaining why.
+
+## Merge Cleanup
+
+The merge shepherd treats a successful merge command or an already-merged
+selected PR as authoritative. Branch and workspace cleanup are best-effort
+follow-up steps: AgentOS removes the issue worktree before deleting a local
+`agent/*` branch, deletes the remote branch only for safe AgentOS-managed branch
+refs, tolerates already-absent remote branches, records cleanup warnings in
+issue state and Linear comments, and still moves or keeps the issue in `Done`.
 
 ## Agent Prompt
 
