@@ -12,10 +12,11 @@ import {
   recordHandoffWithAgentLifecycleTool
 } from "./agent-lifecycle.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
-import { getStatus, inspectIssue } from "./status.js";
+import { getRegistryStatus, getStatus, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
 import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
+import { RegistryOrchestrator } from "./registry-orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
 import { formatRunInspect, formatRunReplay, RunArtifactStore } from "./runs.js";
@@ -186,11 +187,48 @@ orchestrator
     await service.runUntilStopped(controller.signal);
   });
 
+orchestrator
+  .command("once-registry")
+  .option("--registry <path>", "registry path", "agent-os.yml")
+  .option("--max-concurrency <number>", "global registry concurrency cap")
+  .action(async (options) => {
+    const service = new RegistryOrchestrator({
+      registryPath: options.registry,
+      maxConcurrency: options.maxConcurrency ? Number.parseInt(options.maxConcurrency, 10) : undefined
+    });
+    const result = await service.runOnce(true);
+    for (const summary of result.summaries) {
+      console.log(`${summary.name}\t${summary.status}\tdispatched=${summary.dispatched ?? 0}\tactive=${summary.activeRuns}/${summary.maxConcurrency}`);
+    }
+  });
+
+orchestrator
+  .command("run-registry")
+  .option("--registry <path>", "registry path", "agent-os.yml")
+  .option("--max-concurrency <number>", "global registry concurrency cap")
+  .option("--poll-interval-ms <number>", "registry polling interval in milliseconds")
+  .action(async (options) => {
+    const controller = new AbortController();
+    process.on("SIGINT", () => controller.abort());
+    process.on("SIGTERM", () => controller.abort());
+    const service = new RegistryOrchestrator({
+      registryPath: options.registry,
+      maxConcurrency: options.maxConcurrency ? Number.parseInt(options.maxConcurrency, 10) : undefined,
+      pollingIntervalMs: options.pollIntervalMs ? Number.parseInt(options.pollIntervalMs, 10) : undefined
+    });
+    await service.runUntilStopped(controller.signal);
+  });
+
 program
   .command("status")
   .option("--repo <path>", "repository path", process.cwd())
+  .option("--registry [path]", "show registry-wide status from agent-os.yml")
   .option("--limit <number>", "number of recent log lines", "20")
   .action(async (options) => {
+    if (options.registry !== undefined) {
+      console.log(await getRegistryStatus(typeof options.registry === "string" ? options.registry : "agent-os.yml", Number.parseInt(options.limit, 10)));
+      return;
+    }
     console.log(await getStatus(options.repo, Number.parseInt(options.limit, 10)));
   });
 

@@ -14,6 +14,9 @@ The product promise is simple:
 - Any registered Linear project can be polled by the Symphony-style
   orchestrator, worked in an isolated workspace, validated by the harness, and
   handed back for human review.
+- Any `agent-os.yml` registry can run registry-wide orchestration across
+  projects with global/per-project concurrency, fair scheduling, project-local
+  workflow config, and registry status summaries for operator triage.
 
 <!-- AGENTOS:BEGIN -->
 ## AgentOS Product Context

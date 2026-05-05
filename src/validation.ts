@@ -12,6 +12,7 @@ export interface ValidationEvidence {
   status: "passed" | "failed";
   finalResult?: ValidationFinalResultEvidence;
   commands: ValidationCommandEvidence[];
+  githubCi?: ValidationState["githubCi"];
 }
 
 export interface ValidationFinalResultEvidence {
@@ -86,20 +87,29 @@ export async function verifyValidationEvidence(input: {
   if (rawFinalStatus !== "passed" && rawFinalStatus !== "failed") errors.push("validation status must be passed or failed");
   if (finalStatus !== "passed") errors.push("final validation status is not passed");
   if (evidence.finalResult) validateFinalResult(evidence.finalResult, errors, now);
+  if (evidence.githubCi) validateGithubCi(evidence.githubCi, errors);
 
   const expectedCommands = input.expectedCommands ?? defaultExpectedCommands;
   const acceptedCommands: ValidationCommandEvidence[] = [];
+  const acceptedCommandSet = new Set<string>();
   const failedHistoricalAttempts: ValidationCommandEvidence[] = [];
   for (const expected of expectedCommands) {
     const accepted = evidence.commands?.filter((command) => isAcceptedCommand(command, expected, now)) ?? [];
     if (accepted.length === 0) errors.push(`missing passing command evidence: ${expected}`);
     acceptedCommands.push(...accepted);
+    for (const command of accepted) {
+      acceptedCommandSet.add(commandIdentity(command));
+    }
   }
 
+  const additionalPassingCommands: ValidationCommandEvidence[] = [];
   for (const command of evidence.commands ?? []) {
     if (typeof command.name !== "string" || !command.name.trim()) errors.push("command name is required");
     if (typeof command.exitCode !== "number" || !Number.isInteger(command.exitCode)) errors.push(`${command.name}: exitCode must be an integer`);
     else if (command.exitCode !== 0) failedHistoricalAttempts.push(command);
+    else if (isAcceptedCommand(command, command.name, now) && !acceptedCommandSet.has(commandIdentity(command))) {
+      additionalPassingCommands.push(command);
+    }
     const started = parseTime(command.startedAt);
     const finished = parseTime(command.finishedAt);
     if (!started) errors.push(`${command.name}: invalid startedAt`);
@@ -118,7 +128,9 @@ export async function verifyValidationEvidence(input: {
       path,
       finalStatus,
       acceptedCommands,
+      additionalPassingCommands: additionalPassingCommands.length ? additionalPassingCommands : undefined,
       failedHistoricalAttempts,
+      ...(evidence.githubCi ? { githubCi: evidence.githubCi } : {}),
       errors: errors.length ? errors : undefined,
       checkedAt
     },
@@ -169,6 +181,10 @@ function isAcceptedCommand(command: ValidationCommandEvidence, expectedName: str
   return true;
 }
 
+function commandIdentity(command: ValidationCommandEvidence): string {
+  return `${command.name}\0${command.exitCode}\0${command.startedAt}\0${command.finishedAt}`;
+}
+
 function validateFinalResult(finalResult: ValidationFinalResultEvidence, errors: string[], now: Date): void {
   if (finalResult.status !== "passed" && finalResult.status !== "failed") {
     errors.push("finalResult.status must be passed or failed");
@@ -186,6 +202,15 @@ function validateFinalResult(finalResult: ValidationFinalResultEvidence, errors:
   if (started && finished && started > finished) errors.push("finalResult.startedAt is after finalResult.finishedAt");
   if (finished && finished.getTime() - now.getTime() > maxFutureSkewMs) errors.push("finalResult.finishedAt is in the future");
   if (finished && now.getTime() - finished.getTime() > maxEvidenceAgeMs) errors.push("finalResult validation evidence is stale");
+}
+
+function validateGithubCi(ci: NonNullable<ValidationState["githubCi"]>, errors: string[]): void {
+  if (ci.status !== "passed" && ci.status !== "failed" && ci.status !== "pending") {
+    errors.push("githubCi.status must be passed, failed, or pending");
+  }
+  if (ci.headSha != null && typeof ci.headSha !== "string") errors.push("githubCi.headSha must be a string when present");
+  if (ci.source != null && typeof ci.source !== "string") errors.push("githubCi.source must be a string when present");
+  if (ci.checkedAt && !parseTime(ci.checkedAt)) errors.push("githubCi.checkedAt is invalid");
 }
 
 function gitHead(cwd: string): Promise<string | null> {
