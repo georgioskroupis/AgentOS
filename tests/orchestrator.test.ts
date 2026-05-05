@@ -844,7 +844,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\nagent:\n  max_turns: 1\n  max_retry_attempts: 1\nworkspace:\n  root: .agent-os/workspaces\ncodex:\n  stall_timeout_ms: 25\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\nagent:\n  max_turns: 1\n  max_retry_attempts: 1\nworkspace:\n  root: .agent-os/workspaces\ncodex:\n  stall_timeout_ms: 250\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
 
@@ -911,7 +911,7 @@ describe("orchestrator", () => {
 
     await orchestrator.runOnce(false);
     await waitUntil(() => runnerStarted);
-    await waitUntil(() => eventCount > 0);
+    await waitUntil(() => eventCount > 1);
     await orchestrator.runOnce(false);
     expect(aborted).toBe(false);
     await finished;
