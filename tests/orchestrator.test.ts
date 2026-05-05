@@ -854,6 +854,7 @@ describe("orchestrator", () => {
     const finished = new Promise<void>((resolve) => {
       resolveFinished = resolve;
     });
+    let eventCount = 0;
     const tracker: IssueTracker = {
       async fetchCandidates() {
         return [readyIssue];
@@ -867,14 +868,17 @@ describe("orchestrator", () => {
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
         runnerStarted = true;
-        const eventTimer = setInterval(() => {
+        const emitActivity = () => {
+          eventCount += 1;
           input.onEvent({
             type: "item/commandExecution/outputDelta",
             issueId: input.issue.id,
             issueIdentifier: input.issue.identifier,
             timestamp: new Date().toISOString()
           });
-        }, 5);
+        };
+        const eventTimer = setInterval(emitActivity, 5);
+        emitActivity();
         return new Promise<AgentRunResult>((resolve) => {
           let finishTimer: NodeJS.Timeout;
           const abort = () => {
@@ -907,7 +911,7 @@ describe("orchestrator", () => {
 
     await orchestrator.runOnce(false);
     await waitUntil(() => runnerStarted);
-    await sleep(40);
+    await waitUntil(() => eventCount > 0);
     await orchestrator.runOnce(false);
     expect(aborted).toBe(false);
     await finished;
