@@ -326,6 +326,22 @@ export class Orchestrator {
       messages.push(`classified stale running run for ${issue.identifier} as already merged`);
       return { stale: true, terminal: true, retryRebuilt: false, messages };
     }
+    if (state && isLocallySettledIssueState(state)) {
+      if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; local issue state is ${state.phase}`).catch(() => undefined);
+      await this.recordIssueState(issue, {
+        activeRunId: undefined,
+        nextRetryAt: undefined,
+        retryAttempt: undefined,
+        stopReason: reason
+      });
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      if (state.reviewStatus === "human_required" || state.phase === "human-required") {
+        await this.moveIssue(issue, this.config.tracker.reviewState);
+      }
+      messages.push(`cleared stale running run for ${issue.identifier}: local issue state is already ${state.phase}`);
+      return { stale: true, terminal: state.phase === "completed" && state.reviewStatus !== "human_required", retryRebuilt: false, messages };
+    }
     if (runId) await this.runArtifacts.markRunStale(runId, workspaceMissing ? `${reason}; workspace is missing` : reason).catch(() => undefined);
     await this.runtimeState.removeActiveRun(issue.id);
 
@@ -521,7 +537,7 @@ export class Orchestrator {
   }
 
   private async alreadyMergedPullRequestUrl(state: IssueState | null): Promise<string | null> {
-    const urls = uniqueStrings([mergeTargetPullRequest(state)?.url, primaryPullRequestUrl(state), ...pullRequestUrls(state)].filter((url): url is string => Boolean(url)));
+    const urls = uniqueStrings([mergeTargetPullRequest(state)?.url].filter((url): url is string => Boolean(url)));
     if (urls.length === 0) return null;
     const github = new GitHubClient(this.config.github.command);
     const repoRoot = resolve(this.options.repoRoot);
@@ -1525,7 +1541,13 @@ export class Orchestrator {
     const running = this.running.get(issueId);
     if (running) {
       running.lastCodexEventAt = Date.now();
-      void this.runtimeState.patchActiveRun(issueId, { lastEventAt: timestamp });
+      void this.runtimeState.patchActiveRun(issueId, { lastEventAt: timestamp }).catch((error: Error) =>
+        this.logger.write({
+          type: "runtime_state_warning",
+          issueId,
+          message: `activity update failed: ${error.message}`
+        })
+      );
     }
   }
 
@@ -1867,6 +1889,10 @@ export class Orchestrator {
 
 function isNoPrHandoffApproved(state: IssueState): boolean {
   return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed");
+}
+
+function isLocallySettledIssueState(state: IssueState): boolean {
+  return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required";
 }
 
 function linearCommentKey(event: string, issueIdentifier: string): string {

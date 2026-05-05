@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
+import { exists, readText, writeTextAtomicEnsuringDir } from "./fs-utils.js";
 import type { Issue, RunErrorCategory, RunPhase } from "./types.js";
 
 export const RUNTIME_STATE_SCHEMA_VERSION = 1;
@@ -74,26 +74,50 @@ export interface RuntimeState {
 }
 
 export class RuntimeStateStore {
+  private queue: Promise<void> = Promise.resolve();
+
   constructor(private readonly repoRoot: string) {}
 
   async read(): Promise<RuntimeState> {
+    await this.queue;
+    return this.readNow();
+  }
+
+  async write(state: RuntimeState): Promise<void> {
+    await this.enqueue(async () => {
+      await this.writeNow(state);
+    });
+  }
+
+  async update(mutator: (state: RuntimeState) => void): Promise<RuntimeState> {
+    return this.enqueue(async () => {
+      const state = await this.readNow();
+      mutator(state);
+      state.updatedAt = new Date().toISOString();
+      const normalized = normalizeRuntimeState(state);
+      await this.writeNow(normalized);
+      return normalized;
+    });
+  }
+
+  private async readNow(): Promise<RuntimeState> {
     const path = this.path();
     if (!(await exists(path))) return emptyRuntimeState();
     const parsed = JSON.parse(await readText(path)) as Partial<RuntimeState>;
     return normalizeRuntimeState(parsed);
   }
 
-  async write(state: RuntimeState): Promise<void> {
-    await writeTextEnsuringDir(this.path(), `${JSON.stringify(normalizeRuntimeState(state), null, 2)}\n`);
+  private async writeNow(state: RuntimeState): Promise<void> {
+    await writeTextAtomicEnsuringDir(this.path(), `${JSON.stringify(normalizeRuntimeState(state), null, 2)}\n`);
   }
 
-  async update(mutator: (state: RuntimeState) => void): Promise<RuntimeState> {
-    const state = await this.read();
-    mutator(state);
-    state.updatedAt = new Date().toISOString();
-    const normalized = normalizeRuntimeState(state);
-    await this.write(normalized);
-    return normalized;
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(operation, operation);
+    this.queue = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
   }
 
   async setDaemon(daemon: RuntimeDaemonState): Promise<RuntimeState> {
@@ -190,9 +214,9 @@ function normalizeRuntimeState(raw: Partial<RuntimeState>): RuntimeState {
     schemaVersion: RUNTIME_STATE_SCHEMA_VERSION,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : fallback.updatedAt,
     ...(raw.daemon ? { daemon: raw.daemon } : {}),
-    activeRuns: Array.isArray(raw.activeRuns) ? raw.activeRuns.filter(hasIssueIdentity) : [],
-    retryQueue: Array.isArray(raw.retryQueue) ? raw.retryQueue.filter(hasRetryIdentity).sort((a, b) => a.dueAt.localeCompare(b.dueAt)) : [],
-    claimedIssues: Array.isArray(raw.claimedIssues) ? raw.claimedIssues.filter(hasIssueIdentity) : [],
+    activeRuns: Array.isArray(raw.activeRuns) ? raw.activeRuns.filter(hasIssueIdentity).map(normalizeActiveRun) : [],
+    retryQueue: Array.isArray(raw.retryQueue) ? raw.retryQueue.filter(hasRetryIdentity).map(normalizeRetryEntry).sort((a, b) => a.dueAt.localeCompare(b.dueAt)) : [],
+    claimedIssues: Array.isArray(raw.claimedIssues) ? raw.claimedIssues.filter(hasIssueIdentity).map(normalizeClaimedIssue) : [],
     ...(raw.lastRecovery ? { lastRecovery: raw.lastRecovery } : {})
   };
 }
@@ -208,6 +232,44 @@ function hasRetryIdentity(entry: RuntimeRetryEntry): entry is RuntimeRetryEntry 
 function upsertByIssueId<T extends { issueId: string }>(entries: T[], entry: T): T[] {
   const without = entries.filter((item) => item.issueId !== entry.issueId);
   return [...without, entry];
+}
+
+function normalizeActiveRun(entry: RuntimeActiveRun): RuntimeActiveRun {
+  return {
+    ...entry,
+    issue: runtimeIssueSnapshot(entry.issue, entry.issueId, entry.identifier)
+  };
+}
+
+function normalizeRetryEntry(entry: RuntimeRetryEntry): RuntimeRetryEntry {
+  return {
+    ...entry,
+    issue: runtimeIssueSnapshot(entry.issue, entry.issueId, entry.identifier)
+  };
+}
+
+function normalizeClaimedIssue(entry: RuntimeClaimedIssue): RuntimeClaimedIssue {
+  return {
+    ...entry,
+    issue: runtimeIssueSnapshot(entry.issue, entry.issueId, entry.identifier)
+  };
+}
+
+function runtimeIssueSnapshot(issue: Issue | undefined, issueId: string, identifier: string): Issue {
+  return {
+    id: issue?.id ?? issueId,
+    identifier: issue?.identifier ?? identifier,
+    title: issue?.title ?? identifier,
+    description: null,
+    priority: typeof issue?.priority === "number" ? issue.priority : null,
+    state: issue?.state ?? "",
+    branch_name: null,
+    url: null,
+    labels: [],
+    blocked_by: [],
+    created_at: null,
+    updated_at: issue?.updated_at ?? null
+  };
 }
 
 function claimPatch(patch: Partial<RuntimeActiveRun>): Partial<RuntimeClaimedIssue> {

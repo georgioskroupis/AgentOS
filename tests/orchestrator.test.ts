@@ -484,6 +484,74 @@ describe("orchestrator", () => {
     expect(runtime.retryQueue).toEqual([]);
   });
 
+  it("does not treat merged review-only PRs as terminal already-merged truth", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-only-merged-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  terminal_states: [Done, Canceled, Duplicate]\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        phase: "streaming-turn",
+        prs: [{ url: "https://github.com/o/r/pull/2", source: "handoff", role: "do-not-merge", discoveredAt: new Date().toISOString() }],
+        updatedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/2",
+          state: "MERGED",
+          mergedAt: "2026-05-05T08:00:00Z",
+          headRefName: "agent/AG-1-review-only",
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    const moves: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment() {}
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).not.toContain("AG-1 -> Done");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.lifecycleStatus).not.toBe("already_merged_pr");
+  });
+
   it("does not orphan a run when Linear becomes Done before the first turn starts", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-dispatch-race-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -672,6 +740,103 @@ describe("orchestrator", () => {
     const runtime = await new RuntimeStateStore(repo).read();
     expect(runtime.daemon?.freshnessStatus).toBe("main_advanced");
     expect(runtime.daemon?.workflowPath).toBe(workflowPath);
+  });
+
+  it("rebuilds and dispatches stale active implementation runs for active issues", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-stale-active-retry-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\nagent:\n  max_turns: 1\n  max_retry_attempts: 2\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nAttempt {{ attempt | default: 0 }} for {{ issue.identifier }}`,
+      "utf8"
+    );
+    const workspacePath = join(repo, ".agent-os", "workspaces", "AG-1");
+    await mkdir(workspacePath, { recursive: true });
+    const run = await new RunArtifactStore(repo).startRun({ issue: readyIssue, attempt: null, workspace: { path: workspacePath, workspaceKey: "AG-1", createdNow: true } });
+    await new RuntimeStateStore(repo).upsertActiveRun({
+      issueId: readyIssue.id,
+      identifier: readyIssue.identifier,
+      issue: readyIssue,
+      attempt: null,
+      runId: run.runId,
+      startedAt: run.startedAt,
+      phase: "streaming-turn",
+      workspacePath,
+      workspaceKey: "AG-1"
+    });
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      },
+      async move() {}
+    };
+    const prompts: string[] = [];
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          prompts.push(input.prompt);
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect((await new RunArtifactStore(repo).inspect(run.runId)).summary.status).toBe("stale");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Attempt 1 for AG-1");
+    expect(comments.some((body) => body.includes("AgentOS retry scheduled"))).toBe(true);
+  });
+
+  it("releases stale workspace locks during startup recovery and reports them", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-lock-recovery-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const lockPath = join(repo, ".agent-os", "workspaces", ".agent-os", "locks", "workspaces", "AG-1.lock");
+    await mkdir(lockPath, { recursive: true });
+    const logger = new JsonlLogger(repo);
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: {
+        async fetchCandidates() {
+          return [];
+        },
+        async fetchIssueStates() {
+          return new Map();
+        }
+      },
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    await expect(access(lockPath)).rejects.toThrow();
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.lastRecovery?.locksReleased).toBe(1);
+    expect(runtime.lastRecovery?.messages.some((message) => message.includes("released stale workspace lock AG-1"))).toBe(true);
+    const logs = await logger.tail(20);
+    expect(logs.some((entry) => entry.type === "startup_recovery" && entry.message?.includes("released stale workspace lock AG-1"))).toBe(true);
   });
 
   it("does not mark active runs stale while Codex events are still arriving", async () => {

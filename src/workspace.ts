@@ -174,8 +174,9 @@ async function recoverStaleWorkspaceLock(lockPath: string): Promise<boolean> {
 }
 
 function staleWorkspaceLockReason(owner: { pid?: number; createdAt: string } | null): string | null {
-  if (!owner) return null;
+  if (!owner) return "lock owner metadata is missing or unreadable";
   const ageMs = Date.now() - Date.parse(owner.createdAt);
+  if (!Number.isFinite(ageMs)) return "lock owner metadata has an invalid timestamp";
   if (Number.isFinite(ageMs) && ageMs > workspaceLockStaleMs) return "lock owner is older than stale threshold";
   if (owner.pid && !isProcessAlive(owner.pid)) return `lock owner pid ${owner.pid} is not running`;
   return null;
