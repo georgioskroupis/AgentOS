@@ -745,6 +745,41 @@ export class Orchestrator {
       }
       const updatedHandoff = await readHandoff(workspace.path, issue.identifier);
       if (updatedHandoff) {
+        const handoffPrUrls = extractPullRequestUrls(updatedHandoff);
+        try {
+          await assertPullRequestUrlsMatchRepo(resolve(this.options.repoRoot), handoffPrUrls);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const finding = handoffPullRequestValidationFinding(message);
+          latestState = await this.recordIssueState(issue, {
+            phase: "review",
+            reviewStatus: "human_required",
+            lastError: message,
+            errorCategory: "review",
+            findings: [finding]
+          });
+          await this.commentIssue(
+            issue,
+            [
+              "### AgentOS automated review needs human judgment",
+              "",
+              "The focused fixer handoff contained pull request metadata that AgentOS could not validate against the current repository.",
+              "",
+              `- Error: ${message}`,
+              "",
+              "Blocking findings:",
+              formatFindings([finding], resolve(this.options.repoRoot), { includeLogExcerpts: false })
+            ].join("\n")
+          );
+          await this.logger.write({
+            type: "review_human_required",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message,
+            payload: { findings: [finding], prUrls: handoffPrUrls }
+          });
+          return latestState;
+        }
         const updated = issueStateFromHandoff(issue, updatedHandoff);
         if (updated) {
           latestState = await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
@@ -1417,6 +1452,19 @@ function reviewCheckFindings(
     });
   }
   return findings;
+}
+
+function handoffPullRequestValidationFinding(message: string): ReviewFinding {
+  const body = `Focused fixer handoff PR metadata failed current-repository validation before state merge: ${message}`;
+  return {
+    reviewer: "handoff",
+    decision: "human_required",
+    severity: "P1",
+    file: null,
+    line: null,
+    body,
+    findingHash: createHash("sha256").update(`handoff-pr-validation\n${body}`).digest("hex").slice(0, 16)
+  };
 }
 
 function checkDiagnosticFingerprint(diagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>>): string {

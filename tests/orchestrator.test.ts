@@ -1778,6 +1778,104 @@ describe("orchestrator", () => {
     expect(reviewPrompts[1]).not.toContain("- PR: https://github.com/o/r/pull/1");
   });
 
+  it("rejects off-repository PR metadata from focused fixer handoffs before state merge", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-fix-off-repo-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 2\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          files: [{ path: "src/orchestrator.ts" }]
+        }
+      }),
+      "utf8"
+    );
+
+    let reviewRuns = 0;
+    let fixRuns = 0;
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        if (input.prompt.startsWith("You are fixing")) {
+          fixRuns += 1;
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPrimary PR: https://github.com/other/r/pull/2");
+          return { status: "succeeded" };
+        }
+        reviewRuns += 1;
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        const iteration = Number(input.prompt.match(/Iteration: (\d+)/)?.[1] ?? "1");
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+          reviewer: "self",
+          decision: iteration === 1 ? "changes_requested" : "approved",
+          summary: iteration === 1 ? "fix required" : "approved",
+          findings:
+            iteration === 1
+              ? [
+                  {
+                    reviewer: "self",
+                    decision: "changes_requested",
+                    severity: "P1",
+                    file: "src/orchestrator.ts",
+                    line: 12,
+                    body: "The primary PR role must be updated.",
+                    findingHash: "mechanical-review-finding"
+                  }
+                ]
+              : []
+        });
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(fixRuns).toBe(1);
+    expect(reviewRuns).toBe(1);
+    expect(comments.join("\n")).toContain("focused fixer handoff contained pull request metadata");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("human_required");
+    expect(state.lastError).toContain("pull request URL must belong to current repository o/r");
+    expect(state.prs.map((pr: { url: string }) => pr.url)).toEqual(["https://github.com/o/r/pull/1"]);
+    expect(state.findings[0].reviewer).toBe("handoff");
+  });
+
   it("escalates repeated blocking review findings to human_required", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-repeated-"));
     await initGitRemote(repo);
