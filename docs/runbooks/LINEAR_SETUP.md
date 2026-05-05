@@ -98,4 +98,7 @@ allowed transitions, duplicate-comment behavior, and fallback behavior before
 enabling those modes. `orchestrator-owned` remains the default and does not
 allow agent tracker writes through these lifecycle wrappers.
 Lifecycle file inputs must stay inside the repository, and handoff posting reads
-the resolved issue's `.agent-os/handoff-<issue>.md` artifact.
+the resolved issue's `.agent-os/handoff-<issue>.md` artifact. The wrappers use a
+trusted AgentOS CLI from `AGENT_OS_SOURCE_REPO` or `PATH`, keep `WORKFLOW.md` as
+the repo-local policy source, and accept only current-repository GitHub PR URLs
+for lifecycle PR metadata.

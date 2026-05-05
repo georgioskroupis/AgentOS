@@ -88,7 +88,10 @@ an explicit `allowed_tracker_tools` allowlist, reject disallowed state transitio
 reject mismatched action/tool identities, confine file reads to repo-local
 paths, scope issue lookups to the configured Linear project, redact tracker
 text, and write a fallback handoff only after policy checks pass and the tracker
-write fails.
+write fails. The wrappers call a trusted AgentOS CLI from `AGENT_OS_SOURCE_REPO`
+or `PATH`, append fixed policy options after user arguments, require lifecycle
+workflow files to stay inside the repo, and reject PR metadata that does not
+belong to the current GitHub repository.
 
 ## Automation And Repair Behavior
 

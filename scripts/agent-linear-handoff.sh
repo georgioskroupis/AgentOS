@@ -15,15 +15,13 @@ case "$script_name" in
     ;;
 esac
 
-if [[ -x "$repo_root/bin/agent-os" ]]; then
-  agent_os=("$repo_root/bin/agent-os")
+if [[ -n "${AGENT_OS_SOURCE_REPO:-}" && -x "$AGENT_OS_SOURCE_REPO/bin/agent-os" ]]; then
+  agent_os=("$AGENT_OS_SOURCE_REPO/bin/agent-os")
 elif command -v agent-os >/dev/null 2>&1; then
   agent_os=("agent-os")
-elif [[ -n "${AGENT_OS_SOURCE_REPO:-}" && -x "$AGENT_OS_SOURCE_REPO/bin/agent-os" ]]; then
-  agent_os=("$AGENT_OS_SOURCE_REPO/bin/agent-os")
 else
-  echo "AgentOS CLI is required: use repo-local bin/agent-os, install agent-os on PATH, or set AGENT_OS_SOURCE_REPO" >&2
+  echo "AgentOS CLI is required: install agent-os on PATH or set AGENT_OS_SOURCE_REPO" >&2
   exit 127
 fi
 
-exec "${agent_os[@]}" linear lifecycle "$action" --repo "$repo_root" --tool "scripts/$script_name" "$@"
+exec "${agent_os[@]}" linear lifecycle "$action" "$@" --repo "$repo_root" --workflow WORKFLOW.md --tool "scripts/$script_name"

@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -149,6 +150,33 @@ describe("agent lifecycle tools", () => {
     await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
   });
 
+  it("strictly gates experimental agent-owned lifecycle writes before lookup or fallback", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-agent-owned-"));
+    const tracker = new MemoryTracker();
+
+    await expect(
+      commentWithAgentLifecycleTool(
+        {
+          repoRoot: repo,
+          config: lifecycleConfig({
+            mode: "agent-owned",
+            idempotencyMarkerFormat: null,
+            allowedStateTransitions: [],
+            duplicateCommentBehavior: null,
+            fallbackBehavior: null,
+            maturityAcknowledgement: null
+          }),
+          tracker
+        },
+        { issue: "AG-1", event: "status_update", tool: "scripts/agent-linear-comment.sh", body: "handoff" }
+      )
+    ).rejects.toThrow("lifecycle.mode=agent-owned requires lifecycle.idempotency_marker_format in strict mode");
+
+    expect(tracker.lookups).toEqual([]);
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
+  });
+
   it("rejects invalid attach-pr marker tokens before writing local issue state", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-pr-marker-"));
     const tracker = new MemoryTracker();
@@ -191,6 +219,7 @@ describe("agent lifecycle tools", () => {
 
   it("records PR metadata locally and posts a marker-backed PR update", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-pr-"));
+    await initGitRemote(repo);
     const tracker = new MemoryTracker();
 
     await attachPrWithAgentLifecycleTool(
@@ -209,8 +238,71 @@ describe("agent lifecycle tools", () => {
     });
   });
 
+  it("rejects malformed or off-repository PR metadata before writing local issue state", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-pr-repo-"));
+    await initGitRemote(repo);
+    const tracker = new MemoryTracker();
+
+    await expect(
+      attachPrWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
+        {
+          issue: "AG-1",
+          prUrl: "https://example.com/o/r/pull/12",
+          tool: "scripts/agent-linear-pr.sh"
+        }
+      )
+    ).rejects.toThrow("invalid_github_pull_request_url");
+
+    await expect(
+      attachPrWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
+        {
+          issue: "AG-1",
+          prUrl: "https://github.com/other/r/pull/12",
+          tool: "scripts/agent-linear-pr.sh"
+        }
+      )
+    ).rejects.toThrow("pull request URL must belong to current repository o/r");
+
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("keeps marker-backed PR metadata comments complete across multiple PRs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-pr-multi-"));
+    await initGitRemote(repo);
+    const tracker = new MemoryTracker();
+
+    await attachPrWithAgentLifecycleTool(
+      { repoRoot: repo, config: lifecycleConfig(), tracker },
+      {
+        issue: "AG-1",
+        prUrl: "https://github.com/o/r/pull/12",
+        tool: "scripts/agent-linear-pr.sh"
+      }
+    );
+    await attachPrWithAgentLifecycleTool(
+      { repoRoot: repo, config: lifecycleConfig(), tracker },
+      {
+        issue: "AG-1",
+        prUrl: "https://github.com/o/r/pull/13",
+        tool: "scripts/agent-linear-pr.sh"
+      }
+    );
+
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.prs.map((pr: { url: string }) => pr.url)).toEqual([
+      "https://github.com/o/r/pull/12",
+      "https://github.com/o/r/pull/13"
+    ]);
+    expect(tracker.comments.at(-1)?.body).toContain("https://github.com/o/r/pull/12");
+    expect(tracker.comments.at(-1)?.body).toContain("https://github.com/o/r/pull/13");
+  });
+
   it("records handoff PR metadata locally and posts the redacted handoff", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-handoff-"));
+    await initGitRemote(repo);
     const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
     await mkdir(join(repo, ".agent-os"), { recursive: true });
     const token = linearToken();
@@ -236,6 +328,25 @@ describe("agent lifecycle tools", () => {
     expect(state.outcome).toBe("implemented");
     expect(state.prUrl).toBe("https://github.com/o/r/pull/13");
     expect(tracker.comments[0].body).toContain("Summary with token [REDACTED]");
+  });
+
+  it("rejects off-repository PR URLs in handoffs before writing local issue state", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-handoff-pr-"));
+    await initGitRemote(repo);
+    const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    await writeFile(handoffPath, "AgentOS-Outcome: implemented\n\nPR: https://github.com/other/r/pull/13\n", "utf8");
+    const tracker = new MemoryTracker();
+
+    await expect(
+      recordHandoffWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
+        { issue: "AG-1", handoffPath, tool: "scripts/agent-linear-handoff.sh" }
+      )
+    ).rejects.toThrow("pull request URL must belong to current repository o/r");
+
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8")).rejects.toThrow();
   });
 
   it("only records handoffs from the resolved issue handoff path", async () => {
@@ -364,4 +475,21 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
 
 function linearToken(): string {
   return `lin_${"a".repeat(26)}`;
+}
+
+async function initGitRemote(repo: string): Promise<void> {
+  await execGit(repo, ["init"]);
+  await execGit(repo, ["remote", "add", "origin", "https://github.com/o/r.git"]);
+}
+
+async function execGit(cwd: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolvePromise, reject) => {
+    execFile("git", args, { cwd }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolvePromise();
+    });
+  });
 }

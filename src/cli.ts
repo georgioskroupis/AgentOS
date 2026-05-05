@@ -488,7 +488,7 @@ async function agentLifecycleContextFromOptions(options: { repo: string; workflo
   tracker: LinearClient;
 }> {
   const repoRoot = resolve(options.repo);
-  const workflowPath = resolveFromRepo(repoRoot, options.workflow);
+  const workflowPath = await resolveRepoLocalWorkflowPath(repoRoot, options.workflow);
   const workflow = await loadWorkflow(workflowPath);
   const config = resolveServiceConfig(workflow);
   return { repoRoot, config, tracker: new LinearClient(config.tracker) };
@@ -502,10 +502,6 @@ async function bodyFromArgsOrFile(body: string[] | undefined, file: string | und
 
 function formatAgentLifecycleResult(result: { status: string; issueIdentifier: string; marker?: string }): string {
   return [`${result.status}: ${result.issueIdentifier}`, result.marker ? `marker: ${result.marker}` : null].filter(Boolean).join("\n");
-}
-
-function resolveFromRepo(repoRoot: string, path: string): string {
-  return isAbsolute(path) ? path : resolve(repoRoot, path);
 }
 
 type LifecycleCliAction = "comment" | "move" | "attach-pr" | "record-handoff";
@@ -547,6 +543,13 @@ async function resolveRepoLocalInputPath(repoRoot: string, path: string, label: 
     throw new Error(`${label} must stay within the repository root`);
   }
   return realResolvedPath;
+}
+
+async function resolveRepoLocalWorkflowPath(repoRoot: string, path: string): Promise<string> {
+  if (isAbsolute(path)) {
+    throw new Error("workflow path must be relative to the repository root");
+  }
+  return resolveRepoLocalInputPath(repoRoot, path, "workflow path");
 }
 
 const roadmapTitles = [
