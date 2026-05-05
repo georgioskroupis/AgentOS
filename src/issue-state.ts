@@ -80,7 +80,7 @@ export function extractPullRequestRefs(text: string): Array<Omit<PullRequestRef,
       const existing = byUrl.get(url);
       if (!existing) {
         byUrl.set(url, { url, role });
-      } else if (!existing.role && role) {
+      } else if (role) {
         existing.role = role;
       }
     }
@@ -107,18 +107,36 @@ export function reviewTargetPullRequests(
 ): PullRequestRef[] {
   const prs = normalizePullRequestRefs(state?.prs ?? [], state?.prUrl);
   if (mode === "primary") {
-    const primary = prs.find((pr) => pr.role === "primary") ?? prs[0];
-    return primary ? [primary] : [];
+    const primary = prs.filter((pr) => pr.role === "primary");
+    return primary.length === 1 ? primary : [];
   }
   return prs.filter(isMergeEligiblePullRequest);
 }
 
 export function mergeTargetPullRequest(state: Pick<IssueState, "prs" | "prUrl"> | null | undefined): PullRequestRef | null {
   const prs = normalizePullRequestRefs(state?.prs ?? [], state?.prUrl);
-  const primary = prs.find((pr) => pr.role === "primary");
-  if (primary && isMergeEligiblePullRequest(primary)) return primary;
+  const primary = prs.filter((pr) => pr.role === "primary");
+  if (primary.length === 1 && isMergeEligiblePullRequest(primary[0])) return primary[0];
+  if (primary.length > 1) return null;
   const eligible = prs.filter(isMergeEligiblePullRequest);
   return eligible.length === 1 ? eligible[0] : null;
+}
+
+export function mergeEligiblePullRequests(state: Pick<IssueState, "prs" | "prUrl"> | null | undefined): PullRequestRef[] {
+  return normalizePullRequestRefs(state?.prs ?? [], state?.prUrl).filter(isMergeEligiblePullRequest);
+}
+
+export function mergeTargetAmbiguityReason(state: Pick<IssueState, "prs" | "prUrl"> | null | undefined): string | null {
+  const prs = normalizePullRequestRefs(state?.prs ?? [], state?.prUrl);
+  const primary = prs.filter((pr) => pr.role === "primary");
+  if (primary.length > 1) {
+    return `Multiple primary pull requests were recorded; select exactly one primary PR before merging. ${formatPullRequestRefs(primary)}`;
+  }
+  const eligible = prs.filter(isMergeEligiblePullRequest);
+  if (primary.length === 0 && eligible.length > 1) {
+    return `Multiple merge-eligible pull requests were recorded without a primary PR; select exactly one primary PR before merging. ${formatPullRequestRefs(eligible)}`;
+  }
+  return null;
 }
 
 export function isMergeEligiblePullRequest(pr: Pick<PullRequestRef, "role">): boolean {
@@ -145,8 +163,8 @@ export function mergePullRequestRefs(existing: PullRequestRef[], incoming: PullR
     const current = byUrl.get(item.url);
     if (!current) {
       byUrl.set(item.url, item);
-    } else if (!current.role && item.role) {
-      byUrl.set(item.url, { ...current, role: item.role });
+    } else if (item.role) {
+      byUrl.set(item.url, { ...current, ...item, role: item.role });
     }
   }
   return assignDefaultPullRequestRoles([...byUrl.values()]);
@@ -188,6 +206,10 @@ function inferPullRequestRole(line: string): PullRequestRole | null {
   if (/supporting|related|reference|review-only/.test(normalized)) return "supporting";
   if (/primary|merge-eligible|merge-target/.test(normalized)) return "primary";
   return null;
+}
+
+function formatPullRequestRefs(refs: PullRequestRef[]): string {
+  return refs.map((ref) => `${ref.url} (${ref.role ?? "supporting"})`).join(", ");
 }
 
 function safeFileName(value: string): string {

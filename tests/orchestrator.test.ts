@@ -80,6 +80,7 @@ describe("orchestrator", () => {
 
   it("owns Linear lifecycle updates and posts the agent handoff", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-linear-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
@@ -130,6 +131,7 @@ describe("orchestrator", () => {
 
   it("keeps hybrid lifecycle moves and bookkeeping comments but not full handoff comments", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-hybrid-linear-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
@@ -844,6 +846,7 @@ describe("orchestrator", () => {
 
   it("persists multiple PR outputs without collapsing issue state to one PR", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-multi-pr-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
@@ -911,6 +914,7 @@ describe("orchestrator", () => {
 
   it("shepherds a mergeable PR from Merging to Done without running Codex", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -988,6 +992,7 @@ describe("orchestrator", () => {
 
   it("treats an already-merged selected PR as Done without running Codex", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-already-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -1060,9 +1065,9 @@ describe("orchestrator", () => {
 
   it("records cleanup warnings instead of retrying when local branch deletion is blocked by an AgentOS worktree", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-cleanup-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
-    await run("git", ["init"], repo);
     await writeFile(join(repo, "README.md"), "test\n", "utf8");
     await run("git", ["add", "README.md"], repo);
     await run("git", ["-c", "user.name=AgentOS", "-c", "user.email=agentos@example.com", "commit", "-m", "init"], repo);
@@ -1104,6 +1109,8 @@ describe("orchestrator", () => {
           isDraft: false,
           mergeable: "MERGEABLE",
           headRefName: "agent/AG-1",
+          headRepository: { name: "r", owner: { login: "o" } },
+          headRepositoryOwner: { login: "o" },
           statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
         }
       }),
@@ -1215,6 +1222,134 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("approval of the handoff without a merge");
   });
 
+  it("routes ambiguous merge-eligible PR metadata back to Human Review", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-ambiguous-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        phase: "completed",
+        outcome: "implemented",
+        reviewStatus: "approved",
+        prs: [
+          { url: "https://github.com/o/r/pull/2", source: "handoff", role: "docs", discoveredAt: new Date().toISOString() },
+          { url: "https://github.com/o/r/pull/3", source: "handoff", role: "docs", discoveredAt: new Date().toISOString() }
+        ],
+        validation: {
+          status: "passed",
+          finalStatus: "passed",
+          acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z" }]
+        },
+        updatedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(): Promise<AgentRunResult> {
+        throw new Error("runner should not be called for ambiguous Merging issues");
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("Multiple merge-eligible pull requests");
+    expect(comments.join("\n")).toContain("select exactly one primary PR");
+  });
+
+  it("rejects off-repository merge targets before invoking GitHub merge", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-off-repo-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        prs: [{ url: "https://github.com/other/r/pull/1", source: "handoff", role: "primary", discoveredAt: new Date().toISOString() }],
+        reviewStatus: "approved",
+        updatedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+    await writeFile(ghState, JSON.stringify({}), "utf8");
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("pull request URL must belong to current repository o/r");
+    expect(ghStateAfter.mergedWith).toBeUndefined();
+  });
+
   it("does not merge review-only PR roles from Merging", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-only-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -1284,6 +1419,7 @@ describe("orchestrator", () => {
 
   it("routes unsafe merge shepherd failures back to Human Review", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-fail-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -1351,6 +1487,7 @@ describe("orchestrator", () => {
 
   it("runs automated reviewers before moving an implemented PR to Human Review", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -1471,6 +1608,7 @@ describe("orchestrator", () => {
 
   it("runs a focused fixer turn for blocking mechanical review findings", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-fix-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -1563,6 +1701,7 @@ describe("orchestrator", () => {
 
   it("escalates repeated blocking review findings to human_required", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-repeated-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -1651,6 +1790,7 @@ describe("orchestrator", () => {
 
   it("runs a bounded CI fixer turn for mechanical failed checks with logs", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-mechanical-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -1743,6 +1883,7 @@ describe("orchestrator", () => {
 
   it("escalates mechanical CI failures when trust mode cannot update the PR", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-trust-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -1830,6 +1971,7 @@ describe("orchestrator", () => {
 
   it("keeps using bounded CI fixer turns when the same check fails with different logs", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-changing-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -1938,6 +2080,7 @@ describe("orchestrator", () => {
 
   it("escalates failed checks without logs instead of running a CI fixer", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-no-logs-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -2025,6 +2168,7 @@ describe("orchestrator", () => {
 
   it("escalates malformed review artifacts to human_required", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-malformed-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -2108,6 +2252,7 @@ describe("orchestrator", () => {
 
   it("blocks unapproved merge state when human override is disabled", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-gate-"));
+    await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -2212,6 +2357,13 @@ function run(command: string, args: string[], cwd: string): Promise<string> {
       if (code === 0) resolvePromise(stdout.trim());
       else reject(new Error(stderr.trim() || `${command} failed`));
     });
+  });
+}
+
+async function initGitRemote(repo: string, remote = "https://github.com/o/r.git"): Promise<void> {
+  await run("git", ["init"], repo);
+  await run("git", ["remote", "add", "origin", remote], repo).catch(async () => {
+    await run("git", ["remote", "set-url", "origin", remote], repo);
   });
 }
 

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { currentGitHubRepository, parseGitHubPullRequestUrl, sameGitHubRepository, type GitHubRepositoryRef } from "./github-repository.js";
 import { redactText } from "./redaction.js";
 import type { ServiceConfig } from "./types.js";
 
@@ -9,6 +10,8 @@ export interface PullRequestStatus {
   mergeable: string | null;
   baseRefName: string | null;
   headRefName: string | null;
+  headRepository: GitHubRepositoryRef | null;
+  isCrossRepository: boolean | null;
   headSha: string | null;
   merged: boolean;
   checkSummary: CheckSummary;
@@ -76,7 +79,7 @@ export class GitHubClient {
 
   async getPullRequest(url: string, cwd: string): Promise<PullRequestStatus> {
     const raw = await runShell(
-      `${this.command} pr view ${shellQuote(url)} --json url,state,isDraft,mergeable,baseRefName,headRefName,headRefOid,mergedAt,statusCheckRollup,changedFiles,files,reviewDecision,latestReviews,reviews,comments`,
+      `${this.command} pr view ${shellQuote(url)} --json url,state,isDraft,mergeable,baseRefName,headRefName,headRepository,headRepositoryOwner,isCrossRepository,headRefOid,mergedAt,statusCheckRollup,changedFiles,files,reviewDecision,latestReviews,reviews,comments`,
       cwd
     );
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -88,6 +91,8 @@ export class GitHubClient {
       mergeable: typeof parsed.mergeable === "string" ? parsed.mergeable : null,
       baseRefName: typeof parsed.baseRefName === "string" ? parsed.baseRefName : null,
       headRefName: typeof parsed.headRefName === "string" ? parsed.headRefName : null,
+      headRepository: pullRequestHeadRepository(parsed),
+      isCrossRepository: typeof parsed.isCrossRepository === "boolean" ? parsed.isCrossRepository : null,
       headSha: typeof parsed.headRefOid === "string" ? parsed.headRefOid : null,
       merged: Boolean(parsed.mergedAt) || String(parsed.state ?? "").toUpperCase() === "MERGED",
       checkSummary: summarizeChecks(rollup),
@@ -115,6 +120,11 @@ export class GitHubClient {
     const safety = safeAgentBranchName(branch, status.baseRefName);
     if (!safety.safe) {
       warnings.push(`Skipped branch cleanup for ${branch}: ${safety.reason}`);
+      return { warnings };
+    }
+    const repositorySafety = await sameRepositoryHeadSafety(status, cwd);
+    if (!repositorySafety.safe) {
+      warnings.push(`Skipped branch cleanup for ${branch}: ${repositorySafety.reason}`);
       return { warnings };
     }
     const localDeleted = await deleteLocalBranchIfPresent(branch, cwd);
@@ -402,22 +412,12 @@ function checkDetailState(check: CheckDetail): CheckState {
   return classifyCheckState(check);
 }
 
-interface GitHubRepositoryRef {
-  owner: string;
-  repo: string;
-}
-
 function githubRepositoryFromPullRequestUrl(url: string): GitHubRepositoryRef | null {
-  let parsed: URL;
   try {
-    parsed = new URL(url);
+    return parseGitHubPullRequestUrl(url);
   } catch {
     return null;
   }
-  if (parsed.hostname.toLowerCase() !== "github.com") return null;
-  const [owner, repo, pull, number] = parsed.pathname.split("/").filter(Boolean);
-  if (!owner || !repo || pull !== "pull" || !number) return null;
-  return { owner, repo };
 }
 
 function githubActionsRunId(url: string | null, repository: GitHubRepositoryRef | null): { runId: string | null; reason: string } {
@@ -515,6 +515,56 @@ function pullRequestComments(items: unknown[]): PullRequestComment[] {
 
 function firstLine(value: string): string {
   return value.trim().split(/\r?\n/)[0]?.slice(0, 240) ?? "";
+}
+
+function pullRequestHeadRepository(parsed: Record<string, unknown>): GitHubRepositoryRef | null {
+  const repository = objectValue(parsed.headRepository);
+  const owner = githubLogin(parsed.headRepositoryOwner) ?? githubLogin(repository?.owner);
+  const name = stringValue(repository?.name) ?? nameWithOwner(repository).repo;
+  const fromNameWithOwner = nameWithOwner(repository);
+  if (owner && name) return { owner, repo: name };
+  if (fromNameWithOwner.owner && fromNameWithOwner.repo) return fromNameWithOwner;
+  return null;
+}
+
+async function sameRepositoryHeadSafety(status: PullRequestStatus, cwd: string): Promise<{ safe: true } | { safe: false; reason: string }> {
+  if (!status.headRepository) {
+    return { safe: false, reason: "the pull request head repository was unavailable" };
+  }
+  let current: GitHubRepositoryRef;
+  try {
+    current = await currentGitHubRepository(cwd);
+  } catch (error) {
+    const reason = cleanupErrorReason(error);
+    return { safe: false, reason: `current repository origin could not be verified: ${reason}` };
+  }
+  if (!sameGitHubRepository(status.headRepository, current)) {
+    return {
+      safe: false,
+      reason: `pull request head repository ${status.headRepository.owner}/${status.headRepository.repo} does not match current repository ${current.owner}/${current.repo}`
+    };
+  }
+  return { safe: true };
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function githubLogin(value: unknown): string | null {
+  if (typeof value === "string") return stringValue(value);
+  const object = objectValue(value);
+  return stringValue(object?.login) ?? stringValue(object?.name);
+}
+
+function nameWithOwner(repository: Record<string, unknown> | null): GitHubRepositoryRef {
+  const raw = stringValue(repository?.nameWithOwner);
+  const [owner, repo] = raw?.split("/") ?? [];
+  return owner && repo ? { owner, repo } : { owner: "", repo: "" };
 }
 
 function safeAgentBranchName(branch: string, baseRefName: string | null): { safe: true } | { safe: false; reason: string } {

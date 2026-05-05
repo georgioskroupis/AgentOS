@@ -2,7 +2,17 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
-import { issueStateFromHandoff, IssueStateStore, mergeTargetPullRequest, primaryPullRequestUrl, reviewTargetPullRequests } from "./issue-state.js";
+import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
+import {
+  extractPullRequestUrls,
+  issueStateFromHandoff,
+  IssueStateStore,
+  mergeEligiblePullRequests,
+  mergeTargetAmbiguityReason,
+  mergeTargetPullRequest,
+  primaryPullRequestUrl,
+  reviewTargetPullRequests
+} from "./issue-state.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
@@ -171,6 +181,9 @@ export class Orchestrator {
         this.completedMarkers.set(issue.id, completionMarker(issue));
         const handoff = await readHandoff(workspace.path, issue.identifier);
         if (handoff) await this.runArtifacts.writeHandoff(runId, handoff);
+        if (handoff) {
+          await assertPullRequestUrlsMatchRepo(resolve(this.options.repoRoot), extractPullRequestUrls(handoff));
+        }
         const stateFromHandoff = handoff ? issueStateFromHandoff(issue, handoff) : null;
         const validation = handoff ? await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId }) : null;
         if (validation && validation.state.status !== "passed") {
@@ -785,7 +798,8 @@ export class Orchestrator {
     const state = await stateStore.read(issue.identifier);
     const mergeTarget = mergeTargetPullRequest(state);
     const mergePr = mergeTarget?.url ?? null;
-    if (state && !mergePr && isNoPrHandoffApproved(state)) {
+    const mergeEligiblePrs = mergeEligiblePullRequests(state);
+    if (state && !mergePr && isNoPrHandoffApproved(state) && mergeEligiblePrs.length === 0) {
       await this.commentIssue(
         issue,
         [
@@ -806,6 +820,10 @@ export class Orchestrator {
       });
       return;
     }
+    if (state && !mergePr && mergeEligiblePrs.length > 0) {
+      await this.markMergeFailed(issue, mergeTargetAmbiguityReason(state) ?? "Merge target selection is ambiguous; select exactly one primary PR before merging.");
+      return;
+    }
     if (!state || !mergePr) {
       await this.markMergeFailed(issue, "No pull request metadata was found for this issue.");
       return;
@@ -821,7 +839,9 @@ export class Orchestrator {
 
     const github = new GitHubClient(this.config.github.command);
     try {
-      const pr = await github.getPullRequest(mergePr, resolve(this.options.repoRoot));
+      const repoRoot = resolve(this.options.repoRoot);
+      await assertPullRequestUrlMatchesRepo(repoRoot, mergePr);
+      const pr = await github.getPullRequest(mergePr, repoRoot);
       await stateStore.merge(issue.identifier, {
         ...state,
         mergeTargetUrl: mergePr,
@@ -879,7 +899,7 @@ export class Orchestrator {
       }
 
       await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
-      await github.mergePullRequest(mergePr, this.config.github, resolve(this.options.repoRoot));
+      await github.mergePullRequest(mergePr, this.config.github, repoRoot);
       const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
       await this.commentIssue(issue, `### AgentOS merge complete\n\nMerged successfully.\n\n- PR: ${mergePr}\n- Method: ${this.config.github.mergeMethod}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
       await this.moveIssue(issue, this.config.github.doneState);
