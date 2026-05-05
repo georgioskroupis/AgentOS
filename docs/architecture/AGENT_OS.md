@@ -29,8 +29,10 @@ It keeps orchestration logic narrow:
   mode, where the orchestrator is a reader/runner with retry, reconciliation,
   status moves, and Linear lifecycle comments. `hybrid` keeps orchestrator-owned
   safety/bookkeeping moves and markers while leaving substantive update content
-  to agent artifacts/tools. `agent-owned` is experimental and strict-validation
-  gated.
+  to agent artifacts/tools. Repo-local `scripts/agent-linear-*` wrappers provide
+  marker-backed comments, allowed state moves, PR metadata persistence, and
+  handoff posting for that boundary. `agent-owned` is experimental and
+  strict-validation gated.
 - The agent, guided by `WORKFLOW.md`, changes the repo, validates the work,
   opens or updates pull requests only when the issue produced repo changes and
   the workflow expects a PR, and writes a handoff file for the orchestrator to

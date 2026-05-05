@@ -82,3 +82,18 @@ Issues do not always need PRs. Investigation-only and planning-only issues may
 finish with a handoff-only result, while code/docs issues may list one or many
 PR URLs. AgentOS records PR outputs in optional `prs[]`; legacy `prUrl` is only
 the first-PR compatibility mirror.
+
+For `hybrid` and experimental `agent-owned` projects, agents can use the
+repo-local Linear lifecycle wrappers instead of MCP tracker writes:
+
+```bash
+scripts/agent-linear-comment.sh VER-46 --event status_update --file .agent-os/status.md
+scripts/agent-linear-move.sh VER-46 "Human Review"
+scripts/agent-linear-pr.sh VER-46 https://github.com/org/repo/pull/46
+scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md
+```
+
+Configure the matching `lifecycle.allowed_tracker_tools`, marker format,
+allowed transitions, duplicate-comment behavior, and fallback behavior before
+enabling those modes. `orchestrator-owned` remains the default and does not
+allow agent tracker writes through these lifecycle wrappers.

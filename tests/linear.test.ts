@@ -83,6 +83,66 @@ describe("LinearClient", () => {
     });
   });
 
+  it("updates duplicate custom lifecycle markers by configured behavior", async () => {
+    const marker = "<!-- agentos:event=status_update issue=VER-5 -->";
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      {
+        data: {
+          issues: {
+            nodes: [
+              {
+                id: "issue-5",
+                identifier: "VER-5",
+                state: { name: "In Progress" },
+                team: { id: "team-1", key: "VER", name: "Verity" }
+              }
+            ]
+          }
+        }
+      },
+      { data: { issue: { comments: { nodes: [{ id: "comment-1", body: `${marker}\nold` }] } } } },
+      { data: { commentUpdate: { success: true } } }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    const result = await client.upsertCommentWithMarker("VER-5", "new", marker, "upsert");
+
+    expect(result).toBe("updated");
+    expect(requests[2].variables).toEqual({
+      id: "comment-1",
+      input: { body: `${marker}\nnew` }
+    });
+  });
+
+  it("skips duplicate custom lifecycle markers when configured", async () => {
+    const marker = "<!-- agentos:event=status_update issue=VER-5 -->";
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      {
+        data: {
+          issues: {
+            nodes: [
+              {
+                id: "issue-5",
+                identifier: "VER-5",
+                state: { name: "In Progress" },
+                team: { id: "team-1", key: "VER", name: "Verity" }
+              }
+            ]
+          }
+        }
+      },
+      { data: { issue: { comments: { nodes: [{ id: "comment-1", body: `${marker}\nold` }] } } } }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    const result = await client.upsertCommentWithMarker("VER-5", "new", marker, "skip");
+
+    expect(result).toBe("skipped");
+    expect(requests).toHaveLength(2);
+  });
+
   it("creates AgentOS lifecycle comments when no marker exists", async () => {
     const requests: Array<Record<string, any>> = [];
     const fetchImpl = fakeFetch(requests, [

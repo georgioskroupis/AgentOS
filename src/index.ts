@@ -13,5 +13,6 @@ export * from "./validation.js";
 export * from "./trust.js";
 export * from "./automation.js";
 export * from "./lifecycle.js";
+export * from "./agent-lifecycle.js";
 export * from "./defaults.js";
 export * from "./runs.js";

@@ -129,6 +129,23 @@ policy:
   duplicate-comment behavior, tracker-write fallback behavior, and an explicit
   acknowledgement that durable retry/startup reconstruction is not yet complete.
 
+Repo-local Linear lifecycle tools are available for source-aligned modes:
+
+```bash
+scripts/agent-linear-comment.sh <issue> --event <event> --file <comment.md>
+scripts/agent-linear-move.sh <issue> "<allowed state>"
+scripts/agent-linear-pr.sh <issue> <pull-request-url>
+scripts/agent-linear-handoff.sh <issue> --file .agent-os/handoff-<issue>.md
+```
+
+Those wrappers are non-interactive and call `agent-os linear lifecycle` with a
+stable tool path. In `hybrid` and experimental `agent-owned`, configure
+`lifecycle.allowed_tracker_tools`, `lifecycle.idempotency_marker_format`,
+`lifecycle.allowed_state_transitions`, `lifecycle.duplicate_comment_behavior`,
+and `lifecycle.fallback_behavior` to let agents own substantive comments, PR
+metadata, and handoff posting. Keep `orchestrator-owned` as the default unless a
+project explicitly opts into that source-aligned boundary.
+
 ## Automation And Repair Policy
 
 Automation behavior is a separate axis from trust and lifecycle ownership:

@@ -19,6 +19,8 @@ layers:
 - `skills/` contains reusable workflows.
 - `bin/agent-os` applies and validates templates.
 - `src/linear.ts` reads and updates Linear through GraphQL.
+- `src/agent-lifecycle.ts` provides repo-local Linear lifecycle tool policy for
+  hybrid and experimental agent-owned modes.
 - `src/github.ts` shells through `gh` for PR status and squash merge.
 - `src/issue-state.ts` stores durable per-issue PR metadata.
 - `src/workspace.ts` creates deterministic per-issue workspaces.

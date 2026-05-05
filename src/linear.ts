@@ -1,4 +1,4 @@
-import type { Issue, IssueTracker, ServiceConfig } from "./types.js";
+import type { Issue, IssueTracker, LifecycleDuplicateCommentBehavior, ServiceConfig } from "./types.js";
 
 type FetchLike = typeof fetch;
 
@@ -49,6 +49,15 @@ export interface LinearProject {
   name: string;
   slugId?: string;
 }
+
+export interface LinearIssueReference {
+  id: string;
+  identifier: string;
+  state: string;
+  team: LinearTeam;
+}
+
+export type LinearCommentWriteResult = "created" | "updated" | "skipped";
 
 export class LinearClient implements IssueTracker {
   private readonly endpoint: string;
@@ -197,7 +206,7 @@ export class LinearClient implements IssueTracker {
   }
 
   async comment(issueIdentifierOrId: string, body: string): Promise<void> {
-    const issue = await this.findIssue(issueIdentifierOrId);
+    const issue = await this.findIssueReference(issueIdentifierOrId);
     await this.request(
       `mutation AgentOSComment($input: CommentCreateInput!) {
         commentCreate(input: $input) { success }
@@ -207,18 +216,30 @@ export class LinearClient implements IssueTracker {
   }
 
   async upsertComment(issueIdentifierOrId: string, body: string, key: string): Promise<void> {
-    const issue = await this.findIssue(issueIdentifierOrId);
     const marker = linearCommentMarker(key);
+    await this.upsertCommentWithMarker(issueIdentifierOrId, body, marker, "upsert");
+  }
+
+  async upsertCommentWithMarker(
+    issueIdentifierOrId: string,
+    body: string,
+    marker: string,
+    duplicateBehavior: LifecycleDuplicateCommentBehavior = "upsert"
+  ): Promise<LinearCommentWriteResult> {
+    const issue = await this.findIssueReference(issueIdentifierOrId);
     const markedBody = body.includes(marker) ? body : `${marker}\n${body}`;
     const comments = await this.listIssueComments(issue.id);
     const existing = comments.find((comment) => comment.body.includes(marker));
     if (existing) {
+      if (duplicateBehavior === "skip") return "skipped";
+      if (duplicateBehavior === "error") throw new Error(`linear_duplicate_comment_marker: ${marker}`);
       await this.request(
         `mutation AgentOSCommentUpdate($id: String!, $input: CommentUpdateInput!) {
           commentUpdate(id: $id, input: $input) { success }
         }`,
         { id: existing.id, input: { body: markedBody } }
       );
+      return "updated";
     } else {
       await this.request(
         `mutation AgentOSComment($input: CommentCreateInput!) {
@@ -226,11 +247,12 @@ export class LinearClient implements IssueTracker {
         }`,
         { input: { issueId: issue.id, body: markedBody } }
       );
+      return "created";
     }
   }
 
   async move(issueIdentifierOrId: string, stateName: string): Promise<void> {
-    const issue = await this.findIssue(issueIdentifierOrId);
+    const issue = await this.findIssueReference(issueIdentifierOrId);
     const states = await this.listWorkflowStates(issue.team.id);
     const state = states.find((candidate) => candidate.name.toLowerCase() === stateName.toLowerCase());
     if (!state) {
@@ -244,18 +266,23 @@ export class LinearClient implements IssueTracker {
     );
   }
 
-  private async findIssue(issueIdentifierOrId: string): Promise<{ id: string; identifier: string; team: LinearTeam }> {
+  async findIssueReference(issueIdentifierOrId: string): Promise<LinearIssueReference> {
     const trimmed = issueIdentifierOrId.trim();
     const filter = isLinearIdentifier(trimmed) ? identifierFilter(trimmed) : { id: { eq: trimmed } };
-    const data = await this.request<{ issues: { nodes: Array<{ id: string; identifier: string; team: LinearTeam }> } }>(
+    const data = await this.request<{ issues: { nodes: LinearIssueReference[] } }>(
       `query AgentOSFindIssue($filter: IssueFilter) {
-        issues(filter: $filter, first: 1) { nodes { id identifier team { id key name } } }
+        issues(filter: $filter, first: 1) {
+          nodes { id identifier state { name } team { id key name } }
+        }
       }`,
       { filter }
     );
     const issue = data.issues.nodes[0];
     if (!issue) throw new Error(`Linear issue not found: ${issueIdentifierOrId}`);
-    return issue;
+    return {
+      ...issue,
+      state: String((issue as unknown as { state?: { name?: string } }).state?.name ?? issue.state ?? "")
+    };
   }
 
   private async listIssueComments(issueId: string): Promise<Array<{ id: string; body: string }>> {
