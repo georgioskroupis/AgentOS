@@ -84,7 +84,7 @@ fails the run instead of waiting for interactive input.
 
 The repo-local `scripts/agent-linear-*` tools are still governed by lifecycle
 configuration. They reject `orchestrator-owned`, enforce
-`allowed_tracker_tools` when configured, reject disallowed state transitions,
+an explicit `allowed_tracker_tools` allowlist, reject disallowed state transitions,
 reject mismatched action/tool identities, confine file reads to repo-local
 paths, scope issue lookups to the configured Linear project, redact tracker
 text, and write a fallback handoff only after policy checks pass and the tracker

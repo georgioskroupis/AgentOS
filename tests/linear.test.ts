@@ -119,6 +119,59 @@ describe("LinearClient", () => {
     });
   });
 
+  it("finds duplicate lifecycle markers beyond the first comments page", async () => {
+    const marker = "<!-- agentos:event=status_update issue=VER-5 -->";
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      {
+        data: {
+          issues: {
+            nodes: [
+              {
+                id: "issue-5",
+                identifier: "VER-5",
+                state: { name: "In Progress" },
+                team: { id: "team-1", key: "VER", name: "Verity" }
+              }
+            ]
+          }
+        }
+      },
+      {
+        data: {
+          issue: {
+            comments: {
+              nodes: [{ id: "comment-old", body: "unmarked lifecycle noise" }],
+              pageInfo: { hasNextPage: true, endCursor: "cursor-1" }
+            }
+          }
+        }
+      },
+      {
+        data: {
+          issue: {
+            comments: {
+              nodes: [{ id: "comment-marked", body: `${marker}\nold` }],
+              pageInfo: { hasNextPage: false, endCursor: null }
+            }
+          }
+        }
+      },
+      { data: { commentUpdate: { success: true } } }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    const result = await client.upsertCommentWithMarker("VER-5", "new", marker, "upsert");
+
+    expect(result).toBe("updated");
+    expect(requests[1].variables).toEqual({ id: "issue-5", after: null });
+    expect(requests[2].variables).toEqual({ id: "issue-5", after: "cursor-1" });
+    expect(requests[3].variables).toEqual({
+      id: "comment-marked",
+      input: { body: `${marker}\nnew` }
+    });
+  });
+
   it("skips duplicate custom lifecycle markers when configured", async () => {
     const marker = "<!-- agentos:event=status_update issue=VER-5 -->";
     const requests: Array<Record<string, any>> = [];

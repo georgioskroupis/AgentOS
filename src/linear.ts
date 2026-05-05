@@ -17,6 +17,23 @@ interface IssueConnection {
   };
 }
 
+interface LinearCommentNode {
+  id: string;
+  body: string;
+}
+
+interface IssueCommentsConnection {
+  issue: {
+    comments: {
+      nodes: LinearCommentNode[];
+      pageInfo?: {
+        hasNextPage?: boolean;
+        endCursor?: string | null;
+      };
+    };
+  };
+}
+
 const issueNodeSelection = `
   id
   identifier
@@ -288,16 +305,27 @@ export class LinearClient implements IssueTracker {
     };
   }
 
-  private async listIssueComments(issueId: string): Promise<Array<{ id: string; body: string }>> {
-    const data = await this.request<{ issue: { comments: { nodes: Array<{ id: string; body: string }> } } }>(
-      `query AgentOSIssueComments($id: String!) {
+  private async listIssueComments(issueId: string): Promise<LinearCommentNode[]> {
+    const comments: LinearCommentNode[] = [];
+    let after: string | null = null;
+    do {
+      const data: IssueCommentsConnection = await this.request<IssueCommentsConnection>(
+        `query AgentOSIssueComments($id: String!, $after: String) {
         issue(id: $id) {
-          comments(first: 50) { nodes { id body } }
+          comments(first: 50, after: $after) { nodes { id body } pageInfo { hasNextPage endCursor } }
         }
       }`,
-      { id: issueId }
-    );
-    return data.issue.comments.nodes;
+        { id: issueId, after }
+      );
+      comments.push(...data.issue.comments.nodes);
+      const pageInfo: IssueCommentsConnection["issue"]["comments"]["pageInfo"] = data.issue.comments.pageInfo;
+      if (!pageInfo?.hasNextPage) break;
+      if (!pageInfo.endCursor) {
+        throw new Error("linear_missing_comment_end_cursor");
+      }
+      after = pageInfo.endCursor;
+    } while (after);
+    return comments;
   }
 
   private async request<T>(query: string, variables: Record<string, unknown>): Promise<T> {

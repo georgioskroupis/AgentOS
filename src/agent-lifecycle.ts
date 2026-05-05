@@ -94,6 +94,7 @@ export async function attachPrWithAgentLifecycleTool(
 ): Promise<AgentLifecycleResult> {
   assertAgentTrackerWriteAllowed(context.config, input.tool);
   const issue = await context.tracker.findIssueReference(input.issue);
+  const marker = agentTrackerMarker(context.config, input.event ?? "pr_metadata", issue.identifier);
   const now = new Date().toISOString();
   const pr: PullRequestRef = { url: input.prUrl, discoveredAt: now, source: "manual" };
   await new IssueStateStore(context.repoRoot).merge(issue.identifier, {
@@ -102,7 +103,6 @@ export async function attachPrWithAgentLifecycleTool(
     prs: [pr],
     prUrl: pr.url
   });
-  const marker = agentTrackerMarker(context.config, input.event ?? "pr_metadata", issue.identifier);
   const body = redactText(["### AgentOS PR metadata", "", `- PR: ${input.prUrl}`].join("\n"));
   return runWithFallback(context, issue.identifier, input.tool, "attach-pr", async () => {
     const status = await context.tracker.upsertCommentWithMarker(
@@ -121,13 +121,13 @@ export async function recordHandoffWithAgentLifecycleTool(
 ): Promise<AgentLifecycleResult> {
   assertAgentTrackerWriteAllowed(context.config, input.tool);
   const issue = await context.tracker.findIssueReference(input.issue);
+  const marker = agentTrackerMarker(context.config, input.event ?? "run_handoff", issue.identifier);
   assertExpectedHandoffPath(context.repoRoot, input.handoffPath, issue.identifier);
   const handoff = redactText(await readText(input.handoffPath));
   const issueState = issueStateFromHandoff(toIssue(issue), handoff);
   if (issueState) {
     await new IssueStateStore(context.repoRoot).merge(issue.identifier, issueState);
   }
-  const marker = agentTrackerMarker(context.config, input.event ?? "run_handoff", issue.identifier);
   return runWithFallback(context, issue.identifier, input.tool, "record-handoff", async () => {
     const status = await context.tracker.upsertCommentWithMarker(
       issue.identifier,
@@ -152,7 +152,9 @@ export function assertAgentTrackerWriteAllowed(config: ServiceConfig, tool: stri
   if (config.lifecycle.mode === "orchestrator-owned") {
     throw new Error("lifecycle.mode=orchestrator-owned rejects agent tracker writes; use hybrid or experimental agent-owned mode");
   }
-  if (config.lifecycle.allowedTrackerTools.length === 0) return;
+  if (config.lifecycle.allowedTrackerTools.length === 0) {
+    throw new Error("lifecycle.allowed_tracker_tools is required for agent tracker writes");
+  }
   const normalizedTool = normalizeToolName(tool);
   const allowed = config.lifecycle.allowedTrackerTools.map(normalizeToolName);
   if (!allowed.includes(normalizedTool)) {

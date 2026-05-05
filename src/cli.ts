@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { addProject, loadRegistry, removeProject } from "./registry.js";
@@ -379,7 +380,7 @@ linearLifecycle
   .action(async (issue, options) => {
     const tool = lifecycleToolForAction("record-handoff", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
-    const handoffPath = resolveRepoLocalInputPath(context.repoRoot, options.file, "handoff file");
+    const handoffPath = await resolveRepoLocalInputPath(context.repoRoot, options.file, "handoff file");
     console.log(formatAgentLifecycleResult(await recordHandoffWithAgentLifecycleTool(context, { issue, handoffPath, event: options.event, tool })));
   });
 
@@ -494,7 +495,7 @@ async function agentLifecycleContextFromOptions(options: { repo: string; workflo
 }
 
 async function bodyFromArgsOrFile(body: string[] | undefined, file: string | undefined, repoRoot: string, label: string): Promise<string> {
-  const text = file ? await readText(resolveRepoLocalInputPath(repoRoot, file, `${label} file`)) : (body ?? []).join(" ");
+  const text = file ? await readText(await resolveRepoLocalInputPath(repoRoot, file, `${label} file`)) : (body ?? []).join(" ");
   if (!text.trim()) throw new Error(`${label} is required; pass text or --file <path>`);
   return text;
 }
@@ -529,7 +530,7 @@ function normalizeLifecycleToolIdentity(value: string): string {
   return value.trim().replace(/^\.\//, "");
 }
 
-function resolveRepoLocalInputPath(repoRoot: string, path: string, label: string): string {
+async function resolveRepoLocalInputPath(repoRoot: string, path: string, label: string): Promise<string> {
   if (isAbsolute(path)) {
     throw new Error(`${label} must be relative to the repository root`);
   }
@@ -539,7 +540,13 @@ function resolveRepoLocalInputPath(repoRoot: string, path: string, label: string
   if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
     throw new Error(`${label} must stay within the repository root`);
   }
-  return resolvedPath;
+  const realRoot = await realpath(root);
+  const realResolvedPath = await realpath(resolvedPath);
+  const realRelativePath = relative(realRoot, realResolvedPath);
+  if (realRelativePath.startsWith("..") || isAbsolute(realRelativePath)) {
+    throw new Error(`${label} must stay within the repository root`);
+  }
+  return realResolvedPath;
 }
 
 const roadmapTitles = [

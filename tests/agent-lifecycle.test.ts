@@ -94,6 +94,22 @@ describe("agent lifecycle tools", () => {
     await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
   });
 
+  it("requires an explicit tracker tool allowlist before lookup, tracker writes, or fallback", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-allowlist-"));
+    const tracker = new MemoryTracker();
+
+    await expect(
+      commentWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig({ allowedTrackerTools: [] }), tracker },
+        { issue: "AG-1", event: "status_update", tool: "scripts/agent-linear-comment.sh", body: "handoff" }
+      )
+    ).rejects.toThrow("lifecycle.allowed_tracker_tools is required for agent tracker writes");
+
+    expect(tracker.lookups).toEqual([]);
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
+  });
+
   it("rejects unallowed tracker tools before tracker writes or local issue-state writes", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-tool-"));
     const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
@@ -131,6 +147,46 @@ describe("agent lifecycle tools", () => {
     expect(tracker.lookups).toEqual(["AG-1"]);
     expect(tracker.comments).toEqual([]);
     await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("rejects invalid attach-pr marker tokens before writing local issue state", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-pr-marker-"));
+    const tracker = new MemoryTracker();
+
+    await expect(
+      attachPrWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
+        {
+          issue: "AG-1",
+          event: "bad event",
+          prUrl: "https://github.com/o/r/pull/12",
+          tool: "scripts/agent-linear-pr.sh"
+        }
+      )
+    ).rejects.toThrow("event must contain only letters, numbers, dot, underscore, colon, or hyphen");
+
+    expect(tracker.lookups).toEqual(["AG-1"]);
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("rejects invalid handoff marker tokens before reading or writing local issue state", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-handoff-marker-"));
+    const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    await writeFile(handoffPath, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/13\n", "utf8");
+    const tracker = new MemoryTracker();
+
+    await expect(
+      recordHandoffWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
+        { issue: "AG-1", event: "bad event", handoffPath, tool: "scripts/agent-linear-handoff.sh" }
+      )
+    ).rejects.toThrow("event must contain only letters, numbers, dot, underscore, colon, or hyphen");
+
+    expect(tracker.lookups).toEqual(["AG-1"]);
+    expect(tracker.comments).toEqual([]);
+    await expect(readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8")).rejects.toThrow();
   });
 
   it("records PR metadata locally and posts a marker-backed PR update", async () => {

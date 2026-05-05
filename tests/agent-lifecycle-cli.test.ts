@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
@@ -68,6 +68,29 @@ describe("agent lifecycle CLI", () => {
     expect(result.stderr).toContain("lifecycle tool/action mismatch: move cannot use scripts/agent-linear-comment.sh");
   });
 
+  it("rejects lifecycle tracker writes when allowed tracker tools are not declared", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-missing-allowlist-"));
+    await writeWorkflow(repo, []);
+
+    const result = await execCliFail([
+      "linear",
+      "lifecycle",
+      "comment",
+      "AG-1",
+      "--event",
+      "status_update",
+      "--repo",
+      repo,
+      "--workflow",
+      "WORKFLOW.md",
+      "--tool",
+      "scripts/agent-linear-comment.sh",
+      "hello"
+    ]);
+
+    expect(result.stderr).toContain("lifecycle.allowed_tracker_tools is required for agent tracker writes");
+  });
+
   it("rejects lifecycle comment files that are absolute or escape the repo", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-file-"));
     const outside = join(await mkdtemp(join(tmpdir(), "agent-os-lifecycle-secret-")), "secret.md");
@@ -109,6 +132,36 @@ describe("agent lifecycle CLI", () => {
       "../secret.md"
     ]);
     expect(escaped.stderr).toContain("comment body file must stay within the repository root");
+  });
+
+  it("rejects repo-relative lifecycle files symlinked outside the repo before reading them", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-symlink-"));
+    const outside = join(await mkdtemp(join(tmpdir(), "agent-os-lifecycle-secret-")), "secret.md");
+    const linked = join(repo, ".agent-os", "status.md");
+    await writeWorkflow(repo);
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    await writeFile(outside, "secret lifecycle body", "utf8");
+    await symlink(outside, linked);
+
+    const result = await execCliFail([
+      "linear",
+      "lifecycle",
+      "comment",
+      "AG-1",
+      "--event",
+      "status_update",
+      "--repo",
+      repo,
+      "--workflow",
+      "WORKFLOW.md",
+      "--tool",
+      "scripts/agent-linear-comment.sh",
+      "--file",
+      ".agent-os/status.md"
+    ]);
+
+    expect(result.stderr).toContain("comment body file must stay within the repository root");
+    expect(result.stderr).not.toContain("secret lifecycle body");
   });
 });
 
@@ -161,15 +214,14 @@ async function writeFakeAgentOs(fakeBin: string, capture: string): Promise<void>
   await chmod(path, 0o755);
 }
 
-async function writeWorkflow(repo: string): Promise<void> {
+async function writeWorkflow(repo: string, allowedTrackerTools = ["scripts/agent-linear-comment.sh"]): Promise<void> {
   await writeFile(
     join(repo, "WORKFLOW.md"),
     [
       "---",
       "lifecycle:",
       "  mode: hybrid",
-      "  allowed_tracker_tools:",
-      "    - scripts/agent-linear-comment.sh",
+      ...(allowedTrackerTools.length > 0 ? ["  allowed_tracker_tools:", ...allowedTrackerTools.map((tool) => `    - ${tool}`)] : []),
       "tracker:",
       "  kind: linear",
       "  api_key: lin_test",
