@@ -42,8 +42,8 @@ export interface RegistryRunResult {
 export class RegistryOrchestrator {
   private readonly registryPath: string;
   private readonly stateStore: RegistryStateStore;
-  private readonly heldLocks = new Map<string, string>();
-  private readonly orchestrators = new Map<string, ProjectOrchestrator>();
+  private readonly heldLocks = new Map<string, { contextKey: string; lockPath: string }>();
+  private readonly orchestrators = new Map<string, { contextKey: string; orchestrator: ProjectOrchestrator }>();
 
   constructor(private readonly options: RegistryOrchestratorOptions = {}) {
     this.registryPath = options.registryPath ?? "agent-os.yml";
@@ -59,7 +59,7 @@ export class RegistryOrchestrator {
       while (!signal.aborted) {
         const registry = await loadRegistry(this.registryPath);
         await this.runPass(false, false);
-        const intervalMs = this.options.pollingIntervalMs ?? registry.defaults?.pollingIntervalMs ?? 30_000;
+        const intervalMs = positiveInteger(this.options.pollingIntervalMs ?? registry.defaults?.pollingIntervalMs ?? 30_000, "pollingIntervalMs");
         await sleep(intervalMs, undefined, { signal }).catch((error: Error) => {
           if (signal.aborted || error.name === "AbortError") return;
           throw error;
@@ -73,7 +73,7 @@ export class RegistryOrchestrator {
   private async runPass(waitForWorkers: boolean, releaseLocksAfterPass: boolean): Promise<RegistryRunResult> {
     const registry = await loadRegistry(this.registryPath);
     const previous = await this.stateStore.read();
-    const globalConcurrency = this.options.maxConcurrency ?? registry.defaults?.maxConcurrency ?? 1;
+    const globalConcurrency = positiveInteger(this.options.maxConcurrency ?? registry.defaults?.maxConcurrency ?? 1, "maxConcurrency");
     const contexts: RegistryProjectContext[] = [];
     const summaries = new Map<string, RegistryProjectSummary>();
     for (const project of registry.projects) {
@@ -101,15 +101,16 @@ export class RegistryOrchestrator {
       runtimeByProject.set(context.name, await new RuntimeStateStore(context.repoRoot).read());
     }
 
-    const activeGlobal = [...runtimeByProject.values()].reduce((sum, runtime) => sum + runtime.activeRuns.length, 0);
-    let globalAvailable = Math.max(0, globalConcurrency - activeGlobal);
+    await this.pruneRemovedProjects(new Set(contexts.map((context) => context.name)));
     const order = roundRobin(contexts, previous.cursor);
     let lastDispatchedOriginalIndex: number | null = null;
+    let inPassDispatchReservations = 0;
 
     for (const context of order) {
       const runtime = runtimeByProject.get(context.name) ?? (await new RuntimeStateStore(context.repoRoot).read());
       const previousSummary = previous.projects.find((project) => project.name === context.name);
       const activeRuns = runtime.activeRuns.length;
+      let globalAvailable = this.globalAvailable(globalConcurrency, runtimeByProject, inPassDispatchReservations);
       const projectAvailable = Math.max(0, context.maxConcurrency - activeRuns);
       const dispatchLimit = Math.max(0, Math.min(globalAvailable, projectAvailable));
       const base = this.baseSummary(context, runtime, previousSummary);
@@ -130,16 +131,21 @@ export class RegistryOrchestrator {
       try {
         const result = await this.projectOrchestrator(context).runOnce(waitForWorkers, { dispatchLimit });
         const dispatched = result?.dispatched ?? 0;
+        const postRuntime = await new RuntimeStateStore(context.repoRoot).read();
+        runtimeByProject.set(context.name, postRuntime);
+        const representedDispatches = Math.max(0, postRuntime.activeRuns.length - runtime.activeRuns.length);
+        inPassDispatchReservations += Math.max(0, dispatched - representedDispatches);
+        globalAvailable = this.globalAvailable(globalConcurrency, runtimeByProject, inPassDispatchReservations);
+        const postProjectAvailable = Math.max(0, context.maxConcurrency - postRuntime.activeRuns.length);
         if (dispatched > 0) {
-          globalAvailable = Math.max(0, globalAvailable - dispatched);
           lastDispatchedOriginalIndex = contexts.findIndex((candidate) => candidate.name === context.name);
         }
         summaries.set(context.name, {
-          ...base,
+          ...this.baseSummary(context, postRuntime, previousSummary),
           status:
             dispatched > 0
               ? "dispatched"
-              : projectAvailable <= 0
+              : postProjectAvailable <= 0
                 ? "project_capacity_exhausted"
                 : globalAvailable <= 0
                   ? "global_capacity_exhausted"
@@ -199,8 +205,9 @@ export class RegistryOrchestrator {
   }
 
   private projectOrchestrator(context: RegistryProjectContext): ProjectOrchestrator {
+    const contextKey = projectContextKey(context);
     const existing = this.orchestrators.get(context.name);
-    if (existing) return existing;
+    if (existing?.contextKey === contextKey) return existing.orchestrator;
     const created =
       this.options.createProjectOrchestrator?.(context) ??
       new Orchestrator({
@@ -209,25 +216,47 @@ export class RegistryOrchestrator {
         env: this.options.env,
         maxConcurrentAgents: context.maxConcurrency
       });
-    this.orchestrators.set(context.name, created);
+    this.orchestrators.set(context.name, { contextKey, orchestrator: created });
     return created;
   }
 
   private async lockProject(context: RegistryProjectContext, releaseLocksAfterPass: boolean): Promise<string> {
+    const contextKey = projectContextKey(context);
     if (!releaseLocksAfterPass) {
       const existing = this.heldLocks.get(context.name);
-      if (existing) return existing;
+      if (existing?.contextKey === contextKey) return existing.lockPath;
+      if (existing) {
+        await releaseProjectRunnerLock(existing.lockPath);
+        this.heldLocks.delete(context.name);
+      }
     }
     const lockPath = await acquireProjectRunnerLock(context.repoRoot, `registry:${context.name}`);
-    if (!releaseLocksAfterPass) this.heldLocks.set(context.name, lockPath);
+    if (!releaseLocksAfterPass) this.heldLocks.set(context.name, { contextKey, lockPath });
     return lockPath;
   }
 
   private async releaseHeldLocks(): Promise<void> {
-    for (const lockPath of this.heldLocks.values()) {
-      await releaseProjectRunnerLock(lockPath);
+    for (const held of this.heldLocks.values()) {
+      await releaseProjectRunnerLock(held.lockPath);
     }
     this.heldLocks.clear();
+  }
+
+  private async pruneRemovedProjects(activeNames: Set<string>): Promise<void> {
+    for (const [name, held] of [...this.heldLocks.entries()]) {
+      if (!activeNames.has(name)) {
+        await releaseProjectRunnerLock(held.lockPath);
+        this.heldLocks.delete(name);
+      }
+    }
+    for (const name of [...this.orchestrators.keys()]) {
+      if (!activeNames.has(name)) this.orchestrators.delete(name);
+    }
+  }
+
+  private globalAvailable(globalConcurrency: number, runtimeByProject: Map<string, RuntimeState>, inPassDispatchReservations: number): number {
+    const activeGlobal = [...runtimeByProject.values()].reduce((sum, runtime) => sum + runtime.activeRuns.length, 0);
+    return Math.max(0, globalConcurrency - activeGlobal - inPassDispatchReservations);
   }
 
   private baseSummary(context: RegistryProjectContext, runtime: RuntimeState, previous: RegistryProjectSummary | undefined): RegistryProjectSummary {
@@ -261,4 +290,19 @@ function roundRobin<T>(items: T[], cursor: number): T[] {
 
 function isTransientTrackerError(message: string): boolean {
   return /fetch failed|network|econnreset|etimedout|eai_again|enotfound|socket hang up|temporary|rate limit/i.test(message);
+}
+
+function projectContextKey(context: RegistryProjectContext): string {
+  return JSON.stringify({
+    repoRoot: context.repoRoot,
+    workflowPath: context.workflowPath,
+    maxConcurrency: context.maxConcurrency
+  });
+}
+
+function positiveInteger(value: number, name: string): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }

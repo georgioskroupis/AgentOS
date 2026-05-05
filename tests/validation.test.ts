@@ -84,6 +84,42 @@ describe("validation evidence", () => {
     expect(validationEvidenceFinding(result.state)).toBeNull();
   });
 
+  it("preserves additional passing command and GitHub CI evidence", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "agent-os-validation-ci-"));
+    const now = new Date().toISOString();
+    await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
+      schemaVersion: 1,
+      issueIdentifier: "AG-1",
+      status: "passed",
+      commands: [
+        { name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now },
+        { name: "npm test -- tests/registry-orchestrator.test.ts", exitCode: 0, startedAt: now, finishedAt: now }
+      ],
+      githubCi: {
+        status: "passed",
+        headSha: "abc123",
+        source: "github-actions",
+        checkedAt: now
+      }
+    });
+
+    const result = await verifyValidationEvidence({
+      issue: fakeIssue(),
+      handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
+      workspacePath: workspace
+    });
+
+    expect(result.state.status).toBe("passed");
+    expect(result.state.additionalPassingCommands).toEqual([{ name: "npm test -- tests/registry-orchestrator.test.ts", exitCode: 0, startedAt: now, finishedAt: now }]);
+    expect(result.state.githubCi).toEqual({
+      status: "passed",
+      headSha: "abc123",
+      source: "github-actions",
+      checkedAt: now
+    });
+    expect(validationEvidenceFinding(result.state)).toBeNull();
+  });
+
   it("rejects final passed evidence when the repo head does not match", async () => {
     const workspace = await gitWorkspace();
     const now = new Date().toISOString();
