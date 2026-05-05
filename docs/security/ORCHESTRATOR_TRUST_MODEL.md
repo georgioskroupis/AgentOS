@@ -79,8 +79,19 @@ fails the run instead of waiting for interactive input.
 | Mode | Orchestrator state moves | Orchestrator comments | Notes |
 | --- | --- | --- | --- |
 | `orchestrator-owned` | on | bookkeeping and substantive handoff | Current safe default and intentional AgentOS deviation from Symphony's usual tracker-write boundary. |
-| `hybrid` | on | bookkeeping only | Agent artifacts/tools own substantive handoff/update content and PR metadata. |
+| `hybrid` | on | bookkeeping only | Agent artifacts/tools own substantive handoff/update content and PR metadata through configured repo-local lifecycle tools. |
 | `agent-owned` | off | off | Experimental. Strict validation requires tracker tools, idempotency marker format, allowed transitions, duplicate-comment behavior, fallback behavior, and an acknowledgement that durable retry/startup reconstruction is not yet complete. |
+
+The repo-local `scripts/agent-linear-*` tools are still governed by lifecycle
+configuration. They reject `orchestrator-owned`, enforce
+an explicit `allowed_tracker_tools` allowlist, reject disallowed state transitions,
+reject mismatched action/tool identities, confine file reads to repo-local
+paths, scope issue lookups to the configured Linear project, redact tracker
+text, and write a fallback handoff only after policy checks pass and the tracker
+write fails. The wrappers call a trusted AgentOS CLI from `AGENT_OS_SOURCE_REPO`
+or `PATH`, append fixed policy options after user arguments, require lifecycle
+workflow files to stay inside the repo, and reject PR metadata that does not
+belong to the current GitHub repository.
 
 ## Automation And Repair Behavior
 

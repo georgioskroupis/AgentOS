@@ -97,6 +97,29 @@ Other modes are separate from `trust_mode` and automation repair policy:
   duplicate-comment behavior, fallback behavior, and an acknowledgement that
   durable retry/startup reconstruction is not yet complete.
 
+Repo-local Linear lifecycle tools are available for source-aligned modes:
+
+```bash
+scripts/agent-linear-comment.sh <issue> --event <event> --file <comment.md>
+scripts/agent-linear-move.sh <issue> "<allowed state>"
+scripts/agent-linear-pr.sh <issue> <pull-request-url>
+scripts/agent-linear-handoff.sh <issue> --file .agent-os/handoff-<issue>.md
+```
+
+Those wrappers are non-interactive, call a trusted AgentOS CLI from
+`AGENT_OS_SOURCE_REPO` or `PATH`, and append the repo root, `WORKFLOW.md`, and
+stable tool path after user arguments so agents cannot swap the lifecycle policy
+file or tool identity. In `hybrid` and experimental `agent-owned`, configure
+`lifecycle.allowed_tracker_tools`, `lifecycle.idempotency_marker_format`,
+`lifecycle.allowed_state_transitions`, `lifecycle.duplicate_comment_behavior`,
+and `lifecycle.fallback_behavior` to let agents own substantive comments, PR
+metadata, and handoff posting. Keep `orchestrator-owned` as the default unless a
+project explicitly opts into that source-aligned boundary.
+Lifecycle `--file` arguments must be relative paths inside the repository, and
+`record-handoff` reads only `.agent-os/handoff-<resolved issue>.md`. PR metadata
+must point at GitHub pull requests in the current repository before it is stored
+or posted.
+
 ## Automation And Repair Policy
 
 Automation behavior is separate from trust and lifecycle ownership:

@@ -39,6 +39,17 @@ function checkWorkflow(path) {
   for (const snippet of ["scripts/agent-create-pr.sh", "--body-file", "--base", "--head", "agent_pr_creation_failed", "prs[]"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing non-interactive PR creation contract ${snippet}`);
   }
+  for (const snippet of [
+    "scripts/agent-linear-comment.sh",
+    "scripts/agent-linear-move.sh",
+    "scripts/agent-linear-pr.sh",
+    "scripts/agent-linear-handoff.sh",
+    "lifecycle.allowed_tracker_tools",
+    "lifecycle.allowed_state_transitions",
+    "lifecycle.fallback_behavior"
+  ]) {
+    if (!text.includes(snippet)) failures.push(`${path} missing repo-local Linear lifecycle tooling guidance ${snippet}`);
+  }
   for (const snippet of ["runId", "repoHead", "git rev-parse HEAD"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing validation evidence field ${snippet}`);
   }

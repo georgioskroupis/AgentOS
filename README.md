@@ -149,6 +149,27 @@ workflow naming drift, and small refactor scans.
 bin/agent-os linear seed-maintenance --team <team-key-or-id> --project AgentOS
 ```
 
+### `linear lifecycle`
+
+Provides non-interactive, repo-local Linear lifecycle tools for `hybrid` and
+experimental `agent-owned` mode. The installed script wrappers call these
+commands with stable tool names so `lifecycle.allowed_tracker_tools` can gate
+agent writes:
+
+```bash
+scripts/agent-linear-comment.sh VER-46 --event status_update --file .agent-os/status.md
+scripts/agent-linear-move.sh VER-46 "Human Review"
+scripts/agent-linear-pr.sh VER-46 https://github.com/org/repo/pull/46
+scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md
+```
+
+These tools use marker-backed comment upserts, configured duplicate behavior,
+configured allowed state transitions, redaction, local PR metadata persistence,
+project-scoped issue lookup, repo-local `--file` reads, and fallback handoff
+writing only after lifecycle policy checks pass and a tracker write fails.
+`record-handoff` reads the resolved issue's `.agent-os/handoff-<issue>.md`
+artifact only.
+
 ## Current Integration Notes
 
 Linear is the control plane: issues in configured active states are dispatched
@@ -161,9 +182,11 @@ includes an `AgentOS-Outcome` line so already-satisfied issues can become no-op
 review handoffs instead of duplicate implementations. AgentOS-owned lifecycle
 comments include hidden `agentos:event` markers so retries and restarts update
 those comments in place when Linear supports it. `hybrid` and experimental
-`agent-owned` modes are available as a source-alignment path, but strict
-validation gates `agent-owned` until tracker tools, idempotency, transition,
-fallback, and maturity requirements are declared.
+`agent-owned` modes are available as a source-alignment path. In those modes,
+repo-local `scripts/agent-linear-*` tools can own substantive comments, PR
+metadata, and handoff posting while workflow validation gates `agent-owned`
+until tracker tools, idempotency, transition, fallback, and maturity
+requirements are declared.
 Issues are the unit of work; PRs are optional outputs. A handoff may represent
 an already-satisfied no-op, investigation-only result, planning-only result,
 one docs/code PR, multiple PRs for a larger issue, or follow-up issue discovery.

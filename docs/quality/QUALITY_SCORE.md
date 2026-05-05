@@ -9,7 +9,7 @@ Use this as a lightweight rubric for harnessed repositories.
 | Workflow | Ticket lifecycle and handoff expectations are documented |
 | Skills | Planning, implementation, bug fixing, review, CI diagnostics, QA smoke, docs, tests, and cleanup workflows are reusable and versioned |
 | Safety | Public behavior, dependencies, and security changes require justification |
-| Orchestration | Linear polling, lifecycle comments, retries, workspace isolation, audit/no-op handoff, Wiggum review, and merge shepherding are executable |
+| Orchestration | Linear polling, lifecycle comments, repo-local tracker tools, retries, workspace isolation, audit/no-op handoff, Wiggum review, and merge shepherding are executable |
 
 ## Minimum Passing Harness
 
@@ -37,6 +37,10 @@ Use this as a lightweight rubric for harnessed repositories.
 - `agent-os orchestrator once --repo <repo> --workflow WORKFLOW.md` can dispatch
   an eligible issue into a deterministic workspace, post Linear progress, and
   move the issue to review after handoff.
+- `scripts/agent-linear-comment.sh`, `scripts/agent-linear-move.sh`,
+  `scripts/agent-linear-pr.sh`, and `scripts/agent-linear-handoff.sh` provide
+  deterministic agent-owned tracker writes for configured `hybrid` or
+  experimental `agent-owned` projects.
 - Handoffs that reference `Validation-JSON` are not moved to review unless the
   evidence verifies successfully; missing handoffs and dead/stalled Codex App
   Server turns fail through the retry/failure path.

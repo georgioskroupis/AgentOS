@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { resolve } from "node:path";
+import { realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { addProject, loadRegistry, removeProject } from "./registry.js";
 import { readText } from "./fs-utils.js";
+import {
+  attachPrWithAgentLifecycleTool,
+  commentWithAgentLifecycleTool,
+  moveWithAgentLifecycleTool,
+  recordHandoffWithAgentLifecycleTool
+} from "./agent-lifecycle.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
 import { getStatus, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
@@ -317,6 +324,66 @@ linear
     console.log(`moved: ${issue} -> ${state}`);
   });
 
+const linearLifecycle = linear.command("lifecycle").description("Repo-local agent lifecycle tools for Linear");
+
+linearLifecycle
+  .command("comment")
+  .argument("<issue>", "Linear issue id or identifier")
+  .argument("[body...]", "comment body")
+  .requiredOption("--event <event>", "stable idempotency event key")
+  .option("--file <path>", "read comment body from a file")
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .option("--repo <path>", "repository root", process.cwd())
+  .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle comment")
+  .action(async (issue, body, options) => {
+    const tool = lifecycleToolForAction("comment", options.tool);
+    const context = await agentLifecycleContextFromOptions(options);
+    const text = await bodyFromArgsOrFile(body, options.file, context.repoRoot, "comment body");
+    console.log(formatAgentLifecycleResult(await commentWithAgentLifecycleTool(context, { issue, body: text, event: options.event, tool })));
+  });
+
+linearLifecycle
+  .command("move")
+  .argument("<issue>", "Linear issue id or identifier")
+  .argument("<state>", "target state name")
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .option("--repo <path>", "repository root", process.cwd())
+  .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle move")
+  .action(async (issue, state, options) => {
+    const tool = lifecycleToolForAction("move", options.tool);
+    const context = await agentLifecycleContextFromOptions(options);
+    console.log(formatAgentLifecycleResult(await moveWithAgentLifecycleTool(context, { issue, state, tool })));
+  });
+
+linearLifecycle
+  .command("attach-pr")
+  .argument("<issue>", "Linear issue id or identifier")
+  .argument("<url>", "GitHub pull request URL")
+  .option("--event <event>", "stable idempotency event key", "pr_metadata")
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .option("--repo <path>", "repository root", process.cwd())
+  .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle attach-pr")
+  .action(async (issue, url, options) => {
+    const tool = lifecycleToolForAction("attach-pr", options.tool);
+    const context = await agentLifecycleContextFromOptions(options);
+    console.log(formatAgentLifecycleResult(await attachPrWithAgentLifecycleTool(context, { issue, prUrl: url, event: options.event, tool })));
+  });
+
+linearLifecycle
+  .command("record-handoff")
+  .argument("<issue>", "Linear issue id or identifier")
+  .requiredOption("--file <path>", "handoff file to persist and post")
+  .option("--event <event>", "stable idempotency event key", "run_handoff")
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .option("--repo <path>", "repository root", process.cwd())
+  .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle record-handoff")
+  .action(async (issue, options) => {
+    const tool = lifecycleToolForAction("record-handoff", options.tool);
+    const context = await agentLifecycleContextFromOptions(options);
+    const handoffPath = await resolveRepoLocalInputPath(context.repoRoot, options.file, "handoff file");
+    console.log(formatAgentLifecycleResult(await recordHandoffWithAgentLifecycleTool(context, { issue, handoffPath, event: options.event, tool })));
+  });
+
 linear
   .command("seed-roadmap")
   .requiredOption("--team <team>", "Linear team id or key")
@@ -413,6 +480,76 @@ async function linearClientFromWorkflow(workflowPath: string): Promise<LinearCli
   const workflow = await loadWorkflow(workflowPath);
   const config = resolveServiceConfig(workflow);
   return new LinearClient(config.tracker);
+}
+
+async function agentLifecycleContextFromOptions(options: { repo: string; workflow: string }): Promise<{
+  repoRoot: string;
+  config: ReturnType<typeof resolveServiceConfig>;
+  tracker: LinearClient;
+}> {
+  const repoRoot = resolve(options.repo);
+  const workflowPath = await resolveRepoLocalWorkflowPath(repoRoot, options.workflow);
+  const workflow = await loadWorkflow(workflowPath);
+  const config = resolveServiceConfig(workflow);
+  return { repoRoot, config, tracker: new LinearClient(config.tracker) };
+}
+
+async function bodyFromArgsOrFile(body: string[] | undefined, file: string | undefined, repoRoot: string, label: string): Promise<string> {
+  const text = file ? await readText(await resolveRepoLocalInputPath(repoRoot, file, `${label} file`)) : (body ?? []).join(" ");
+  if (!text.trim()) throw new Error(`${label} is required; pass text or --file <path>`);
+  return text;
+}
+
+function formatAgentLifecycleResult(result: { status: string; issueIdentifier: string; marker?: string }): string {
+  return [`${result.status}: ${result.issueIdentifier}`, result.marker ? `marker: ${result.marker}` : null].filter(Boolean).join("\n");
+}
+
+type LifecycleCliAction = "comment" | "move" | "attach-pr" | "record-handoff";
+
+function lifecycleToolForAction(action: LifecycleCliAction, tool: string): string {
+  const lifecycleToolIdentities: Record<LifecycleCliAction, string[]> = {
+    comment: ["agent-os linear lifecycle comment", "scripts/agent-linear-comment.sh"],
+    move: ["agent-os linear lifecycle move", "scripts/agent-linear-move.sh"],
+    "attach-pr": ["agent-os linear lifecycle attach-pr", "scripts/agent-linear-pr.sh"],
+    "record-handoff": ["agent-os linear lifecycle record-handoff", "scripts/agent-linear-handoff.sh"]
+  };
+  const allowed = lifecycleToolIdentities[action];
+  const normalizedTool = normalizeLifecycleToolIdentity(tool);
+  const identity = allowed.find((candidate) => normalizeLifecycleToolIdentity(candidate) === normalizedTool);
+  if (!identity) {
+    throw new Error(`lifecycle tool/action mismatch: ${action} cannot use ${tool}`);
+  }
+  return identity;
+}
+
+function normalizeLifecycleToolIdentity(value: string): string {
+  return value.trim().replace(/^\.\//, "");
+}
+
+async function resolveRepoLocalInputPath(repoRoot: string, path: string, label: string): Promise<string> {
+  if (isAbsolute(path)) {
+    throw new Error(`${label} must be relative to the repository root`);
+  }
+  const root = resolve(repoRoot);
+  const resolvedPath = resolve(root, path);
+  const relativePath = relative(root, resolvedPath);
+  if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new Error(`${label} must stay within the repository root`);
+  }
+  const realRoot = await realpath(root);
+  const realResolvedPath = await realpath(resolvedPath);
+  const realRelativePath = relative(realRoot, realResolvedPath);
+  if (realRelativePath.startsWith("..") || isAbsolute(realRelativePath)) {
+    throw new Error(`${label} must stay within the repository root`);
+  }
+  return realResolvedPath;
+}
+
+async function resolveRepoLocalWorkflowPath(repoRoot: string, path: string): Promise<string> {
+  if (isAbsolute(path)) {
+    throw new Error("workflow path must be relative to the repository root");
+  }
+  return resolveRepoLocalInputPath(repoRoot, path, "workflow path");
 }
 
 const roadmapTitles = [
