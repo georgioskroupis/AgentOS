@@ -120,8 +120,8 @@ AgentOS is not yet fully Symphony-faithful:
   multi-PR handoffs, and PR E recentered workflow wording on issues, but
   automated review and merge shepherding still use a single primary PR.
 - Symphony calls for authoritative orchestrator state for dispatch, retries, and
-  reconciliation. AgentOS has durable run summaries and issue state, but Stage
-  9A restart/retry reconstruction is still planning-only.
+  reconciliation. AgentOS now has durable run summaries, issue state, and a
+  schema-versioned runtime state file for startup retry reconstruction.
 - Symphony expects every eligible active issue to have an agent running in an
   isolated workspace. AgentOS v0.1 RC1 is intentionally single-project and
   `max_concurrent_agents: 1` for dogfood; true registry-wide scheduling is a
@@ -346,8 +346,8 @@ Refactor-needed deviations:
   richer review/merge handling before they are as mature as one-PR paths.
 - Multi-PR review and merge behavior still relies on a primary PR in several
   code paths.
-- Stage 9A durable retry/startup reconstruction remains necessary before true
-  multi-project daemon scheduling.
+- Stage 9A durable retry/startup reconstruction has a first single-project
+  implementation; true multi-project daemon scheduling remains separate.
 - Agent legibility for target applications needs a template-level checklist.
 
 ## 12. Current Source-Faithfulness Score
@@ -433,9 +433,8 @@ PR G: Improve agent legibility checklist for future projects.
 - Add maintenance issue templates where useful.
 - Keep checks lightweight unless a mechanical invariant is obvious.
 
-After PRs C-G, add a planning-only Stage 9A readiness decision before any
-implementation. Stage 9A durable retry/startup reconstruction should still come
-before true multi-project daemon scheduling.
+After PRs C-G, validate Stage 9A durable retry/startup reconstruction in
+dogfood before true multi-project daemon scheduling.
 
 ## 14. Dogfood Evidence
 

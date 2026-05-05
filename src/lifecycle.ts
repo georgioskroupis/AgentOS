@@ -10,7 +10,8 @@ export interface LifecycleValidationResult {
 
 export type LifecycleCommentKind = "bookkeeping" | "substantive";
 
-const durableRetryAcknowledgement = "durable retry/startup reconstruction is not yet complete";
+const durableRecoveryAcknowledgement = "agent-owned durable recovery remains experimental";
+const legacyDurableRetryAcknowledgement = "durable retry/startup reconstruction is not yet complete";
 
 export function parseLifecycleConfig(value: unknown): ServiceConfig["lifecycle"] {
   const config = objectRecord(value);
@@ -70,8 +71,8 @@ export function validateLifecycleConfig(lifecycle: ServiceConfig["lifecycle"], s
   if (!lifecycle.fallbackBehavior) {
     errors.push("lifecycle.mode=agent-owned requires lifecycle.fallback_behavior in strict mode");
   }
-  if (!lifecycle.maturityAcknowledgement?.includes(durableRetryAcknowledgement)) {
-    errors.push(`lifecycle.mode=agent-owned requires lifecycle.maturity_acknowledgement to include "${durableRetryAcknowledgement}" in strict mode`);
+  if (!lifecycle.maturityAcknowledgement || ![durableRecoveryAcknowledgement, legacyDurableRetryAcknowledgement].some((acknowledgement) => lifecycle.maturityAcknowledgement?.includes(acknowledgement))) {
+    errors.push(`lifecycle.mode=agent-owned requires lifecycle.maturity_acknowledgement to include "${durableRecoveryAcknowledgement}" in strict mode`);
   }
 
   return { errors, warnings };

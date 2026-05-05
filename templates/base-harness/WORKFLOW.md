@@ -97,7 +97,7 @@ Other modes are separate from `trust_mode` and automation repair policy:
 - `agent-owned`: experimental only. Strict workflow validation requires
   tracker tools, idempotency marker format, allowed transitions,
   duplicate-comment behavior, fallback behavior, and an acknowledgement that
-  durable retry/startup reconstruction is not yet complete.
+  agent-owned durable recovery remains experimental.
 
 Repo-local Linear lifecycle tools are available for source-aligned modes:
 

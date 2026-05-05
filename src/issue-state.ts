@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ensureDir, exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
 import type { Issue, IssueState, PullRequestRef, PullRequestRole, ReviewTargetMode } from "./types.js";
@@ -20,6 +21,19 @@ export class IssueStateStore {
     const normalized = normalizeIssueState(state);
     await ensureDir(join(this.repoRoot, ".agent-os", "state", "issues"));
     await writeTextEnsuringDir(this.pathFor(normalized.issueIdentifier), `${JSON.stringify(normalized, null, 2)}\n`);
+  }
+
+  async list(): Promise<IssueState[]> {
+    const root = join(this.repoRoot, ".agent-os", "state", "issues");
+    if (!(await exists(root))) return [];
+    const entries = await readdir(root, { withFileTypes: true });
+    const states: IssueState[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const parsed = JSON.parse(await readText(join(root, entry.name))) as Partial<IssueState>;
+      if (parsed.issueIdentifier) states.push(normalizeIssueState(parsed));
+    }
+    return states.sort((a, b) => a.issueIdentifier.localeCompare(b.issueIdentifier));
   }
 
   async merge(identifier: string, patch: Partial<IssueState> & Pick<IssueState, "issueId" | "issueIdentifier">): Promise<IssueState> {

@@ -166,7 +166,7 @@ export interface AgentEvent {
 }
 
 export interface AgentRunResult {
-  status: "succeeded" | "failed" | "timed_out" | "stalled" | "canceled";
+  status: "succeeded" | "failed" | "timed_out" | "stalled" | "canceled" | "stale";
   threadId?: string;
   turnId?: string;
   inputTokens?: number;
@@ -209,7 +209,20 @@ export interface IssueState {
   lastRunId?: string;
   errorCategory?: RunErrorCategory;
   lastError?: string;
+  activeRunId?: string;
+  retryAttempt?: number;
   nextRetryAt?: string;
+  lastCodexEventAt?: string;
+  stopReason?: string;
+  workspacePath?: string;
+  workspaceKey?: string;
+  lifecycleStatus?: LifecycleStatus;
+  terminalState?: string;
+  terminalReason?: string;
+  terminalAt?: string;
+  humanContinuationAt?: string;
+  mergedAt?: string;
+  workspaceMissingAt?: string;
   headSha?: string | null;
   reviewIteration?: number;
   reviewStatus?: ReviewStatus;
@@ -259,11 +272,23 @@ export type RunPhase =
   | "app-server-init"
   | "streaming-turn"
   | "needs-input"
+  | "human-required"
   | "validation"
   | "review"
   | "fix"
   | "merge"
-  | "completed";
+  | "completed"
+  | "canceled";
+
+export type LifecycleStatus =
+  | "implementation_failure"
+  | "review_escalation"
+  | "human_continuation"
+  | "merge_success"
+  | "post_merge_cleanup_warning"
+  | "terminal_linear"
+  | "already_merged_pr"
+  | "terminal_missing_workspace";
 
 export type RunErrorCategory =
   | "workspace"

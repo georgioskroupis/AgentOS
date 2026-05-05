@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ensureDir, exists, removePath } from "./fs-utils.js";
 import type { ServiceConfig, Workspace } from "./types.js";
@@ -101,6 +101,34 @@ export async function releaseWorkspaceLock(lockPath: string): Promise<void> {
   await rm(lockPath, { recursive: true, force: true });
 }
 
+export interface WorkspaceLockRecovery {
+  lockPath: string;
+  workspaceKey: string;
+  recovered: boolean;
+  reason: string;
+}
+
+export async function recoverWorkspaceLocks(root: string): Promise<WorkspaceLockRecovery[]> {
+  const lockRoot = join(root, ".agent-os", "locks", "workspaces");
+  if (!(await exists(lockRoot))) return [];
+  const entries = await readdir(lockRoot, { withFileTypes: true });
+  const recoveries: WorkspaceLockRecovery[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.endsWith(".lock")) continue;
+    const lockPath = join(lockRoot, entry.name);
+    const owner = await readLockOwner(lockPath);
+    const workspaceKey = entry.name.slice(0, -".lock".length);
+    const reason = staleWorkspaceLockReason(owner);
+    if (reason) {
+      await releaseWorkspaceLock(lockPath);
+      recoveries.push({ lockPath, workspaceKey, recovered: true, reason });
+    } else {
+      recoveries.push({ lockPath, workspaceKey, recovered: false, reason: "lock owner is still active" });
+    }
+  }
+  return recoveries;
+}
+
 export async function runHook(script: string, cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn("sh", ["-lc", script], { cwd, stdio: "pipe", env });
@@ -138,17 +166,19 @@ function hookEnv(sourceRepo: string, workspacePath: string, key: string): NodeJS
 
 async function recoverStaleWorkspaceLock(lockPath: string): Promise<boolean> {
   const owner = await readLockOwner(lockPath);
-  if (!owner) return false;
-  const ageMs = Date.now() - Date.parse(owner.createdAt);
-  if (Number.isFinite(ageMs) && ageMs > workspaceLockStaleMs) {
-    await releaseWorkspaceLock(lockPath);
-    return true;
-  }
-  if (owner.pid && !isProcessAlive(owner.pid)) {
+  if (staleWorkspaceLockReason(owner)) {
     await releaseWorkspaceLock(lockPath);
     return true;
   }
   return false;
+}
+
+function staleWorkspaceLockReason(owner: { pid?: number; createdAt: string } | null): string | null {
+  if (!owner) return null;
+  const ageMs = Date.now() - Date.parse(owner.createdAt);
+  if (Number.isFinite(ageMs) && ageMs > workspaceLockStaleMs) return "lock owner is older than stale threshold";
+  if (owner.pid && !isProcessAlive(owner.pid)) return `lock owner pid ${owner.pid} is not running`;
+  return null;
 }
 
 async function readLockOwner(lockPath: string): Promise<{ pid?: number; createdAt: string } | null> {
