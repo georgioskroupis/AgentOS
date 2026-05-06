@@ -48,4 +48,3 @@ describe("repo-local daemon env loading", () => {
     expect(result.env.AGENT_OS_SOURCE_REPO).toBe("/tmp/agent-os");
   });
 });
-

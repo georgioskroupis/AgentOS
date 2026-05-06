@@ -19,4 +19,3 @@ what was changed, checked, and observed.
 
 Use `App-Proof: <path-or-url>` or `Proof-Artifact: <path-or-url>` lines in the
 handoff when an artifact should be shown by `agent-os inspect`.
-

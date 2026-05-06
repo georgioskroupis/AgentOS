@@ -122,6 +122,39 @@ Lifecycle `--file` arguments must be relative paths inside the repository, and
 must point at GitHub pull requests in the current repository before it is stored
 or posted.
 
+## Human Decision Re-Entry
+
+When a Human Review issue is returned to `Todo` or `In Progress`, recent Linear
+comments are included in the next prompt as re-entry context. A structured
+decision is authoritative only when the comment author matches the issue
+assignee or an entry in `lifecycle.trusted_decision_actors`; other comments stay
+visible as non-authoritative context and do not change lifecycle state.
+
+Structured decision format:
+
+```text
+AgentOS-Human-Decision: fix-findings
+PR-Head-SHA: <sha>
+Validation-JSON: .agent-os/validation/<issue>.json
+CI-State: passed|failed|pending
+Findings: resolved|accepted|open
+Decision-Summary: <short rationale>
+```
+
+Allowed `AgentOS-Human-Decision` values and effects:
+
+- `fix-findings`: records `human_continuation`; AgentOS may redispatch from an
+  active state with recent Linear comments, PR feedback, and review context.
+- `approve-as-is`: records `supervisor_continuation`; Codex stays paused until
+  accepted risk and fresh validation/CI allow a move to `Merging`.
+- `accept-risk`: records `supervisor_continuation`; remaining findings are
+  treated as accepted only with explicit validation/CI evidence.
+- `split-follow-up`: records `supervisor_continuation`; link the follow-up
+  issue in the comment or handoff before merge progression.
+- `proceed-to-merge-after-supervisor-fix`: records `externally_fixed`; stale
+  active runs and retries are suppressed, and merge shepherding should proceed
+  only after fresh validation and green CI.
+
 ## Automation And Repair Policy
 
 Automation behavior is separate from trust and lifecycle ownership:

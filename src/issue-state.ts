@@ -61,6 +61,11 @@ export class IssueStateStore {
   }
 }
 
+interface HumanDecisionTrustOptions {
+  trustedActors?: string[];
+  issueAssignee?: string | null;
+}
+
 export function issueStateFromHandoff(issue: Issue, handoff: string): IssueState | null {
   const prs = extractPullRequestRefs(handoff);
   const outcome = extractOutcome(handoff);
@@ -245,7 +250,7 @@ export function extractHumanDecision(
   };
 }
 
-export function extractHumanDecisionsFromComments(comments: IssueComment[]): HumanDecisionState[] {
+export function extractHumanDecisionsFromComments(comments: IssueComment[], options: HumanDecisionTrustOptions = {}): HumanDecisionState[] {
   return comments
     .map((comment) =>
       extractHumanDecision(comment.body, {
@@ -256,7 +261,17 @@ export function extractHumanDecisionsFromComments(comments: IssueComment[]): Hum
       })
     )
     .filter((decision): decision is HumanDecisionState => Boolean(decision))
+    .filter((decision) => isTrustedHumanDecisionActor(decision.actor, options))
     .sort((a, b) => a.decidedAt.localeCompare(b.decidedAt));
+}
+
+export function isTrustedHumanDecisionActor(actor: string | null | undefined, options: HumanDecisionTrustOptions = {}): boolean {
+  const normalizedActor = normalizeActor(actor);
+  if (!normalizedActor) return false;
+  const trusted = [...(options.trustedActors ?? []), options.issueAssignee ?? ""]
+    .map(normalizeActor)
+    .filter((value): value is string => Boolean(value));
+  return trusted.includes(normalizedActor);
 }
 
 export function latestHumanDecision(decisions: HumanDecisionState[] | undefined): HumanDecisionState | null {
@@ -327,6 +342,11 @@ function normalizeFindingsState(value: string | null | undefined): HumanDecision
   const normalized = value?.trim().toLowerCase();
   if (normalized === "resolved" || normalized === "accepted" || normalized === "open") return normalized;
   return value ? "unknown" : undefined;
+}
+
+function normalizeActor(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalized ? normalized : null;
 }
 
 function assignDefaultPullRequestRoles<T extends { url: string; role?: PullRequestRole }>(refs: T[]): Array<T & { role: PullRequestRole }> {

@@ -51,6 +51,7 @@ const issueNodeSelection = `
   url
   createdAt
   updatedAt
+  assignee { name displayName email }
   state { name }
   labels { nodes { name } }
   relations { nodes { type relatedIssue { id identifier createdAt updatedAt state { name } } } }
@@ -447,6 +448,7 @@ function normalizeLinearIssue(node: unknown): Issue {
     state: String(raw.state?.name ?? raw.state ?? ""),
     branch_name: typeof raw.branchName === "string" ? raw.branchName : null,
     url: typeof raw.url === "string" ? raw.url : null,
+    assignee: raw.assignee?.displayName ?? raw.assignee?.name ?? raw.assignee?.email ?? null,
     labels,
     blocked_by: blockedBy,
     created_at: raw.createdAt ?? null,

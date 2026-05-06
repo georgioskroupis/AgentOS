@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import {
   extractOutcome,
   extractHumanDecision,
+  extractHumanDecisionsFromComments,
   extractPullRequestUrls,
+  isTrustedHumanDecisionActor,
   issueStateFromHandoff,
   IssueStateStore,
   mergeTargetAmbiguityReason,
@@ -114,6 +116,31 @@ describe("issue state handoff parsing", () => {
       commentId: "comment-1",
       validationEvidence: ".agent-os/validation/AG-1.json"
     });
+  });
+
+  it("keeps Linear human decisions authoritative only for trusted actors", () => {
+    const comments = [
+      {
+        id: "comment-1",
+        author: "Random User",
+        createdAt: "2026-05-05T00:00:00.000Z",
+        body: "AgentOS-Human-Decision: approve-as-is"
+      },
+      {
+        id: "comment-2",
+        author: "Supervisor",
+        createdAt: "2026-05-05T00:01:00.000Z",
+        body: "AgentOS-Human-Decision: fix-findings"
+      }
+    ];
+
+    expect(isTrustedHumanDecisionActor("supervisor", { trustedActors: ["Supervisor"] })).toBe(true);
+    expect(extractHumanDecisionsFromComments(comments, { trustedActors: ["Supervisor"] }).map((decision) => decision.type)).toEqual([
+      "fix_findings"
+    ]);
+    expect(extractHumanDecisionsFromComments(comments, { issueAssignee: "Random User" }).map((decision) => decision.type)).toEqual([
+      "approve_as_is"
+    ]);
   });
 
   it("treats implemented handoff-only outcomes as valid no-PR issue state", () => {

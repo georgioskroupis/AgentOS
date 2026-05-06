@@ -149,4 +149,3 @@ function preflightMessage(status: DaemonPreflightStatus, repoEnv: RepoEnvLoadRes
   if (status === "stale_env") return `.agent-os/env contains stale or placeholder credentials`;
   return errors.length ? errors.join("; ") : "required daemon credentials are missing";
 }
-

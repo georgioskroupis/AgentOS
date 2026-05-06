@@ -46,6 +46,28 @@ GitHub merge command configuration, or Codex command configuration are missing.
 Use `bin/agent-os status --registry` or `bin/agent-os inspect <issue> --repo .`
 to see the recorded preflight and next safe action.
 
+## Human Review Re-Entry
+
+Use trusted Linear comments when a supervisor needs to continue a Human Review
+issue. Authoritative comments must come from the issue assignee or a configured
+`lifecycle.trusted_decision_actors` entry; other comments remain prompt context
+only.
+
+Supported decision values:
+
+- `AgentOS-Human-Decision: fix-findings` to redispatch an active issue with the
+  latest comments and PR feedback.
+- `AgentOS-Human-Decision: approve-as-is` to keep Codex paused while accepting
+  the current handoff.
+- `AgentOS-Human-Decision: accept-risk` to accept named remaining findings.
+- `AgentOS-Human-Decision: split-follow-up` when remaining work is tracked in a
+  linked follow-up issue.
+- `AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix` after an
+  external fix, fresh validation, and green CI.
+
+Include `PR-Head-SHA`, `Validation-JSON`, `CI-State`, `Findings`, and a short
+`Decision-Summary` whenever the decision can affect merge or redispatch safety.
+
 ## Checklist
 
 For each issue, record:

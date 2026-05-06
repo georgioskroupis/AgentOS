@@ -135,9 +135,6 @@ export class Orchestrator {
       return Math.max(0, options.dispatchLimit - dispatched);
     };
     await this.refreshDaemonRuntimeState();
-    await this.reconstructStartupState();
-    await this.cleanupTerminalWorkspaces();
-    await this.reconcile();
     if (this.preflight && !preflightAllowsDispatch(this.preflight)) {
       await this.logger.write({
         type: "daemon_preflight_failed",
@@ -146,6 +143,9 @@ export class Orchestrator {
       });
       return { dispatched: 0, retryDispatched: 0, candidateDispatched: 0, candidates: 0 };
     }
+    await this.reconstructStartupState();
+    await this.cleanupTerminalWorkspaces();
+    await this.reconcile();
     validateDispatchConfig(this.config);
     retryDispatched = await this.dispatchDueRetries(remainingDispatchCapacity());
     dispatched += retryDispatched;
@@ -931,8 +931,8 @@ export class Orchestrator {
       "",
       "## Linear Human Decision Re-entry",
       "",
-      "Recent Linear comments and structured human decisions are re-entry input. A structured human decision has precedence over stale handoff state when they conflict.",
-      latestDecision ? formatHumanDecision(latestDecision) : "Structured human decision: none recorded.",
+      "Recent Linear comments are re-entry input. Structured human decisions are authoritative only when written by a configured trusted actor or the issue assignee, and then take precedence over stale handoff state.",
+      latestDecision ? formatHumanDecision(latestDecision) : "Authoritative structured human decision: none recorded.",
       state?.reviewStatus ? `Review status from issue state: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : null,
       state?.reviewTargetUrls?.length ? `Review targets: ${state.reviewTargetUrls.join(", ")}` : null,
       "",
@@ -946,7 +946,10 @@ export class Orchestrator {
   private async ingestHumanDecisions(issue: Issue, currentState: IssueState | null, comments?: IssueComment[]): Promise<IssueState | null> {
     if (!this.tracker.fetchIssueComments && !comments) return currentState;
     const fetchedComments = comments ?? (await this.tracker.fetchIssueComments!(issue.identifier, 20).catch(() => []));
-    const decisions = extractHumanDecisionsFromComments(fetchedComments);
+    const decisions = extractHumanDecisionsFromComments(fetchedComments, {
+      trustedActors: this.config.lifecycle.trustedDecisionActors,
+      issueAssignee: issue.assignee
+    });
     if (decisions.length === 0) return currentState;
     const latestDecision = latestHumanDecision(decisions);
     const state = await this.recordIssueState(issue, {

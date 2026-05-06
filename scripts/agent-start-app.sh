@@ -26,9 +26,8 @@ fi
 log_path="${AGENT_APP_LOG_PATH:-.agent-os/runs/app.log}"
 pid_path="${AGENT_APP_PID_PATH:-.agent-os/runs/app.pid}"
 
-echo "Starting app with: $command_text"
+echo "Starting app with configured command."
 nohup bash -lc "$command_text" >"$log_path" 2>&1 &
 pid="$!"
 echo "$pid" >"$pid_path"
 echo "Wrote $pid_path and $log_path"
-

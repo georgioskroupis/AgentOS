@@ -22,7 +22,8 @@ export function parseLifecycleConfig(value: unknown): ServiceConfig["lifecycle"]
     allowedStateTransitions: stringList(config.allowed_state_transitions),
     duplicateCommentBehavior: parseDuplicateCommentBehavior(config.duplicate_comment_behavior),
     fallbackBehavior: nullableString(config.fallback_behavior),
-    maturityAcknowledgement: nullableString(config.maturity_acknowledgement)
+    maturityAcknowledgement: nullableString(config.maturity_acknowledgement),
+    trustedDecisionActors: stringList(config.trusted_decision_actors ?? config.trusted_human_decision_actors)
   };
 }
 

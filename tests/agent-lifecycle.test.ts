@@ -420,6 +420,7 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
       duplicateCommentBehavior: "upsert",
       fallbackBehavior: "write handoff and stop human_required",
       maturityAcknowledgement: null,
+      trustedDecisionActors: [],
       ...overrides
     },
     tracker: {

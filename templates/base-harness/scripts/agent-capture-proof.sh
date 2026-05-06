@@ -4,21 +4,29 @@ set -euo pipefail
 proof_dir="${AGENT_PROOF_DIR:-.agent-os/proof}"
 mkdir -p "$proof_dir"
 
+configured_state() {
+  if [[ -n "${1:-}" ]]; then
+    echo "configured"
+  else
+    echo "not configured"
+  fi
+}
+
 summary_path="$proof_dir/latest-proof.md"
 {
   echo "# AgentOS Proof"
   echo
   echo "- Captured at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo "- URL: ${AGENT_PROOF_URL:-not configured}"
-  echo "- Start command: ${AGENT_APP_START_COMMAND:-not configured}"
-  echo "- Health check: ${AGENT_HEALTH_CHECK_COMMAND:-not configured}"
-  echo "- Smoke test: ${AGENT_SMOKE_COMMAND:-./scripts/agent-smoke-test.sh}"
+  echo "- Start command: $(configured_state "${AGENT_APP_START_COMMAND:-}")"
+  echo "- Health check: $(configured_state "${AGENT_HEALTH_CHECK_COMMAND:-}")"
+  echo "- Smoke test: $([[ -n "${AGENT_SMOKE_COMMAND:-}" ]] && echo "configured" || echo "./scripts/agent-smoke-test.sh")"
   echo "- Logs: ${AGENT_LOG_PATHS:-.agent-os/runs app logs}"
-  echo "- Metrics: ${AGENT_METRICS_COMMAND:-not configured}"
-  echo "- Traces: ${AGENT_TRACES_COMMAND:-not configured}"
-  echo "- CI logs: ${AGENT_CI_LOG_COMMAND:-not configured}"
-  echo "- UI proof command: ${AGENT_PROOF_SCREENSHOT_COMMAND:-not configured}"
-  echo "- Browser/DOM command: ${AGENT_PROOF_DOM_COMMAND:-not configured}"
+  echo "- Metrics: $(configured_state "${AGENT_METRICS_COMMAND:-}")"
+  echo "- Traces: $(configured_state "${AGENT_TRACES_COMMAND:-}")"
+  echo "- CI logs: $(configured_state "${AGENT_CI_LOG_COMMAND:-}")"
+  echo "- UI screenshot/video proof: $(configured_state "${AGENT_PROOF_SCREENSHOT_COMMAND:-}")"
+  echo "- Browser/DOM inspection: $(configured_state "${AGENT_PROOF_DOM_COMMAND:-}")"
 } >"$summary_path"
 
 run_optional() {
@@ -45,4 +53,3 @@ run_optional "UI screenshot/video proof" "${AGENT_PROOF_SCREENSHOT_COMMAND:-}" "
 run_optional "browser/DOM inspection" "${AGENT_PROOF_DOM_COMMAND:-}" "$proof_dir/dom.txt"
 
 echo "Wrote $summary_path"
-

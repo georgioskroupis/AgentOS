@@ -61,6 +61,7 @@ export interface Issue {
   state: string;
   branch_name: string | null;
   url: string | null;
+  assignee?: string | null;
   labels: string[];
   blocked_by: IssueRef[];
   created_at: string | null;
@@ -87,6 +88,7 @@ export interface ServiceConfig {
     duplicateCommentBehavior: LifecycleDuplicateCommentBehavior | null;
     fallbackBehavior: string | null;
     maturityAcknowledgement: string | null;
+    trustedDecisionActors: string[];
   };
   tracker: {
     kind: "linear";

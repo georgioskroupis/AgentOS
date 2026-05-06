@@ -28,8 +28,9 @@ Fill in the applicable commands, paths, or URLs for the target project:
 - `scripts/agent-capture-logs.sh` indexes project logs for handoff evidence.
 - `scripts/agent-capture-proof.sh` writes `.agent-os/proof/latest-proof.md`
   and runs optional health, metrics, trace, CI, UI, and DOM capture commands.
+  The summary records whether optional commands are configured without storing
+  the command strings themselves.
 
 Keep the default checks lightweight. Projects can opt into screenshots, traces,
 videos, or dashboard queries by setting the corresponding environment variable
 or documenting the command in this file.
-
