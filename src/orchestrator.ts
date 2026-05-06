@@ -8,6 +8,7 @@ import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from 
 import {
   extractPullRequestUrls,
   extractHumanDecisionsFromComments,
+  hasHumanDecision,
   issueStateFromHandoff,
   IssueStateStore,
   latestHumanDecision,
@@ -21,7 +22,8 @@ import {
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
-import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
+import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
+import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import {
@@ -36,6 +38,7 @@ import {
   reviewerPrompt,
   writeReviewArtifact
 } from "./review.js";
+import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary, type RuntimeRetryEntry } from "./runtime-state.js";
@@ -43,7 +46,7 @@ import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, RunErrorCategory, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 
 export interface OrchestratorOptions {
@@ -231,6 +234,29 @@ export class Orchestrator {
     });
   }
 
+  private async finishOpenRunPhase(
+    runId: string | null | undefined,
+    issue: Issue,
+    phase: RunTimingPhase,
+    status: Exclude<RunTimingStatus, "running">,
+    finishedAt: string,
+    metadata?: Record<string, unknown>
+  ): Promise<boolean> {
+    if (!runId) return false;
+    const finished = await this.runArtifacts.finishPhase(runId, { phase }, { status, finishedAt, metadata });
+    if (!finished) return false;
+    await this.writeRunEvent(runId, {
+      type: "phase_finished",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: finished.label ?? finished.phase,
+      timestamp: finished.finishedAt ?? finishedAt,
+      payload: { timing: finished }
+    });
+    if (this.running.get(issue.id)?.runId !== runId) await this.runArtifacts.refreshArtifactHashes(runId);
+    return true;
+  }
+
   private async writePhaseTimingEvent(issue: Issue, input: PhaseTimingEventInput): Promise<void> {
     const startedAt = input.startedAt ?? new Date().toISOString();
     const resolvedInput = { ...input, startedAt };
@@ -243,7 +269,7 @@ export class Orchestrator {
       timestamp: input.status === "waiting" ? startedAt : input.finishedAt ?? startedAt,
       payload: { timing }
     });
-    const runId = await this.phaseTimingRunId(issue, input.runId);
+    const runId = input.runId === null ? null : await this.phaseTimingRunId(issue, input.runId);
     if (!runId) return;
     await persistPhaseTimingToRun(this.runArtifacts, runId, issue, resolvedInput, { activeRunId: this.running.get(issue.id)?.runId }).catch((error: Error) =>
       this.logger.write({
@@ -1139,6 +1165,10 @@ export class Orchestrator {
     });
     if (decisions.length === 0) return currentState;
     const latestDecision = latestHumanDecision(decisions);
+    const previousDecisions = [...(currentState?.humanDecisions ?? []), ...(currentState?.lastHumanDecision ? [currentState.lastHumanDecision] : [])];
+    const newDecisions = decisions.filter((decision) => !hasHumanDecision(previousDecisions, decision));
+    if (newDecisions.length === 0) return currentState;
+    const previousLastRunId = currentState?.lastRunId ?? null;
     const state = await this.recordIssueState(issue, {
       humanDecisions: decisions,
       lastHumanDecision: latestDecision,
@@ -1156,7 +1186,8 @@ export class Orchestrator {
       await this.writePhaseTimingEvent(issue, {
         phase: "human-wait",
         status: "completed",
-        startedAt: currentState?.updatedAt ?? latestDecision.decidedAt,
+        runId: previousLastRunId,
+        startedAt: timingStartNoLaterThan(currentState?.updatedAt, latestDecision.decidedAt),
         finishedAt: latestDecision.decidedAt,
         label: "human decision recorded",
         metadata: {
@@ -1302,15 +1333,17 @@ export class Orchestrator {
     if (!state || state.outcome === "already_satisfied") return state;
     let latestState: IssueState | null = state;
     const reviewTiming = runId ? await this.startRunPhase(runId, issue, "automated-review", "automated review", { reviewTargetMode }) : null;
-    const finishReviewTiming = async (): Promise<void> => {
+    const finishReviewTiming = async (unwoundByError: boolean): Promise<void> => {
       if (!runId || !reviewTiming) return;
       const reviewStatus = latestState?.reviewStatus;
-      await this.finishRunPhase(runId, issue, reviewTiming, reviewStatus === "approved" ? "completed" : reviewStatus === "pending" ? "completed" : "failed", {
+      await this.finishRunPhase(runId, issue, reviewTiming, reviewStatus === "approved" || (reviewStatus === "pending" && !unwoundByError) ? "completed" : "failed", {
         reviewStatus,
         reviewIteration: latestState?.reviewIteration,
-        reviewTargetMode
+        reviewTargetMode,
+        ...(unwoundByError ? { reviewExit: "error" } : {})
       });
     };
+    let reviewUnwoundByError = false;
     try {
     const initialReviewTargets = reviewTargetPullRequests(state, reviewTargetMode);
     if (initialReviewTargets.length === 0) {
@@ -1659,8 +1692,11 @@ export class Orchestrator {
       previousFindings = findings;
     }
     return latestState;
+    } catch (error) {
+      reviewUnwoundByError = true;
+      throw error;
     } finally {
-      await finishReviewTiming();
+      await finishReviewTiming(reviewUnwoundByError);
     }
   }
 
@@ -1808,6 +1844,8 @@ export class Orchestrator {
           updatedAt: new Date().toISOString()
         });
         if (pr.merged) {
+          const ciWaitFinishedAt = new Date().toISOString();
+          await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, result: "already merged" });
           const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
           timingMetadata = { prUrl: mergePr, result: "already merged", cleanupWarnings };
           await this.recordIssueState(issue, {
@@ -1880,6 +1918,8 @@ export class Orchestrator {
             timingMetadata = { prUrl: mergePr, reason: readiness.reason };
             await this.markMergeWaiting(issue, mergePr, readiness.reason, state.lastRunId);
           } else {
+            const ciWaitFinishedAt = new Date().toISOString();
+            await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "failed", ciWaitFinishedAt, { prUrl: mergePr, reason: readiness.reason });
             timingStatus = "failed";
             timingLabel = "merge shepherding failed";
             timingMetadata = { prUrl: mergePr, reason: readiness.reason };
@@ -1888,6 +1928,8 @@ export class Orchestrator {
           return;
         }
 
+        const ciWaitFinishedAt = new Date().toISOString();
+        await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, reason: "checks ready" });
         await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
         await github.mergePullRequest(mergePr, this.config.github, repoRoot);
         const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
@@ -2721,60 +2763,8 @@ function isRecoverablePartialWorkState(state: IssueState): boolean {
   );
 }
 
-function existingImplementationAuditContext(state: IssueState | null): string {
-  const lines = [
-    "",
-    "## Existing Implementation Audit Requirement",
-    "",
-    "Before editing, compare the issue acceptance criteria against existing source, docs, tests, validation evidence, local issue state, workspaces, and PR metadata.",
-    "Report whether the scope is already satisfied, partially satisfied, or missing. If it is partially satisfied, continue from the existing artifacts instead of duplicating modules, commands, states, docs, scripts, or workflow concepts.",
-    state?.outcome ? `Recorded prior outcome: ${state.outcome}` : null,
-    state?.phase ? `Recorded phase: ${state.phase}` : null,
-    state?.reviewStatus ? `Recorded review status: ${state.reviewStatus}` : null,
-    state?.workspacePath ? `Recorded workspace: ${state.workspacePath}` : null,
-    pullRequestUrls(state).length ? `Recorded PRs: ${pullRequestUrls(state).join(", ")}` : null
-  ].filter((line): line is string => line !== null);
-  return lines.join("\n");
-}
-
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
-}
-
-function isDispatchTerminalStop(error: string | undefined): boolean {
-  return Boolean(
-    error?.startsWith("issue_became_terminal:") ||
-      error?.startsWith("issue_no_longer_dispatchable:") ||
-      error === "issue_no_longer_exists" ||
-      error === "pull_request_already_merged" ||
-      error === "supervisor_continuation_active"
-  );
-}
-
-function categorizeRunError(message: string): RunErrorCategory {
-  const normalized = message.toLowerCase();
-  if (isHumanInputStop(normalized)) return "human-input";
-  if (normalized.includes("timeout")) return "timeout";
-  if (normalized.includes("stall")) return "stall";
-  if (normalized.includes("cancel")) return "canceled";
-  if (normalized.includes("workspace") || normalized.includes("worktree")) return "workspace";
-  if (normalized.includes("prompt") || normalized.includes("liquid")) return "prompt";
-  if (normalized.includes("app_server") || normalized.includes("app-server") || normalized.includes("initialize")) return "app-server-init";
-  if (normalized.includes("review")) return "review";
-  if (normalized.includes("fix")) return "fix";
-  if (normalized.includes("validation") || normalized.includes("test") || normalized.includes("check")) return "validation";
-  return "streaming-turn";
-}
-
-function isHumanInputStop(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("codex_approval_request_denied") ||
-    normalized.includes("codex_user_input_request_denied") ||
-    normalized.includes("codex_elicitation_request_denied") ||
-    normalized.includes("agent_pr_creation_failed") ||
-    normalized.includes("nested_orchestrator_forbidden")
-  );
 }
 
 async function readHandoff(workspacePath: string, identifier: string): Promise<string | null> {

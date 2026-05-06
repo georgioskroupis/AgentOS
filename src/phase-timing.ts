@@ -115,11 +115,11 @@ export function validationTimingFromEvidence(
   if (finalInterval) {
     return {
       ...finalInterval,
-      label: finalResult?.command ? `validation command: ${finalResult.command}` : "validation final result",
+      label: "validation final result",
       metadata: {
         ...baseMetadata,
         timingSource: "finalResult",
-        command: finalResult?.command,
+        finalResultHasCommand: Boolean(finalResult?.command),
         exitCode: finalResult?.exitCode
       }
     };
@@ -139,7 +139,7 @@ export function validationTimingFromEvidence(
       metadata: {
         ...baseMetadata,
         timingSource: "commands",
-        commandNames: [...new Set(commandIntervals.map((command) => command.name))]
+        timedCommandCount: commandIntervals.length
       }
     };
   }
@@ -173,6 +173,14 @@ function timingDurationMs(startedAt: string, finishedAt: string): number | undef
   const finished = Date.parse(finishedAt);
   if (!Number.isFinite(started) || !Number.isFinite(finished)) return undefined;
   return Math.max(0, finished - started);
+}
+
+export function timingStartNoLaterThan(startedAt: string | null | undefined, finishedAt: string): string {
+  if (!startedAt) return finishedAt;
+  const started = Date.parse(startedAt);
+  const finished = Date.parse(finishedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(finished) || started > finished) return finishedAt;
+  return startedAt;
 }
 
 function compactTimingEvent<T extends { label?: string; durationMs?: number; metadata?: Record<string, unknown> }>(event: T): T {

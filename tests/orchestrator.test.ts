@@ -246,6 +246,82 @@ describe("orchestrator", () => {
     expect(state?.lifecycleStatus).toBe("human_continuation");
   });
 
+  it("closes human decision waits on the prior run without duplicating timing on the new run", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-reentry-timing-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor", updated_at: "2026-01-02T00:00:00.000Z" };
+    const runStore = new RunArtifactStore(repo);
+    const priorRun = await runStore.startRun({ issue, attempt: null });
+    await runStore.startPhase(priorRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
+    await runStore.completeRun(priorRun.runId, { status: "succeeded" });
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      lastRunId: priorRun.runId,
+      reviewStatus: "human_required",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-1",
+            author: "Supervisor",
+            createdAt: "2026-01-02T00:01:00.000Z",
+            body: "AgentOS-Human-Decision: fix-findings"
+          }
+        ];
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented");
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const prior = await runStore.inspect(priorRun.runId);
+    expect(prior.summary.timing?.phases.find((phase) => phase.phase === "human-wait")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        finishedAt: "2026-01-02T00:01:00.000Z"
+      })
+    );
+    const summaries = await runStore.listRuns();
+    const newRun = summaries.find((summary) => summary.runId !== priorRun.runId);
+    const newHumanWaits = newRun?.timing?.phases.filter((phase) => phase.phase === "human-wait") ?? [];
+    expect(newHumanWaits).toHaveLength(1);
+    expect(newHumanWaits[0]).toEqual(expect.objectContaining({ status: "waiting", label: "human review wait started" }));
+  });
+
   it("keeps untrusted human-decision comments as context without lifecycle authority", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-untrusted-human-reentry-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -1914,11 +1990,21 @@ describe("orchestrator", () => {
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    const runStore = new RunArtifactStore(repo);
+    const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
+    await runStore.startPhase(completedRun.runId, {
+      phase: "ci-wait",
+      status: "waiting",
+      startedAt: "2026-01-02T00:00:00.000Z",
+      label: "ci wait started"
+    });
+    await runStore.completeRun(completedRun.runId, { status: "succeeded" });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
       JSON.stringify({
         issueId: "issue-1",
         issueIdentifier: "AG-1",
+        lastRunId: completedRun.runId,
         prUrl: "https://github.com/o/r/pull/1",
         prs: [
           { url: "https://github.com/o/r/pull/2", source: "handoff", role: "primary", discoveredAt: new Date().toISOString() },
@@ -1979,6 +2065,18 @@ describe("orchestrator", () => {
     expect(moves).toEqual(["AG-1 -> Done"]);
     expect(comments.join("\n")).toContain("Merged successfully");
     expect(comments.join("\n")).toContain("https://github.com/o/r/pull/2");
+    const inspected = await runStore.inspect(completedRun.runId);
+    expect(inspected.warnings).toEqual([]);
+    expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "ci-wait")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        label: "ci wait started",
+        finishedAt: expect.any(String),
+        metadata: expect.objectContaining({ prUrl: "https://github.com/o/r/pull/2", reason: "checks ready" })
+      })
+    );
+    const events = await runStore.replay(completedRun.runId);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "ci-wait")).toBe(true);
   });
 
   it("treats an already-merged selected PR as Done without running Codex", async () => {
@@ -2700,6 +2798,69 @@ describe("orchestrator", () => {
       expect.objectContaining({
         status: "completed",
         metadata: expect.objectContaining({ reviewStatus: "approved", reviewIteration: 1 })
+      })
+    );
+  });
+
+  it("marks automated review timing failed when review exits through an exception while pending", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-throws-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 1\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+          files: [{ path: "src/example.ts" }]
+        }
+      }),
+      "utf8"
+    );
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      }
+    };
+    let runs = 0;
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        runs += 1;
+        if (runs === 1) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, ["AgentOS-Outcome: implemented", "Primary PR: https://github.com/o/r/pull/1"].join("\n"));
+          return { status: "succeeded" };
+        }
+        throw new Error("review runner exploded");
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary.status).toBe("failed");
+    expect(summary.timing?.phases.find((phase) => phase.phase === "automated-review")).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        metadata: expect.objectContaining({ reviewStatus: "pending", reviewExit: "error" })
       })
     );
   });

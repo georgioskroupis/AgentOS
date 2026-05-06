@@ -280,6 +280,10 @@ export function latestHumanDecision(decisions: HumanDecisionState[] | undefined)
   return sorted[sorted.length - 1] ?? null;
 }
 
+export function hasHumanDecision(decisions: HumanDecisionState[], decision: HumanDecisionState): boolean {
+  return decisions.some((candidate) => humanDecisionKey(candidate) === humanDecisionKey(decision));
+}
+
 function normalizePullRequestRefs(existing: PullRequestRef[], legacyUrl?: string | null, updatedAt = new Date().toISOString()): PullRequestRef[] {
   const legacy = legacyUrl ? [{ url: legacyUrl, discoveredAt: updatedAt, source: "legacy" as const }] : [];
   return mergePullRequestRefs(existing, legacy);
