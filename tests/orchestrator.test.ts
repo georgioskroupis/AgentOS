@@ -36,6 +36,18 @@ const mergingIssue: Issue = {
 
 const fakeGh = resolve("tests/fixtures/fake-gh.mjs");
 
+class WarningWriteFailingLogger extends JsonlLogger {
+  warningAttempts = 0;
+
+  async write(entry: Parameters<JsonlLogger["write"]>[0]) {
+    if (entry.type === "phase_timing_persistence_warning") {
+      this.warningAttempts += 1;
+      throw new Error("warning log write failed");
+    }
+    return super.write(entry);
+  }
+}
+
 describe("orchestrator", () => {
   it("dispatches eligible issues to a runner", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-"));
@@ -2199,7 +2211,7 @@ describe("orchestrator", () => {
 
     const moves: string[] = [];
     const comments: string[] = [];
-    const logger = new JsonlLogger(repo);
+    const logger = new WarningWriteFailingLogger(repo);
     const tracker: IssueTracker = {
       async fetchCandidates(states) {
         return states.includes("Merging") ? [mergingIssue] : [];
@@ -2233,8 +2245,8 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).not.toContain("merge needs human review");
     const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
     expect(ghStateAfter.mergedWith).toEqual(expect.arrayContaining(["--squash"]));
+    expect(logger.warningAttempts).toBeGreaterThan(0);
     const logs = await logger.tail(50);
-    expect(logs.some((entry) => entry.type === "phase_timing_persistence_warning")).toBe(true);
     expect(logs.some((entry) => entry.type === "merge_failed")).toBe(false);
   });
 

@@ -254,13 +254,7 @@ export class Orchestrator {
       if (this.running.get(issue.id)?.runId !== runId) await this.runArtifacts.refreshArtifactHashes(runId);
       return true;
     } catch (error) {
-      await this.logger.write({
-        type: "phase_timing_persistence_warning",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: error instanceof Error ? error.message : String(error),
-        payload: { phase, runId }
-      });
+      await this.writePhaseTimingPersistenceWarning(issue, phase, runId, error);
       return false;
     }
   }
@@ -280,14 +274,20 @@ export class Orchestrator {
     const runId = input.runId === null ? null : await this.phaseTimingRunId(issue, input.runId);
     if (!runId) return;
     await persistPhaseTimingToRun(this.runArtifacts, runId, issue, resolvedInput, { activeRunId: this.running.get(issue.id)?.runId }).catch((error: Error) =>
-      this.logger.write({
+      this.writePhaseTimingPersistenceWarning(issue, input.phase, runId, error)
+    );
+  }
+
+  private async writePhaseTimingPersistenceWarning(issue: Issue, phase: RunTimingPhase, runId: string, error: unknown): Promise<void> {
+    await this.logger
+      .write({
         type: "phase_timing_persistence_warning",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
-        message: error.message,
-        payload: { phase: input.phase, runId }
+        message: error instanceof Error ? error.message : String(error),
+        payload: { phase, runId }
       })
-    );
+      .catch(() => undefined);
   }
 
   private async phaseTimingRunId(issue: Issue, explicitRunId?: string | null): Promise<string | null> {
