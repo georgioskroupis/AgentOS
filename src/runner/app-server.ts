@@ -432,13 +432,25 @@ function segmentExecutesNestedOrchestrator(segment: string): boolean {
     const nested = words.slice(1).filter((word) => !word.startsWith("-"));
     return segmentExecutesNestedOrchestrator(nested.join(" "));
   }
-  if ((first === "bash" || first === "sh" || first === "zsh") && words.includes("-c")) {
-    const script = words[words.indexOf("-c") + 1];
-    return script ? executesNestedOrchestrator(script) : false;
+  const shellScript = shellCommandArgument(first, words);
+  if (shellScript) {
+    return executesNestedOrchestrator(shellScript);
   }
   const offset = first === "node" && basename(words[1] ?? "") === "agent-os" ? 1 : 0;
   const executable = basename(words[offset]);
   return executable === "agent-os" && words[offset + 1] === "orchestrator" && (words[offset + 2] === "once" || words[offset + 2] === "run");
+}
+
+function shellCommandArgument(first: string, words: string[]): string | null {
+  if (first !== "bash" && first !== "sh" && first !== "zsh") return null;
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "--") break;
+    if (word === "-c" || (/^-[A-Za-z]+$/.test(word) && word.includes("c"))) {
+      return words[index + 1] ?? null;
+    }
+  }
+  return null;
 }
 
 function splitCommandSegments(command: string): string[] {

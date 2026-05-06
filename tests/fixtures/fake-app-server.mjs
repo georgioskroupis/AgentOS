@@ -95,6 +95,21 @@ rl.on("line", (line) => {
       });
       return;
     }
+    if (process.argv.includes("--nested-orchestrator-shell")) {
+      write({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            command: '/bin/zsh -lc "bin/agent-os orchestrator run --repo . --workflow WORKFLOW.md"',
+            status: "inProgress"
+          }
+        }
+      });
+      return;
+    }
     if (process.argv.includes("--safe-nested-text-search")) {
       write({
         method: "item/completed",
