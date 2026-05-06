@@ -55,10 +55,15 @@ describe("orchestrator", () => {
       }
     };
     let prompt = "";
+    const validationStartedAt = new Date(Date.now() - 5_000).toISOString();
+    const validationFinishedAt = new Date(Date.now() - 2_000).toISOString();
     const runner: AgentRunner = {
       async run(input): Promise<AgentRunResult> {
         prompt = input.prompt;
-        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied", {
+          validationStartedAt,
+          validationFinishedAt
+        });
         return { status: "succeeded" };
       }
     };
@@ -87,9 +92,22 @@ describe("orchestrator", () => {
         durationMs: expect.any(Number)
       })
     );
+    expect(summary.timing?.phases.find((phase) => phase.phase === "validation")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        startedAt: validationStartedAt,
+        finishedAt: validationFinishedAt,
+        durationMs: Date.parse(validationFinishedAt) - Date.parse(validationStartedAt),
+        metadata: expect.objectContaining({ timingSource: "finalResult" })
+      })
+    );
+    const humanWait = summary.timing?.phases.find((phase) => phase.phase === "human-wait");
+    expect(humanWait).toEqual(expect.objectContaining({ status: "waiting", label: "human review wait started" }));
+    expect(humanWait?.finishedAt).toBeUndefined();
     const events = await new RunArtifactStore(repo).replay(summary.runId);
     expect(events.some((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "implementation")).toBe(true);
     expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "validation")).toBe(true);
+    expect(events.some((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
     const logs = await logger.tail(10);
     expect(logs.some((entry) => entry.type === "run_succeeded")).toBe(true);
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
@@ -1149,7 +1167,14 @@ describe("orchestrator", () => {
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
 
-    expect((await new RunArtifactStore(repo).inspect(run.runId)).summary.status).toBe("stale");
+    const staleRun = await new RunArtifactStore(repo).inspect(run.runId);
+    expect(staleRun.summary.status).toBe("stale");
+    expect(staleRun.summary.timing?.phases.find((phase) => phase.phase === "retry-backoff")).toEqual(
+      expect.objectContaining({
+        status: "waiting",
+        metadata: expect.objectContaining({ runId: run.runId })
+      })
+    );
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Attempt 1 for AG-1");
     expect(comments.some((body) => body.includes("AgentOS retry scheduled"))).toBe(true);
@@ -1341,6 +1366,16 @@ describe("orchestrator", () => {
     expect(aborted).toBe(true);
     const logs = await logger.tail(50);
     expect(logs.some((entry) => entry.type === "run_stalled" && entry.message === "stall timeout exceeded")).toBe(true);
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary.timing?.phases.find((phase) => phase.phase === "stall-cancel")).toEqual(
+      expect.objectContaining({
+        status: "stalled",
+        label: "stall timeout exceeded",
+        metadata: expect.objectContaining({ stallTimeoutMs: 20 })
+      })
+    );
+    const events = await new RunArtifactStore(repo).replay(summary.runId);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "stall-cancel")).toBe(true);
   });
 
   it("stops denied MCP elicitation requests for human input without retrying", async () => {
@@ -1406,8 +1441,12 @@ describe("orchestrator", () => {
       status: "failed",
       error: "codex_elicitation_request_denied"
     });
+    const needsInputTiming = summary.timing?.phases.find((phase) => phase.phase === "needs-input");
+    expect(needsInputTiming).toEqual(expect.objectContaining({ status: "waiting", label: "needs-input pause started" }));
+    expect(needsInputTiming?.finishedAt).toBeUndefined();
     const events = await new RunArtifactStore(repo).replay(summary.runId);
     expect(events.some((event) => event.type === "run_needs_human_input" && event.message === "codex_elicitation_request_denied")).toBe(true);
+    expect(events.some((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "needs-input")).toBe(true);
     await expect(access(join(repo, ".agent-os", "workspaces", ".agent-os", "locks", "workspaces", "AG-1.lock"))).rejects.toThrow();
   });
 
@@ -1584,10 +1623,26 @@ describe("orchestrator", () => {
     const [summary] = await new RunArtifactStore(repo).listRuns();
     expect(summary).toMatchObject({ status: "failed" });
     expect(summary.error).toContain("validation_failed");
-    expect(summary.timing?.phases.find((phase) => phase.phase === "validation")).toEqual(expect.objectContaining({ status: "failed" }));
+    expect(summary.timing?.phases.find((phase) => phase.phase === "validation")).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1000,
+        metadata: expect.objectContaining({ timingSource: "commands" })
+      })
+    );
+    expect(summary.timing?.phases.find((phase) => phase.phase === "retry-backoff")).toEqual(
+      expect.objectContaining({
+        status: "waiting",
+        durationMs: expect.any(Number),
+        metadata: expect.objectContaining({ attempt: 1, runId: summary.runId })
+      })
+    );
     const events = await new RunArtifactStore(repo).replay(summary.runId);
     expect(events.some((event) => event.type === "validation_failed")).toBe(true);
     expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "validation" && (event.payload as { timing?: { status?: string } }).timing?.status === "failed")).toBe(true);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(true);
     expect(events.some((event) => event.type === "run_succeeded")).toBe(false);
     const logs = await logger.tail(20);
     expect(logs.some((event) => event.type === "phase_timing" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(true);
@@ -2435,11 +2490,15 @@ describe("orchestrator", () => {
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    const runStore = new RunArtifactStore(repo);
+    const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
+    await runStore.completeRun(completedRun.runId, { status: "succeeded" });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
       JSON.stringify({
         issueId: "issue-1",
         issueIdentifier: "AG-1",
+        lastRunId: completedRun.runId,
         prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: new Date().toISOString() }],
         reviewStatus: "approved",
         updatedAt: new Date().toISOString()
@@ -2496,6 +2555,25 @@ describe("orchestrator", () => {
     const logs = await logger.tail(20);
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "ci-wait")).toBe(true);
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "merge-shepherding" && (entry.payload as { timing?: { status?: string } }).timing?.status === "waiting")).toBe(true);
+    const inspected = await runStore.inspect(completedRun.runId);
+    expect(inspected.warnings).toEqual([]);
+    expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "ci-wait")).toEqual(
+      expect.objectContaining({
+        status: "waiting",
+        label: "ci wait started",
+        metadata: expect.objectContaining({ prUrl: "https://github.com/o/r/pull/1" })
+      })
+    );
+    expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "merge-shepherding")).toEqual(
+      expect.objectContaining({
+        status: "waiting",
+        label: "merge shepherding waiting on CI",
+        metadata: expect.objectContaining({ prUrl: "https://github.com/o/r/pull/1" })
+      })
+    );
+    const events = await runStore.replay(completedRun.runId);
+    expect(events.some((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "ci-wait")).toBe(true);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "merge-shepherding")).toBe(true);
   });
 
   it("runs automated reviewers before moving an implemented PR to Human Review", async () => {
@@ -3808,23 +3886,38 @@ describe("orchestrator", () => {
   });
 });
 
-async function writePassingHandoff(workspacePath: string, issueIdentifier: string, prompt: string, body: string): Promise<void> {
+async function writePassingHandoff(
+  workspacePath: string,
+  issueIdentifier: string,
+  prompt: string,
+  body: string,
+  options: { validationStartedAt?: string; validationFinishedAt?: string } = {}
+): Promise<void> {
   const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
   const validationPath = `.agent-os/validation/${issueIdentifier}.json`;
   await mkdir(join(workspacePath, ".agent-os", "validation"), { recursive: true });
   await writeFile(join(workspacePath, ".agent-os", `handoff-${issueIdentifier}.md`), `${body}\n\nValidation-JSON: ${validationPath}`, "utf8");
   const now = new Date().toISOString();
+  const validationStartedAt = options.validationStartedAt ?? now;
+  const validationFinishedAt = options.validationFinishedAt ?? now;
   await writeValidationEvidence(join(workspacePath, validationPath), {
     schemaVersion: 1,
     issueIdentifier,
     runId,
     status: "passed",
+    finalResult: {
+      status: "passed",
+      command: "npm run agent-check",
+      exitCode: 0,
+      startedAt: validationStartedAt,
+      finishedAt: validationFinishedAt
+    },
     commands: [
       {
         name: "npm run agent-check",
         exitCode: 0,
-        startedAt: now,
-        finishedAt: now
+        startedAt: validationStartedAt,
+        finishedAt: validationFinishedAt
       }
     ]
   });

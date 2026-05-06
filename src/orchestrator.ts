@@ -21,6 +21,7 @@ import {
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
+import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import {
@@ -192,7 +193,13 @@ export class Orchestrator {
     await this.runArtifacts.writeEvent(runId, payload);
   }
 
-  private async startRunPhase(runId: string, issue: Issue, phase: RunTimingPhase, label?: string, metadata?: Record<string, unknown>): Promise<RunPhaseTiming> {
+  private async startRunPhase(
+    runId: string,
+    issue: Issue,
+    phase: RunTimingPhase,
+    label?: string,
+    metadata?: Record<string, unknown>
+  ): Promise<RunPhaseTiming> {
     const timing = await this.runArtifacts.startPhase(runId, { phase, label, metadata });
     await this.writeRunEvent(runId, {
       type: "phase_started",
@@ -224,27 +231,10 @@ export class Orchestrator {
     });
   }
 
-  private async writePhaseTimingEvent(
-    issue: Issue,
-    input: {
-      phase: RunTimingPhase;
-      status: RunTimingStatus;
-      startedAt?: string;
-      finishedAt?: string;
-      label?: string;
-      metadata?: Record<string, unknown>;
-    }
-  ): Promise<void> {
+  private async writePhaseTimingEvent(issue: Issue, input: PhaseTimingEventInput): Promise<void> {
     const startedAt = input.startedAt ?? new Date().toISOString();
-    const timing = compactTimingEvent({
-      phase: input.phase,
-      status: input.status,
-      label: input.label,
-      startedAt,
-      finishedAt: input.finishedAt,
-      durationMs: input.finishedAt ? timingDurationMs(startedAt, input.finishedAt) : undefined,
-      metadata: input.metadata
-    });
+    const resolvedInput = { ...input, startedAt };
+    const timing = phaseTimingLogPayload(resolvedInput);
     await this.logger.write({
       type: "phase_timing",
       issueId: issue.id,
@@ -253,6 +243,25 @@ export class Orchestrator {
       timestamp: input.status === "waiting" ? startedAt : input.finishedAt ?? startedAt,
       payload: { timing }
     });
+    const runId = await this.phaseTimingRunId(issue, input.runId);
+    if (!runId) return;
+    await persistPhaseTimingToRun(this.runArtifacts, runId, issue, resolvedInput, { activeRunId: this.running.get(issue.id)?.runId }).catch((error: Error) =>
+      this.logger.write({
+        type: "phase_timing_persistence_warning",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: error.message,
+        payload: { phase: input.phase, runId }
+      })
+    );
+  }
+
+  private async phaseTimingRunId(issue: Issue, explicitRunId?: string | null): Promise<string | null> {
+    if (explicitRunId) return explicitRunId;
+    const runningRunId = this.running.get(issue.id)?.runId;
+    if (runningRunId) return runningRunId;
+    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier).catch(() => null);
+    return state?.activeRunId ?? state?.lastRunId ?? null;
   }
 
   private async refreshDaemonRuntimeState(): Promise<void> {
@@ -880,18 +889,29 @@ export class Orchestrator {
         const stateFromHandoff = handoff ? issueStateFromHandoff(issue, handoff) : null;
         let validation: Awaited<ReturnType<typeof verifyValidationEvidence>> | null = null;
         if (handoff) {
-          const validationTiming = await this.startRunPhase(runId, issue, "validation", "validation evidence", {
-            evidencePath: `.agent-os/validation/${issue.identifier}.json`
-          });
+          const validationVerificationStartedAt = new Date().toISOString();
           try {
             validation = await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId });
-            await this.finishRunPhase(runId, issue, validationTiming, validation.state.status === "passed" ? "completed" : "failed", {
-              status: validation.state.status,
-              path: validation.state.path,
-              finalStatus: validation.state.finalStatus
+            await this.writePhaseTimingEvent(issue, {
+              phase: "validation",
+              status: validation.state.status === "passed" ? "completed" : "failed",
+              runId,
+              ...validationTimingFromEvidence(validation, validationVerificationStartedAt, new Date().toISOString())
             });
           } catch (error) {
-            await this.finishRunPhase(runId, issue, validationTiming, "failed", { error: error instanceof Error ? error.message : String(error) });
+            await this.writePhaseTimingEvent(issue, {
+              phase: "validation",
+              status: "failed",
+              runId,
+              startedAt: validationVerificationStartedAt,
+              finishedAt: new Date().toISOString(),
+              label: "validation evidence verification",
+              metadata: {
+                timingSource: "evidence-verification",
+                evidencePath: `.agent-os/validation/${issue.identifier}.json`,
+                error: error instanceof Error ? error.message : String(error)
+              }
+            });
             throw error;
           }
         }
@@ -1858,7 +1878,7 @@ export class Orchestrator {
             timingStatus = "waiting";
             timingLabel = "merge shepherding waiting on CI";
             timingMetadata = { prUrl: mergePr, reason: readiness.reason };
-            await this.markMergeWaiting(issue, mergePr, readiness.reason);
+            await this.markMergeWaiting(issue, mergePr, readiness.reason, state.lastRunId);
           } else {
             timingStatus = "failed";
             timingLabel = "merge shepherding failed";
@@ -1901,6 +1921,7 @@ export class Orchestrator {
       await this.writePhaseTimingEvent(issue, {
         phase: "merge-shepherding",
         status: timingStatus,
+        runId: state?.lastRunId,
         startedAt: timingStartedAt,
         finishedAt: new Date().toISOString(),
         label: timingLabel,
@@ -2089,6 +2110,7 @@ export class Orchestrator {
     await this.writePhaseTimingEvent(issue, {
       phase: "retry-backoff",
       status: "waiting",
+      runId,
       startedAt: scheduledAt,
       finishedAt: new Date(retry.dueAtMs).toISOString(),
       label: "retry backoff scheduled",
@@ -2286,7 +2308,7 @@ export class Orchestrator {
     });
   }
 
-  private async markMergeWaiting(issue: Issue, prUrl: string, reason: string): Promise<void> {
+  private async markMergeWaiting(issue: Issue, prUrl: string, reason: string, runId?: string | null): Promise<void> {
     const marker = `${issue.updated_at ?? ""}:${reason}`;
     if (this.mergeWaitingMarkers.get(issue.id) === marker) return;
     this.mergeWaitingMarkers.set(issue.id, marker);
@@ -2312,6 +2334,7 @@ export class Orchestrator {
     await this.writePhaseTimingEvent(issue, {
       phase: "ci-wait",
       status: "waiting",
+      runId,
       startedAt: issue.updated_at ?? undefined,
       label: "ci wait started",
       metadata: { prUrl, reason }
@@ -2620,28 +2643,6 @@ function checkDiagnosticFingerprint(diagnostics: Awaited<ReturnType<GitHubClient
     .sort()
     .join("\n---\n");
   return createHash("sha256").update(stable).digest("hex").slice(0, 16);
-}
-
-function timingStatusForRunResult(result: AgentRunResult): Exclude<RunTimingStatus, "running"> {
-  if (result.status === "succeeded") return "completed";
-  if (result.status === "canceled") return "canceled";
-  if (result.status === "stale" || result.status === "stalled") return "stalled";
-  return "failed";
-}
-
-function timingDurationMs(startedAt: string, finishedAt: string): number | undefined {
-  const started = Date.parse(startedAt);
-  const finished = Date.parse(finishedAt);
-  if (!Number.isFinite(started) || !Number.isFinite(finished)) return undefined;
-  return Math.max(0, finished - started);
-}
-
-function compactTimingEvent<T extends { label?: string; durationMs?: number; metadata?: Record<string, unknown> }>(event: T): T {
-  const next = { ...event };
-  if (!next.label) delete next.label;
-  if (next.durationMs == null) delete next.durationMs;
-  if (!next.metadata || Object.keys(next.metadata).length === 0) delete next.metadata;
-  return next;
 }
 
 function singleLine(value: string): string {

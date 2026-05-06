@@ -236,6 +236,14 @@ export class RunArtifactStore {
       .map((line) => JSON.parse(line) as AgentEvent);
   }
 
+  async refreshArtifactHashes(runId: string): Promise<RunSummary> {
+    await this.summaryQueues.get(runId);
+    return this.updateSummary(runId, async (current) => ({
+      ...current,
+      artifactHashes: await this.hashArtifacts(runId)
+    }));
+  }
+
   async simulateRun(input: { issueIdentifier: string; status?: AgentRunResult["status"] }): Promise<RunSummary> {
     const issue: Issue = {
       id: `simulation-${input.issueIdentifier}`,
@@ -369,8 +377,8 @@ function finishPhaseTiming(
 
 function finalizeRunTiming(summary: RunSummary, result: AgentRunResult, finishedAt: string): RunTimingState | undefined {
   const terminalStatus = terminalTimingStatus(result.status);
-  const phases = (summary.timing?.phases ?? []).map((phase) => (phase.finishedAt ? phase : finishPhaseTiming(phase, finishedAt, terminalStatus)));
-  if (result.status === "stale" || result.status === "stalled" || result.status === "canceled") {
+  const phases = (summary.timing?.phases ?? []).map((phase) => (phase.finishedAt || phase.status === "waiting" ? phase : finishPhaseTiming(phase, finishedAt, terminalStatus)));
+  if ((result.status === "stale" || result.status === "stalled" || result.status === "canceled") && !phases.some((phase) => phase.phase === "stall-cancel" && phase.finishedAt)) {
     phases.push(
       compactPhaseTiming({
         id: `stall-cancel-${phases.length + 1}`,
