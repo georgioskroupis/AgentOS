@@ -69,6 +69,16 @@ Validates workflow front matter and prompt configuration. Use `--strict` for
 production-safe defaults such as pinned Codex commands and disabled human merge
 override.
 
+### `project list`, `project add`, and `project remove`
+
+Manage an `agent-os.yml` project registry for registry-wide orchestration.
+
+```bash
+bin/agent-os project list --registry agent-os.yml
+bin/agent-os project add my-project ../my-project --workflow WORKFLOW.md
+bin/agent-os project remove my-project
+```
+
 ### `check <repo>`
 
 Runs the target repository's `scripts/agent-check.sh` if present.
@@ -139,6 +149,22 @@ bin/agent-os inspect VER-28 --repo <repo>
 runtime, issue state, and recent run logs. It reports project-level config,
 capacity, transient tracker/network errors, daemon freshness, retry/review/CI
 wait states, and local validation timing splits when evidence records them.
+`status` and `inspect` also report recoverable partial work such as dirty
+workspaces, unpushed branch heads, stale PR heads, and CI evidence recorded for
+a different local head, including a next safe action for the operator.
+
+### `daemon status` and `daemon launch-command`
+
+Inspect durable daemon liveness and print the local dogfood launch command.
+`daemon status` distinguishes stopped daemons, stale PID files, empty-log failed
+launches, blocked credential preflight, and healthy idle loops. The launch
+command uses a detached `screen` session, writes `.agent-os/daemon.pid`, and
+appends logs to `.agent-os/daemon.log`.
+
+```bash
+bin/agent-os daemon status --repo .
+bin/agent-os daemon launch-command --repo . --workflow WORKFLOW.md
+```
 
 ### `runs list`, `runs inspect`, `runs simulate`, and `runs replay`
 

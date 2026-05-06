@@ -10,10 +10,18 @@ AgentOS combines two layers:
 Start with:
 
 - `docs/product/README.md`
+- `docs/architecture/README.md`
 - `docs/quality/APP_LEGIBILITY.md`
 - `docs/quality/PROOF_OF_WORK.md`
+- `docs/quality/QUALITY_SCORE.md`
 - `docs/architecture/AGENT_OS.md`
+- `docs/decisions/README.md`
+- `docs/planning/SOURCE_ALIGNMENT_AUDIT.md`
+- `docs/runbooks/README.md`
 - `docs/runbooks/LINEAR_SETUP.md`
 - `docs/runbooks/ROLLOUT.md`
+- `docs/runbooks/MIGRATIONS.md`
 - `docs/runbooks/DOGFOODING.md`
+- `docs/security/SECURITY.md`
+- `docs/security/ORCHESTRATOR_TRUST_MODEL.md`
 - `docs/releases/v0.1.0-rc1.md`

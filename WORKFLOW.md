@@ -255,7 +255,7 @@ dispatch.
 
 ## Issue Outcomes
 
-Issues are the unit of work. A run may produce zero, one, or many pull requests:
+Issues are the unit of work. PRs are optional outputs. A run may produce zero, one, or many pull requests:
 
 - `already-satisfied` no-op: no repo changes, validation evidence, handoff-only
   result, and no PR.

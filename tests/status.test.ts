@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { RegistryStateStore } from "../src/registry.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
-import { getRegistryStatus, inspectIssue } from "../src/status.js";
+import { getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
 
 describe("issue inspection", () => {
   it("shows accepted validation commands and failed historical attempts", async () => {
@@ -204,4 +205,94 @@ describe("issue inspection", () => {
     expect(output).toContain("AG-2: waiting on CI - 1 GitHub check(s) still pending");
     expect(output).toContain("AG-1: local full-suite validation timing failure recorded separately; focused test passed; GitHub CI passed at abc123");
   });
+
+  it("reports daemon liveness states and status next safe actions", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-daemon-health-"));
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+
+    const stopped = await getStatus(repo);
+    expect(stopped).toContain("Daemon: stopped - no daemon PID file is present");
+    expect(stopped).toContain("Next safe action: mkdir -p .agent-os");
+
+    await writeFile(join(repo, ".agent-os", "daemon.pid"), "999999\n", "utf8");
+    await writeFile(join(repo, ".agent-os", "daemon.log"), "", "utf8");
+    const failed = await inspectDaemonHealth(repo);
+    expect(failed.status).toBe("failed_launch");
+    expect(failed.nextSafeAction).toContain("remove");
+    expect(failed.nextSafeAction).toContain(".agent-os/daemon.pid");
+
+    await writeFile(join(repo, ".agent-os", "daemon.pid"), `${process.pid}\n`, "utf8");
+    await new RuntimeStateStore(repo).setDaemon({
+      startedAt: "2026-05-05T00:00:00.000Z",
+      workflowPath: join(repo, "WORKFLOW.md"),
+      preflightStatus: "ready",
+      preflightMessage: "loaded repo env",
+      repoEnvPath: join(repo, ".agent-os", "env"),
+      repoEnvStatus: "loaded"
+    });
+    const healthy = await inspectDaemonHealth(repo);
+    expect(healthy.status).toBe("healthy");
+    expect(healthy.message).toContain("credential preflight is ready");
+    expect(healthy.nextSafeAction).toContain("no operator action required");
+  });
+
+  it("shows recoverable partial work, stale PR heads, stale CI heads, and one next action", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-recovery-"));
+    const workspace = join(repo, ".agent-os", "workspaces", "AG-1");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await run("git", ["init", "-b", "main"], workspace);
+    await run("git", ["config", "user.email", "agentos@example.test"], workspace);
+    await run("git", ["config", "user.name", "AgentOS Test"], workspace);
+    await writeFile(join(workspace, "README.md"), "initial\n", "utf8");
+    await run("git", ["add", "README.md"], workspace);
+    await run("git", ["commit", "-m", "initial"], workspace);
+    await writeFile(join(workspace, "README.md"), "dirty local fix\n", "utf8");
+
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "needs-input",
+          reviewStatus: "human_required",
+          lastError: "codex_stall_timeout",
+          workspacePath: workspace,
+          headSha: "recorded-pr-head",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:00:00.000Z",
+            githubCi: { status: "failed", headSha: "ci-head", checkedAt: "2026-05-05T00:00:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-1");
+
+    expect(output).toContain("Workspace recovery: recoverable partial work");
+    expect(output).toContain("workspace has uncommitted changes");
+    expect(output).toContain("branch has no upstream");
+    expect(output).toContain("differs from recorded PR head recorded-pr-head");
+    expect(output).toContain("differs from recorded CI head ci-head");
+    expect(output).toContain(`Next safe action: resume ${workspace}`);
+  });
 });
+
+function run(command: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(command, args, { cwd }, (error, stdout, stderr) => {
+      if (error) {
+        reject(Object.assign(error, { stdout, stderr }));
+        return;
+      }
+      resolvePromise();
+    });
+  });
+}

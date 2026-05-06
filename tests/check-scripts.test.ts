@@ -1,0 +1,153 @@
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const architectureScript = resolve("scripts/check-architecture.mjs");
+const docsScript = resolve("scripts/check-docs.mjs");
+
+describe("architecture and docs checks", () => {
+  it("accepts a minimal architecture fixture", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-pass-"));
+    await writeArchitectureFixture(repo);
+
+    await expect(execNode(architectureScript, repo)).resolves.toMatchObject({ stdout: expect.stringContaining("Architecture check passed.") });
+  });
+
+  it("reports duplicate workflow concepts with remediation guidance", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-duplicate-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(join(repo, "src", "cli.ts"), 'const program = { command() { return this; } };\nprogram.command("status");\nprogram.command("status");\n', "utf8");
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("duplicate workflow concept"),
+      code: 1
+    });
+  });
+
+  it("reports hidden lifecycle policy and file-size violations", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-hidden-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(join(repo, "src", "random-policy.ts"), 'export const state = "Human Review";\n', "utf8");
+    await writeFile(join(repo, "src", "oversized.ts"), `${Array.from({ length: 652 }, (_, index) => `export const value${index} = ${index};`).join("\n")}\n`, "utf8");
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("hidden lifecycle policy"),
+      code: 1
+    });
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("above the 650-line budget"),
+      code: 1
+    });
+  });
+
+  it("accepts a minimal docs fixture", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-pass-"));
+    await writeDocsFixture(repo);
+
+    await expect(execNode(docsScript, repo)).resolves.toMatchObject({ stdout: expect.stringContaining("Docs check passed.") });
+  });
+
+  it("reports broken links and stale CLI command references", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-fail-"));
+    await writeDocsFixture(repo);
+    await writeFile(join(repo, "docs", "product", "README.md"), "Broken [link](../missing.md).\nRun `agent-os frobnicate`.\n", "utf8");
+
+    await expect(execNode(docsScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("broken link"),
+      code: 1
+    });
+    await expect(execNode(docsScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("unknown CLI command agent-os frobnicate"),
+      code: 1
+    });
+  });
+});
+
+async function writeArchitectureFixture(repo: string): Promise<void> {
+  for (const dir of ["src/runner", "templates/base-harness/.agents/skills/implement-feature", "skills/implement-feature"]) {
+    await mkdir(join(repo, dir), { recursive: true });
+  }
+  const workflow = [
+    "---",
+    "tracker:",
+    "  active_states:",
+    "    - Todo",
+    "    - In Progress",
+    "  terminal_states:",
+    "    - Done",
+    "    - Closed",
+    "    - Canceled",
+    "    - Duplicate",
+    "  review_state: Human Review",
+    "  merge_state: Merging",
+    "---",
+    "## Issue Outcomes",
+    "",
+    "Issues are the unit of work. PRs are optional outputs.",
+    "",
+    "## Agent Prompt",
+    "",
+    "Do work."
+  ].join("\n");
+  await writeFile(join(repo, "WORKFLOW.md"), workflow, "utf8");
+  await writeFile(join(repo, "templates/base-harness", "WORKFLOW.md"), workflow, "utf8");
+  await writeFile(join(repo, "README.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
+  await writeFile(join(repo, "skills/implement-feature/SKILL.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
+  await writeFile(join(repo, "templates/base-harness/.agents/skills/implement-feature/SKILL.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
+  await writeFile(join(repo, "src", "types.ts"), "export interface Thing { value: string }\n", "utf8");
+  await writeFile(join(repo, "src/runner", "app-server.ts"), "export const runner = true;\n", "utf8");
+  await writeFile(join(repo, "src", "fs-utils.ts"), "export const fsUtils = true;\n", "utf8");
+  await writeFile(join(repo, "src", "github.ts"), "export const github = true;\n", "utf8");
+  await writeFile(join(repo, "src", "linear.ts"), "export const linear = true;\n", "utf8");
+  await writeFile(join(repo, "src", "status.ts"), "export const status = true;\n", "utf8");
+  await writeFile(join(repo, "src", "cli.ts"), 'const program = { command() { return this; } };\nprogram.command("init");\nprogram.command("status");\n', "utf8");
+}
+
+async function writeDocsFixture(repo: string): Promise<void> {
+  await mkdir(join(repo, "src"), { recursive: true });
+  await writeFile(join(repo, "src", "cli.ts"), 'program.command("init");\nprogram.command("status");\n', "utf8");
+  const requiredDocs = [
+    "docs/architecture/README.md",
+    "docs/architecture/AGENT_OS.md",
+    "docs/decisions/README.md",
+    "docs/product/README.md",
+    "docs/quality/APP_LEGIBILITY.md",
+    "docs/quality/PROOF_OF_WORK.md",
+    "docs/quality/QUALITY_SCORE.md",
+    "docs/runbooks/README.md",
+    "docs/runbooks/LINEAR_SETUP.md",
+    "docs/runbooks/ROLLOUT.md",
+    "docs/runbooks/MIGRATIONS.md",
+    "docs/runbooks/DOGFOODING.md",
+    "docs/planning/SOURCE_ALIGNMENT_AUDIT.md",
+    "docs/security/SECURITY.md",
+    "docs/security/ORCHESTRATOR_TRUST_MODEL.md"
+  ];
+  await writeFile(join(repo, "README.md"), "Use `agent-os init` and `agent-os status`.\n", "utf8");
+  await writeFile(join(repo, "AGENTS.md"), "Agents.\n", "utf8");
+  await writeFile(join(repo, "ARCHITECTURE.md"), "Architecture.\n", "utf8");
+  await writeFile(join(repo, "WORKFLOW.md"), "Workflow.\n", "utf8");
+  await mkdir(join(repo, "docs"), { recursive: true });
+  await writeFile(join(repo, "docs", "README.md"), requiredDocs.map((path) => `- \`${path}\``).join("\n"), "utf8");
+  for (const path of requiredDocs) {
+    await mkdir(join(repo, path, ".."), { recursive: true });
+    const text = path.endsWith("SOURCE_ALIGNMENT_AUDIT.md")
+      ? "pre-dispatch reconciliation\nrecoverable partial work\ndaemon liveness\nExisting Implementation Audit\ncheck:architecture\ncheck:docs\n"
+      : `${path}\n`;
+    await writeFile(join(repo, path), text, "utf8");
+  }
+}
+
+function execNode(script: string, cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(process.execPath, [script], { cwd }, (error, stdout, stderr) => {
+      if (error) {
+        reject(Object.assign(error, { stdout, stderr, code: error.code }));
+        return;
+      }
+      resolvePromise({ stdout, stderr, code: 0 });
+    });
+  });
+}

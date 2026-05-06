@@ -46,6 +46,30 @@ GitHub merge command configuration, or Codex command configuration are missing.
 Use `bin/agent-os status --registry` or `bin/agent-os inspect <issue> --repo .`
 to see the recorded preflight and next safe action.
 
+For local continuous dogfood, use the durable launch helper instead of a bare
+`nohup` process:
+
+```bash
+bin/agent-os daemon launch-command --repo . --workflow WORKFLOW.md
+bin/agent-os daemon status --repo .
+```
+
+The command runs in a detached `screen` session, records `.agent-os/daemon.pid`,
+and appends `.agent-os/daemon.log`. If a launch leaves a stale PID or empty log,
+`daemon status`, `status`, and `inspect` should name the precise cleanup and
+restart action.
+
+Before returning a stalled or exhausted issue to an active state, inspect it:
+
+```bash
+bin/agent-os inspect <issue> --repo .
+```
+
+If the output reports recoverable partial work, resume the existing workspace,
+preserve the dirty or unpushed branch, rerun validation, and commit/push before
+updating the handoff or PR. Do not start a duplicate implementation until the
+existing workspace and PR state have been reconciled.
+
 ## Human Review Re-Entry
 
 Use trusted Linear comments when a supervisor needs to continue a Human Review
@@ -83,6 +107,13 @@ For each issue, record:
 - `.agent-os/env` is loaded when present, and missing, malformed, or placeholder
   credentials are reported as daemon preflight health rather than product
   failures.
+- `daemon status` distinguishes stopped, stale-PID, empty-log failed launch,
+  blocked-preflight, and healthy idle states.
+- `inspect` reports dirty workspaces, unpushed commits, stale PR heads, stale CI
+  heads, and one next safe action.
+- Implementation prompts include an Existing Implementation Audit requirement,
+  and agents report already-satisfied, partially-satisfied, or missing scope
+  before editing.
 - Strict trust mode does not block legitimate small work.
 - Lifecycle smoke checks run in default `lifecycle.mode: orchestrator-owned`
   mode unless a test explicitly says otherwise.

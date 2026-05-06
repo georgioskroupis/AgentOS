@@ -18,6 +18,8 @@ const inputRequestFixtureCommand = `node ${JSON.stringify(fixture)} --input-requ
 const elicitationRequestFixtureCommand = `node ${JSON.stringify(fixture)} --elicitation-request`;
 const prScriptFailureFixtureCommand = `node ${JSON.stringify(fixture)} --pr-script-failure`;
 const nestedOrchestratorFixtureCommand = `node ${JSON.stringify(fixture)} --nested-orchestrator`;
+const nestedOrchestratorShellFixtureCommand = `node ${JSON.stringify(fixture)} --nested-orchestrator-shell`;
+const safeNestedTextSearchFixtureCommand = `node ${JSON.stringify(fixture)} --safe-nested-text-search`;
 const exitBeforeCompletionFixtureCommand = `node ${JSON.stringify(fixture)} --exit-before-completion`;
 
 const issue: Issue = {
@@ -402,6 +404,65 @@ describe("CodexAppServerRunner", () => {
         })
       })
     );
+  });
+
+  it("stops shell-wrapped nested orchestrator commands inside agent turns", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-nested-orchestrator-shell-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, nestedOrchestratorShellFixtureCommand);
+    const events: Array<{ type: string; message?: string; payload?: unknown }> = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Do not start another scheduler through a shell",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push({ type: event.type, message: event.message, payload: event.payload });
+        }
+      })
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: "nested_orchestrator_forbidden",
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "codex_command_stop",
+        message: "nested_orchestrator_forbidden",
+        payload: expect.objectContaining({
+          command: expect.stringContaining("zsh -lc")
+        })
+      })
+    );
+  });
+
+  it("allows read-only searches whose pattern contains nested orchestrator text", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-nested-search-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, safeNestedTextSearchFixtureCommand);
+    const events: Array<{ type: string; message?: string; payload?: unknown }> = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Search safely",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push({ type: event.type, message: event.message, payload: event.payload });
+        }
+      })
+    ).resolves.toMatchObject({
+      status: "succeeded",
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+    expect(events.some((event) => event.type === "codex_command_stop")).toBe(false);
   });
 });
 
