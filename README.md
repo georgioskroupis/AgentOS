@@ -170,9 +170,11 @@ bin/agent-os daemon launch-command --repo . --workflow WORKFLOW.md
 
 `runs list` shows durable run summaries. `runs inspect <run-id>` prints run
 status, session/token metrics, and warns if recorded artifact hashes no longer
-match the persisted artifacts. `runs simulate` and `runs replay` are local-only:
-they read/write run artifacts without constructing Linear, GitHub, or Codex
-clients.
+match the persisted artifacts. Phase timing metrics are recorded in the run
+summary artifact at `.agent-os/runs/<run-id>/summary.json`; CLI timing reports
+and SLO warnings are intentionally separate reporting work. `runs simulate` and
+`runs replay` are local-only: they read/write run artifacts without
+constructing Linear, GitHub, or Codex clients.
 
 ```bash
 bin/agent-os runs list --repo <repo>

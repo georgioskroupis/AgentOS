@@ -7,6 +7,8 @@ import type { AgentEvent, AgentRunResult, Issue, Workspace } from "./types.js";
 
 export const RUN_SUMMARY_SCHEMA_VERSION = 1;
 
+// Measurement buckets for run timing. These are not orchestrator lifecycle
+// states; write sites map lifecycle/review/merge events into these buckets.
 export const RUN_TIMING_PHASES = [
   "implementation",
   "validation",

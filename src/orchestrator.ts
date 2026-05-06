@@ -243,18 +243,29 @@ export class Orchestrator {
     metadata?: Record<string, unknown>
   ): Promise<boolean> {
     if (!runId) return false;
-    const finished = await this.runArtifacts.finishPhase(runId, { phase }, { status, finishedAt, metadata });
-    if (!finished) return false;
-    await this.writeRunEvent(runId, {
-      type: "phase_finished",
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      message: finished.label ?? finished.phase,
-      timestamp: finished.finishedAt ?? finishedAt,
-      payload: { timing: finished }
-    });
-    if (this.running.get(issue.id)?.runId !== runId) await this.runArtifacts.refreshArtifactHashes(runId);
-    return true;
+    try {
+      const finished = await this.runArtifacts.finishPhase(runId, { phase }, { status, finishedAt, metadata });
+      if (!finished) return false;
+      await this.writeRunEvent(runId, {
+        type: "phase_finished",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: finished.label ?? finished.phase,
+        timestamp: finished.finishedAt ?? finishedAt,
+        payload: { timing: finished }
+      });
+      if (this.running.get(issue.id)?.runId !== runId) await this.runArtifacts.refreshArtifactHashes(runId);
+      return true;
+    } catch (error) {
+      await this.logger.write({
+        type: "phase_timing_persistence_warning",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: error instanceof Error ? error.message : String(error),
+        payload: { phase, runId }
+      });
+      return false;
+    }
   }
 
   private async writePhaseTimingEvent(issue: Issue, input: PhaseTimingEventInput): Promise<void> {

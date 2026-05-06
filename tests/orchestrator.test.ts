@@ -2079,6 +2079,84 @@ describe("orchestrator", () => {
     expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "ci-wait")).toBe(true);
   });
 
+  it("does not fail merge shepherding when prior run timing artifacts are missing", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-missing-run-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        lastRunId: "run_20260101000000_AG-1_missing",
+        prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: new Date().toISOString() }],
+        reviewStatus: "approved",
+        updatedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const logger = new JsonlLogger(repo);
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> Done"]);
+    expect(comments.join("\n")).toContain("Merged successfully");
+    expect(comments.join("\n")).not.toContain("merge needs human review");
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    expect(ghStateAfter.mergedWith).toEqual(expect.arrayContaining(["--squash"]));
+    const logs = await logger.tail(50);
+    expect(logs.some((entry) => entry.type === "phase_timing_persistence_warning")).toBe(true);
+    expect(logs.some((entry) => entry.type === "merge_failed")).toBe(false);
+  });
+
   it("treats an already-merged selected PR as Done without running Codex", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-already-"));
     await initGitRemote(repo);
