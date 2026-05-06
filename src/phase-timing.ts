@@ -53,21 +53,25 @@ export async function persistPhaseTimingToRun(
   }
 
   const startStatus: Extract<RunTimingStatus, "running" | "waiting"> = input.status === "waiting" ? "waiting" : "running";
-  const started = await store.startPhase(runId, {
+  const startInput = {
     phase: input.phase,
     label: input.label,
     startedAt: input.startedAt,
     status: startStatus,
     metadata: input.metadata
-  });
-  await store.writeEvent(runId, {
-    type: "phase_started",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    message: started.label ?? started.phase,
-    timestamp: started.startedAt,
-    payload: { timing: started }
-  });
+  };
+  const { phase: started, created } =
+    input.status === "waiting" && !input.finishedAt ? await store.startOrUpdateOpenPhase(runId, startInput) : { phase: await store.startPhase(runId, startInput), created: true };
+  if (created) {
+    await store.writeEvent(runId, {
+      type: "phase_started",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: started.label ?? started.phase,
+      timestamp: started.startedAt,
+      payload: { timing: started }
+    });
+  }
 
   if (input.finishedAt) {
     const finished = await store.finishPhase(runId, { id: started.id }, { status: finishedStatus, finishedAt: input.finishedAt, metadata: input.metadata });

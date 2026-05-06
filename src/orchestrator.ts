@@ -244,16 +244,13 @@ export class Orchestrator {
   ): Promise<boolean> {
     if (!runId) return false;
     try {
-      const finished = await this.runArtifacts.finishPhase(runId, { phase }, { status, finishedAt, metadata });
-      if (!finished) return false;
-      await this.writeRunEvent(runId, {
-        type: "phase_finished",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: finished.label ?? finished.phase,
-        timestamp: finished.finishedAt ?? finishedAt,
-        payload: { timing: finished }
-      });
+      const finished = await this.runArtifacts.finishOpenPhases(runId, { phase }, { status, finishedAt, metadata });
+      if (finished.length === 0) return false;
+      for (const timing of finished) {
+        await this.writeRunEvent(runId, {
+          type: "phase_finished", issueId: issue.id, issueIdentifier: issue.identifier, message: timing.label ?? timing.phase, timestamp: timing.finishedAt ?? finishedAt, payload: { timing }
+        });
+      }
       if (this.running.get(issue.id)?.runId !== runId) await this.runArtifacts.refreshArtifactHashes(runId);
       return true;
     } catch (error) {
@@ -1195,7 +1192,7 @@ export class Orchestrator {
     });
     if (latestDecision) {
       await this.writePhaseTimingEvent(issue, {
-        phase: "human-wait",
+        phase: currentState?.phase === "needs-input" || currentState?.lifecycleStatus === "implementation_failure" ? "needs-input" : "human-wait",
         status: "completed",
         runId: previousLastRunId,
         startedAt: timingStartNoLaterThan(currentState?.updatedAt, latestDecision.decidedAt),

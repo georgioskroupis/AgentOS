@@ -1,8 +1,60 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { validationTimingFromEvidence } from "../src/phase-timing.js";
+import { persistPhaseTimingToRun, validationTimingFromEvidence } from "../src/phase-timing.js";
+import { RunArtifactStore } from "../src/runs.js";
+import type { Issue } from "../src/types.js";
 import type { ValidationEvidenceCheck } from "../src/validation.js";
 
+const issue: Issue = {
+  id: "issue-1",
+  identifier: "AG-1",
+  title: "Timing issue",
+  description: null,
+  priority: 1,
+  state: "Merging",
+  branch_name: null,
+  url: null,
+  labels: [],
+  blocked_by: [],
+  created_at: null,
+  updated_at: null
+};
+
 describe("phase timing", () => {
+  it("reuses an existing open waiting phase for a run and phase", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-phase-wait-"));
+    const store = new RunArtifactStore(repo);
+    const run = await store.startRun({ issue, attempt: null });
+
+    await persistPhaseTimingToRun(store, run.runId, issue, {
+      phase: "ci-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "ci wait started",
+      metadata: { prUrl: "https://github.com/o/r/pull/1", reason: "checks pending" }
+    });
+    await persistPhaseTimingToRun(store, run.runId, issue, {
+      phase: "ci-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:05:00.000Z",
+      label: "ci wait started",
+      metadata: { prUrl: "https://github.com/o/r/pull/1", reason: "checks still pending" }
+    });
+
+    const inspected = await store.inspect(run.runId);
+    expect(inspected.summary.timing?.phases.filter((phase) => phase.phase === "ci-wait")).toEqual([
+      expect.objectContaining({
+        status: "waiting",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        metadata: expect.objectContaining({ reason: "checks still pending" })
+      })
+    ]);
+    const startedEvents = (await store.replay(run.runId)).filter((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "ci-wait");
+    expect(startedEvents).toHaveLength(1);
+  });
+
   it("does not persist raw final validation command strings", () => {
     const timing = validationTimingFromEvidence(
       validationCheck({

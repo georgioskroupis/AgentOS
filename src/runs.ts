@@ -36,6 +36,11 @@ export interface RunPhaseTiming {
   metadata?: Record<string, unknown>;
 }
 
+export interface RunPhaseStartResult {
+  phase: RunPhaseTiming;
+  created: boolean;
+}
+
 export interface RunTimingState {
   updatedAt: string;
   phases: RunPhaseTiming[];
@@ -145,6 +150,51 @@ export class RunArtifactStore {
     return entry;
   }
 
+  async startOrUpdateOpenPhase(
+    runId: string,
+    input: {
+      phase: RunTimingPhase;
+      label?: string;
+      startedAt?: string;
+      status?: Extract<RunTimingStatus, "running" | "waiting">;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<RunPhaseStartResult> {
+    let phase!: RunPhaseTiming;
+    let created = false;
+    const startedAt = input.startedAt ?? new Date().toISOString();
+    await this.updateSummary(runId, (current) => {
+      const phases = current.timing?.phases ?? [];
+      const index = findOpenPhaseIndex(phases, { phase: input.phase });
+      if (index !== -1) {
+        const next = [...phases];
+        phase = compactPhaseTiming({
+          ...next[index],
+          label: input.label ?? next[index].label,
+          status: input.status ?? next[index].status,
+          metadata: {
+            ...(next[index].metadata ?? {}),
+            ...(input.metadata ?? {})
+          }
+        });
+        next[index] = phase;
+        return withTiming(current, next, startedAt);
+      }
+
+      created = true;
+      phase = compactPhaseTiming({
+        id: `${input.phase}-${phases.length + 1}`,
+        phase: input.phase,
+        label: input.label,
+        status: input.status ?? "running",
+        startedAt,
+        metadata: input.metadata
+      });
+      return withTiming(current, [...phases, phase], startedAt);
+    });
+    return { phase, created };
+  }
+
   async finishPhase(
     runId: string,
     match: { id?: string; phase?: RunTimingPhase },
@@ -166,6 +216,30 @@ export class RunArtifactStore {
       return withTiming(current, next, finishedAt);
     });
     return entry;
+  }
+
+  async finishOpenPhases(
+    runId: string,
+    match: { id?: string; phase?: RunTimingPhase },
+    input: {
+      finishedAt?: string;
+      status?: Exclude<RunTimingStatus, "running">;
+      metadata?: Record<string, unknown>;
+    } = {}
+  ): Promise<RunPhaseTiming[]> {
+    let entries: RunPhaseTiming[] = [];
+    const finishedAt = input.finishedAt ?? new Date().toISOString();
+    await this.updateSummary(runId, (current) => {
+      const phases = current.timing?.phases ?? [];
+      const next = phases.map((phase) => {
+        if (!isOpenPhaseMatch(phase, match)) return phase;
+        const finished = finishPhaseTiming(phase, finishedAt, input.status ?? "completed", input.metadata);
+        entries = [...entries, finished];
+        return finished;
+      });
+      return entries.length === 0 ? current : withTiming(current, next, finishedAt);
+    });
+    return entries;
   }
 
   async completeRun(runId: string, result: AgentRunResult): Promise<RunSummary> {
@@ -351,12 +425,16 @@ function withTiming(summary: RunSummary, phases: RunPhaseTiming[], updatedAt: st
 function findOpenPhaseIndex(phases: RunPhaseTiming[], match: { id?: string; phase?: RunTimingPhase }): number {
   for (let index = phases.length - 1; index >= 0; index -= 1) {
     const phase = phases[index];
-    if (phase.finishedAt) continue;
-    if (match.id && phase.id !== match.id) continue;
-    if (match.phase && phase.phase !== match.phase) continue;
-    return index;
+    if (isOpenPhaseMatch(phase, match)) return index;
   }
   return -1;
+}
+
+function isOpenPhaseMatch(phase: RunPhaseTiming, match: { id?: string; phase?: RunTimingPhase }): boolean {
+  if (phase.finishedAt) return false;
+  if (match.id && phase.id !== match.id) return false;
+  if (match.phase && phase.phase !== match.phase) return false;
+  return true;
 }
 
 function finishPhaseTiming(
