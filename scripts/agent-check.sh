@@ -73,6 +73,7 @@ required=(
   "src/project-profiler.ts"
   "src/review.ts"
   "src/setup-wizard.ts"
+  "scripts/check-architecture.mjs"
   "scripts/check-harness-contract.mjs"
 )
 

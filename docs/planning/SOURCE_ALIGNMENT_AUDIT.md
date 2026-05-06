@@ -71,9 +71,18 @@ AgentOS aligns well with the Harness Engineering article on these points:
   findings, and can run fixer turns.
 - Mechanical enforcement exists. `npm run agent-check` runs contract, docs,
   security, architecture, lint, format, tests, typecheck, and build checks.
+- Mechanical invariants now include `check:architecture` and `check:docs`
+  coverage for layer boundaries, duplicate workflow concepts, duplicate state
+  names, PR-centric wording regression, hidden lifecycle policy, file-size
+  budgets, docs index coverage, cross-links, CLI command references, and this
+  source-alignment audit staying current.
 - Agent legibility has improved. Durable run summaries, events, artifact hashes,
   validation evidence, session/token/rate-limit metrics, `inspect`, and
   `runs inspect` are available.
+- Existing Implementation Audit is now explicit prompt/runtime context for
+  every implementation turn. Agents must compare acceptance criteria against
+  existing source, docs, tests, issue state, workspaces, and PR metadata before
+  editing and continue from partial artifacts instead of duplicating work.
 
 The remaining Harness gaps are real:
 
@@ -101,6 +110,10 @@ AgentOS aligns with Symphony on the core scheduler shape:
 - Work runs in deterministic per-issue workspaces.
 - Bounded concurrency, blocker checks, retry/backoff settings, terminal cleanup,
   run artifacts, and observability are implemented.
+- A pre-dispatch reconciliation guard refuses fresh implementation when current
+  local, Linear, or GitHub truth shows already-completed work, approved work
+  waiting on merge readiness, an already-merged selected PR, or recoverable
+  partial work in an existing workspace.
 - Approval and user-input events are explicit and no longer stall runs
   indefinitely.
 - Trust and sandbox posture are documented through `trust_mode` and strict
@@ -276,6 +289,10 @@ Missing or thin:
 - CI log artifact ingestion into run artifacts.
 - Runtime failure summaries that explain why a run stopped in one machine-
   readable object.
+- Runtime health now reports daemon liveness, stale PID files, empty-log failed
+  launches, stopped daemons, credential preflight, and a persistent local launch
+  command. `status`/`inspect` report recoverable partial work, stale PR or CI
+  heads, unpushed commits, and a next safe action.
 - Recurring doc-gardening and quality-score refresh loops.
 - Template-level checklist for what every project should expose so agents can
   inspect app behavior without human narration.

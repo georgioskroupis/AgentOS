@@ -21,6 +21,7 @@ import {
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
+import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import {
   blockingFindings,
@@ -525,7 +526,85 @@ export class Orchestrator {
       });
       return null;
     }
+    if (await this.dispatchGuardrail(latest, state)) {
+      return null;
+    }
     return latest;
+  }
+
+  private async dispatchGuardrail(issue: Issue, state: IssueState | null): Promise<boolean> {
+    if (!state) return false;
+    const decision = state.lastHumanDecision ?? latestHumanDecision(state.humanDecisions);
+    if (decision?.type === "fix_findings") return false;
+
+    const mergeTarget = mergeTargetPullRequest(state);
+    if (state.reviewStatus === "approved" && mergeTarget?.url) {
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      const github = new GitHubClient(this.config.github.command);
+      const pr = await github.getPullRequest(mergeTarget.url, resolve(this.options.repoRoot)).catch(async (error: Error) => {
+        await this.logger.write({
+          type: "dispatch_skipped",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: `approved PR exists but GitHub status could not be read: ${error.message}`
+        });
+        return null;
+      });
+      if (pr?.merged) {
+        await this.classifyAlreadyMergedIssue(issue, state, "dispatch skipped because approved PR is already merged");
+        return true;
+      }
+      const readiness = pr ? evaluateMergeReadiness(pr, this.config.github.requireChecks) : null;
+      const message = readiness?.ready
+        ? "approved PR is merge-ready; moved issue to Merging instead of redispatching implementation"
+        : `approved PR awaits merge readiness${readiness ? `: ${readiness.reason}` : ""}`;
+      await this.recordIssueState(issue, {
+        phase: readiness?.ready ? "merge" : state.phase,
+        mergeTargetUrl: mergeTarget.url,
+        mergeTargetRole: mergeTarget.role ?? "primary",
+        stopReason: message,
+        nextRetryAt: undefined,
+        retryAttempt: undefined
+      });
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message,
+        payload: { prUrl: mergeTarget.url, readiness }
+      });
+      if (readiness?.ready) await this.moveIssue(issue, this.config.tracker.mergeState);
+      return true;
+    }
+
+    const recovery = await inspectWorkspaceRecovery(resolve(this.options.repoRoot), state).catch(() => null);
+    if (recovery?.recoverable && isRecoverablePartialWorkState(state)) {
+      const message = `recoverable partial work found: ${recovery.reasons.join("; ")}`;
+      await this.recordIssueState(issue, {
+        phase: "human-required",
+        reviewStatus: "human_required",
+        lifecycleStatus: "implementation_failure",
+        lastError: message,
+        errorCategory: "workspace",
+        stopReason: message,
+        nextRetryAt: undefined,
+        retryAttempt: undefined
+      });
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      await this.markLinearRecoveryNeeded(issue, recovery);
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message,
+        payload: recovery
+      });
+      return true;
+    }
+
+    return false;
   }
 
   private async preTurnCheck(issue: Issue): Promise<string | null> {
@@ -881,6 +960,7 @@ export class Orchestrator {
       "Include this run ID and the current `git rev-parse HEAD` value in the validation evidence JSON."
     ].join("\n");
     const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
+    const existingAudit = existingImplementationAuditContext(state);
     const linearReentry = await this.linearReentryContext(issue, state);
     const continuation = turnNumber > 1
       ? [
@@ -892,12 +972,13 @@ export class Orchestrator {
         ].join("\n")
       : "";
     const existingPr = primaryPullRequestUrl(state);
-    if (!existingPr || issue.state.toLowerCase() !== "todo") return `${base}${runContext}${linearReentry}${continuation}`;
+    if (!existingPr || issue.state.toLowerCase() !== "todo") return `${base}${runContext}${existingAudit}${linearReentry}${continuation}`;
 
     const feedback = await this.githubFeedbackSummary(existingPr).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
     return [
       base,
       runContext,
+      existingAudit,
       linearReentry,
       continuation,
       "",
@@ -1762,10 +1843,13 @@ export class Orchestrator {
     const nextAttempt = previousAttempt == null ? 1 : previousAttempt + 1;
     if (nextAttempt > this.config.agent.maxRetryAttempts) {
       await this.recordIssueState(issue, {
+        phase: "needs-input",
         lastError: error,
         errorCategory: categorizeRunError(error),
         lifecycleStatus: "implementation_failure",
         stopReason: error,
+        workspacePath: workspace.path,
+        workspaceKey: workspace.workspaceKey,
         nextRetryAt: undefined
       });
       await this.markLinearFailed(issue, workspace, previousAttempt, error);
@@ -1896,6 +1980,10 @@ export class Orchestrator {
   }
 
   private async markLinearFailed(issue: Issue, workspace: Workspace, attempt: number | null, error: string): Promise<void> {
+    const recovery = await inspectWorkspaceRecovery(resolve(this.options.repoRoot), {
+      issueIdentifier: issue.identifier,
+      workspacePath: workspace.path
+    }).catch(() => null);
     await this.commentIssue(
       issue,
       [
@@ -1906,10 +1994,29 @@ export class Orchestrator {
         `- Last attempt: ${displayAttempt(attempt)}`,
         `- Workspace: \`${workspace.path}\``,
         `- Error: ${error}`,
+        recovery ? "" : null,
+        recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null,
         "",
         "Please adjust the issue, repo, or workflow instructions before returning it to an active state."
-      ].join("\n"),
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n"),
       "run_failed"
+    );
+    await this.moveIssue(issue, this.config.tracker.needsInputState);
+  }
+
+  private async markLinearRecoveryNeeded(issue: Issue, recovery: WorkspaceRecoveryDiagnostics): Promise<void> {
+    await this.commentIssue(
+      issue,
+      [
+        "### AgentOS recovery needed",
+        "",
+        "AgentOS found recoverable partial work and refused to start a fresh implementation turn.",
+        "",
+        formatRecoveryDiagnostics(recovery).join("\n")
+      ].join("\n"),
+      "recovery_needed"
     );
     await this.moveIssue(issue, this.config.tracker.needsInputState);
   }
@@ -2324,6 +2431,34 @@ function workspaceFromRuntime(active: RuntimeActiveRun, summary: RunSummary | un
     workspaceKey,
     createdNow: false
   };
+}
+
+function isRecoverablePartialWorkState(state: IssueState): boolean {
+  return (
+    state.phase === "needs-input" ||
+    state.phase === "human-required" ||
+    state.lifecycleStatus === "implementation_failure" ||
+    state.reviewStatus === "human_required" ||
+    Boolean(state.nextRetryAt) ||
+    Boolean(state.lastError?.toLowerCase().includes("stall")) ||
+    Boolean(state.lastError?.toLowerCase().includes("missing_handoff"))
+  );
+}
+
+function existingImplementationAuditContext(state: IssueState | null): string {
+  const lines = [
+    "",
+    "## Existing Implementation Audit Requirement",
+    "",
+    "Before editing, compare the issue acceptance criteria against existing source, docs, tests, validation evidence, local issue state, workspaces, and PR metadata.",
+    "Report whether the scope is already satisfied, partially satisfied, or missing. If it is partially satisfied, continue from the existing artifacts instead of duplicating modules, commands, states, docs, scripts, or workflow concepts.",
+    state?.outcome ? `Recorded prior outcome: ${state.outcome}` : null,
+    state?.phase ? `Recorded phase: ${state.phase}` : null,
+    state?.reviewStatus ? `Recorded review status: ${state.reviewStatus}` : null,
+    state?.workspacePath ? `Recorded workspace: ${state.workspacePath}` : null,
+    pullRequestUrls(state).length ? `Recorded PRs: ${pullRequestUrls(state).join(", ")}` : null
+  ].filter((line): line is string => line !== null);
+  return lines.join("\n");
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {

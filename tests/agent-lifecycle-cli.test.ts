@@ -1,4 +1,5 @@
 import { chmod, copyFile, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
@@ -8,6 +9,35 @@ const cliScript = resolve("src/cli.ts");
 const sourceScripts = resolve("scripts");
 
 describe("agent lifecycle CLI", () => {
+  it("loads repo-local env for operator-facing Linear helpers", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-linear-env-cli-"));
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    await writeFile(join(repo, ".agent-os", "env"), "LINEAR_API_KEY=lin_from_file\n", "utf8");
+
+    let authorization: string | undefined;
+    const server = createServer((request, response) => {
+      authorization = request.headers.authorization;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: { teams: { nodes: [{ id: "team-1", key: "VER", name: "VerityStudio" }] } } }));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const port = (server.address() as { port: number }).port;
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      ["---", "tracker:", "  kind: linear", `  endpoint: http://127.0.0.1:${port}/graphql`, "  api_key: $LINEAR_API_KEY", "  project_slug: AgentOS", "---", "Do work"].join("\n"),
+      "utf8"
+    );
+
+    try {
+      const result = await execOk(process.execPath, ["--import", "tsx", cliScript, "linear", "teams", "--workflow", join(repo, "WORKFLOW.md")], { LINEAR_API_KEY: "" });
+
+      expect(result.stdout).toContain("VER\tteam-1\tVerityStudio");
+      expect(authorization).toBe("lin_from_file");
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
   it("passes stable lifecycle action and tool arguments from repo-local wrappers", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-wrapper-"));
     const fakeBin = join(repo, "fake-bin");

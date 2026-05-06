@@ -1,26 +1,36 @@
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
+import { daemonLaunchCommand, inspectDaemonHealth } from "./daemon-health.js";
 import { IssueStateStore, latestHumanDecision, normalizeIssueState, pullRequestUrls } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
 import { loadRegistry, RegistryStateStore, resolveRegistryProjectPaths, type RegistryProjectSummary } from "./registry.js";
+import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { RuntimeStateStore } from "./runtime-state.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
 
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
-  const logger = new JsonlLogger(resolve(repo));
+  const root = resolve(repo);
+  const logger = new JsonlLogger(root);
   const entries = await logger.tail(limit);
-  if (entries.length === 0) {
-    return "No AgentOS run events recorded.";
-  }
-  return entries
-    .map((entry) => {
-      const issue = entry.issueIdentifier ? ` ${entry.issueIdentifier}` : "";
-      const message = entry.message ? ` - ${entry.message}` : "";
-      return `${entry.timestamp} ${entry.type}${issue}${message}`;
-    })
-    .join("\n");
+  const daemon = await inspectDaemonHealth(root);
+  const lines = [
+    `Daemon: ${daemon.status} - ${daemon.message}`,
+    `Next safe action: ${daemon.nextSafeAction}`,
+    "",
+    "Recent events:",
+    entries.length
+      ? entries
+          .map((entry) => {
+            const issue = entry.issueIdentifier ? ` ${entry.issueIdentifier}` : "";
+            const message = entry.message ? ` - ${entry.message}` : "";
+            return `${entry.timestamp} ${entry.type}${issue}${message}`;
+          })
+          .join("\n")
+      : "No AgentOS run events recorded."
+  ];
+  return lines.join("\n");
 }
 
 export async function getRegistryStatus(registryPath = "agent-os.yml", limit = 20): Promise<string> {
@@ -63,7 +73,8 @@ export async function getRegistryStatus(registryPath = "agent-os.yml", limit = 2
       if (runtime.daemon.repoEnvStatus) lines.push(`  Repo env: ${runtime.daemon.repoEnvStatus}${runtime.daemon.repoEnvPath ? ` (${runtime.daemon.repoEnvPath})` : ""}`);
     }
 
-    const issueLines = issues.map((issue) => `  - ${issue.issueIdentifier}: ${issueStatusLine(issue, runtime, logs)}`);
+    const recoveries = await Promise.all(issues.map((issue) => inspectWorkspaceRecovery(paths.repoRoot, issue).catch(() => null)));
+    const issueLines = issues.map((issue, index) => `  - ${issue.issueIdentifier}: ${issueStatusLine(issue, runtime, logs, recoveries[index] ?? null)}`);
     lines.push(issueLines.length ? "  Issues:" : "  Issues: none recorded");
     lines.push(...issueLines);
   }
@@ -79,6 +90,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     .filter((entry) => entry.issueIdentifier?.toLowerCase() === identifier.toLowerCase())
     .slice(-limit);
   const state = (await exists(statePath)) ? normalizeIssueState(JSON.parse(await readText(statePath))) : null;
+  const recovery = await inspectWorkspaceRecovery(root, state).catch(() => null);
   const prs = state?.prs ?? [];
   const reviewRoot = join(root, ".agent-os", "reviews", safeFileName(identifier));
   const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot) : [];
@@ -91,7 +103,8 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
     humanDecisionDetails(state),
     appProofDetails(state),
-    state ? `Next safe action: ${nextSafeAction(state)}` : null,
+    recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null,
+    state ? `Next safe action: ${nextSafeAction(state, recovery)}` : null,
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
     state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
     validationDetails(state?.validation),
@@ -187,17 +200,18 @@ function fallbackProjectSummary(name: string, repoRoot: string, workflowPath: st
   };
 }
 
-function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeStateStore["read"]>>, logs: Awaited<ReturnType<JsonlLogger["tail"]>>): string {
+function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeStateStore["read"]>>, logs: Awaited<ReturnType<JsonlLogger["tail"]>>, recovery: WorkspaceRecoveryDiagnostics | null): string {
   const runtimeActive = runtime.activeRuns.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
   if (runtimeActive) return `running (${runtimeActive.phase ?? issue.phase ?? "active"})`;
   const retry = runtime.retryQueue.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
   if (retry) return `retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`;
+  if (recovery?.recoverable) return `recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`;
   const mergeWaiting = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_waiting");
   if (mergeWaiting) return `waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`;
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
   if (mergeFailed && issue.phase !== "completed") return `tracker/local disagreement or merge review needed - ${mergeFailed.message ?? "merge failed"}`;
   if (issue.lifecycleStatus === "human_continuation" || issue.lifecycleStatus === "supervisor_continuation" || issue.lifecycleStatus === "externally_fixed") {
-    return `${issue.lifecycleStatus} - ${nextSafeAction(issue)}`;
+    return `${issue.lifecycleStatus} - ${nextSafeAction(issue, recovery)}`;
   }
   if (issue.reviewStatus === "pending" || issue.phase === "review") return `waiting on review (${issue.reviewStatus ?? "pending"})`;
   if (issue.reviewStatus === "human_required" || issue.phase === "human-required") return `waiting on Human Review${issue.lastError ? ` - ${issue.lastError}` : ""}`;
@@ -212,7 +226,8 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   return `${issue.phase ?? "recorded"}${issue.lastError ? ` - ${issue.lastError}` : ""}`;
 }
 
-function nextSafeAction(issue: IssueState): string {
+function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null = null): string {
+  if (recovery?.recoverable) return recovery.nextSafeAction;
   const decision = issue.lastHumanDecision ?? latestHumanDecision(issue.humanDecisions);
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
@@ -234,6 +249,8 @@ function nextSafeAction(issue: IssueState): string {
   if (issue.phase === "completed" && pullRequestUrls(issue).length === 0) return "review the no-PR handoff and move to Merging only if the outcome is accepted";
   return "inspect the latest handoff, validation evidence, PR state, and Linear comments";
 }
+
+export { daemonLaunchCommand, inspectDaemonHealth };
 
 function validationStatusPhrase(validation: ValidationState): string | null {
   const failedFullSuite = validation.failedHistoricalAttempts?.find((command) => command.name === "npm run agent-check");

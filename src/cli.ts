@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { Command, InvalidArgumentError } from "commander";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
+import { resolveRepoEnv } from "./env.js";
 import { acquireProjectRunnerLock, addProject, loadRegistry, releaseProjectRunnerLock, removeProject } from "./registry.js";
 import { readText } from "./fs-utils.js";
 import {
@@ -12,7 +13,7 @@ import {
   recordHandoffWithAgentLifecycleTool
 } from "./agent-lifecycle.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
-import { getRegistryStatus, getStatus, inspectIssue } from "./status.js";
+import { daemonLaunchCommand, getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
 import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -253,6 +254,27 @@ program
     console.log(await inspectIssue(options.repo, issue, Number.parseInt(options.limit, 10)));
   });
 
+const daemon = program.command("daemon").description("Inspect local AgentOS daemon liveness and launch guidance");
+
+daemon
+  .command("status")
+  .option("--repo <path>", "repository path", process.cwd())
+  .action(async (options) => {
+    const health = await inspectDaemonHealth(options.repo);
+    console.log(`Daemon: ${health.status} - ${health.message}`);
+    console.log(`PID file: ${health.pidPath}`);
+    console.log(`Log file: ${health.logPath}`);
+    console.log(`Next safe action: ${health.nextSafeAction}`);
+  });
+
+daemon
+  .command("launch-command")
+  .option("--repo <path>", "repository path", process.cwd())
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .action((options) => {
+    console.log(daemonLaunchCommand(options.repo, options.workflow));
+  });
+
 const runs = program.command("runs").description("Inspect AgentOS run artifacts");
 
 runs
@@ -311,8 +333,7 @@ linear
   .requiredOption("--team <team>", "Linear team id or key")
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .action(async (options) => {
-    const workflow = await loadWorkflow(options.workflow);
-    const config = resolveServiceConfig(workflow);
+    const { workflow, config } = await workflowConfigFromRepoEnv(options.workflow);
     const client = new LinearClient(config.tracker);
     const teams = await client.listTeams();
     const team = teams.find((candidate) => candidate.id === options.team || candidate.key === options.team);
@@ -536,9 +557,19 @@ async function withProjectRunnerLock<T>(repoRoot: string, owner: string, action:
 }
 
 async function linearClientFromWorkflow(workflowPath: string): Promise<LinearClient> {
-  const workflow = await loadWorkflow(workflowPath);
-  const config = resolveServiceConfig(workflow);
+  const { config } = await workflowConfigFromRepoEnv(workflowPath);
   return new LinearClient(config.tracker);
+}
+
+async function workflowConfigFromRepoEnv(workflowPath: string): Promise<{
+  workflow: Awaited<ReturnType<typeof loadWorkflow>>;
+  config: ReturnType<typeof resolveServiceConfig>;
+}> {
+  const resolvedWorkflowPath = resolve(workflowPath);
+  const repoRoot = dirname(resolvedWorkflowPath);
+  const resolvedEnv = await resolveRepoEnv(repoRoot, process.env);
+  const workflow = await loadWorkflow(resolvedWorkflowPath);
+  return { workflow, config: resolveServiceConfig(workflow, resolvedEnv.env) };
 }
 
 async function agentLifecycleContextFromOptions(options: { repo: string; workflow: string }): Promise<{
@@ -548,8 +579,9 @@ async function agentLifecycleContextFromOptions(options: { repo: string; workflo
 }> {
   const repoRoot = resolve(options.repo);
   const workflowPath = await resolveRepoLocalWorkflowPath(repoRoot, options.workflow);
+  const resolvedEnv = await resolveRepoEnv(repoRoot, process.env);
   const workflow = await loadWorkflow(workflowPath);
-  const config = resolveServiceConfig(workflow);
+  const config = resolveServiceConfig(workflow, resolvedEnv.env);
   return { repoRoot, config, tracker: new LinearClient(config.tracker) };
 }
 
