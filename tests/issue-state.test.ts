@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   extractOutcome,
+  extractHumanDecision,
+  extractHumanDecisionsFromComments,
   extractPullRequestUrls,
+  isTrustedHumanDecisionActor,
   issueStateFromHandoff,
   IssueStateStore,
   mergeTargetAmbiguityReason,
@@ -69,6 +72,75 @@ describe("issue state handoff parsing", () => {
       reviewStatus: "pending",
       reviewIteration: 0
     });
+  });
+
+  it("extracts app proof artifacts and structured human decisions", () => {
+    const state = issueStateFromHandoff(
+      issue,
+      [
+        "AgentOS-Outcome: implemented",
+        "App-Proof: .agent-os/proof/latest-proof.md",
+        "Proof-Artifact: https://ci.example/runs/1",
+        "AgentOS-Human-Decision: accept-risk",
+        "PR-Head-SHA: abc123",
+        "CI-State: passed",
+        "Findings: accepted",
+        "Decision-Summary: reviewer accepted the remaining low-risk finding"
+      ].join("\n")
+    );
+
+    expect(state?.appProof?.artifacts.map((artifact) => artifact.value)).toEqual([
+      ".agent-os/proof/latest-proof.md",
+      "https://ci.example/runs/1"
+    ]);
+    expect(state?.lastHumanDecision).toMatchObject({
+      type: "accept_risk",
+      prHeadSha: "abc123",
+      ciState: "passed",
+      findings: "accepted"
+    });
+  });
+
+  it("normalizes human decision aliases from Linear comments", () => {
+    const decision = extractHumanDecision("AgentOS-Human-Decision: supervisor-fixed\nValidation-JSON: .agent-os/validation/AG-1.json", {
+      source: "linear-comment",
+      actor: "Supervisor",
+      commentId: "comment-1",
+      createdAt: "2026-05-05T00:00:00.000Z"
+    });
+
+    expect(decision).toMatchObject({
+      type: "proceed_to_merge_after_supervisor_fix",
+      source: "linear-comment",
+      actor: "Supervisor",
+      commentId: "comment-1",
+      validationEvidence: ".agent-os/validation/AG-1.json"
+    });
+  });
+
+  it("keeps Linear human decisions authoritative only for trusted actors", () => {
+    const comments = [
+      {
+        id: "comment-1",
+        author: "Random User",
+        createdAt: "2026-05-05T00:00:00.000Z",
+        body: "AgentOS-Human-Decision: approve-as-is"
+      },
+      {
+        id: "comment-2",
+        author: "Supervisor",
+        createdAt: "2026-05-05T00:01:00.000Z",
+        body: "AgentOS-Human-Decision: fix-findings"
+      }
+    ];
+
+    expect(isTrustedHumanDecisionActor("supervisor", { trustedActors: ["Supervisor"] })).toBe(true);
+    expect(extractHumanDecisionsFromComments(comments, { trustedActors: ["Supervisor"] }).map((decision) => decision.type)).toEqual([
+      "fix_findings"
+    ]);
+    expect(extractHumanDecisionsFromComments(comments, { issueAssignee: "Random User" }).map((decision) => decision.type)).toEqual([
+      "approve_as_is"
+    ]);
   });
 
   it("treats implemented handoff-only outcomes as valid no-PR issue state", () => {

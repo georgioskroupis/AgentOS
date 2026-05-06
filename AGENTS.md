@@ -28,6 +28,13 @@ For code-changing tasks:
 8. When a PR is needed, use `scripts/agent-create-pr.sh` or explicit
    non-interactive `gh pr create` arguments instead of GitHub app/MCP PR tools.
 
+## Application Legibility Checklist
+
+AgentOS harness templates ask every target project to define the applicable
+start command, health check, smoke test, log capture, metrics access, trace
+access, CI log access, UI screenshot/video proof, and browser/DOM inspection in
+`docs/quality/APP_LEGIBILITY.md`.
+
 ## Hard Rules
 
 - Keep templates portable across common repo types.

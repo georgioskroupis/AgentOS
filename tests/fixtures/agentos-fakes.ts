@@ -24,6 +24,17 @@ export function fakeIssue(overrides: Partial<Issue> = {}): Issue {
 export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): ServiceConfig {
   return {
     trustMode: "ci-locked",
+    automation: { profile: "conservative", repairPolicy: "conservative" },
+    lifecycle: {
+      mode: "orchestrator-owned",
+      allowedTrackerTools: [],
+      idempotencyMarkerFormat: null,
+      allowedStateTransitions: [],
+      duplicateCommentBehavior: null,
+      fallbackBehavior: null,
+      maturityAcknowledgement: null,
+      trustedDecisionActors: []
+    },
     tracker: {
       kind: "linear",
       endpoint: "https://linear.test/graphql",

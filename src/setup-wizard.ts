@@ -4,6 +4,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { join, relative, resolve } from "node:path";
 import YAML from "yaml";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
+import { resolveRepoEnv } from "./env.js";
 import { exists, ensureDir, packageRoot, readText, writeTextEnsuringDir } from "./fs-utils.js";
 import { applyHarness, doctorHarness, runHarnessCheck } from "./harness.js";
 import { LinearClient, type LinearProject, type LinearState, type LinearTeam } from "./linear.js";
@@ -67,10 +68,10 @@ const requiredLinearStates = [
 ];
 
 export async function runSetupWizard(options: SetupWizardOptions): Promise<SetupReport> {
-  const env = options.env ?? process.env;
   const repoRoot = resolve(options.projectPath);
   const interactive = options.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
   if (!options.dryRun) await ensureDir(repoRoot);
+  const env = (await resolveRepoEnv(repoRoot, options.env ?? process.env)).env;
 
   const mode = await detectProjectMode(repoRoot, options.mode ?? "auto");
   const greenfield = mode === "greenfield" ? await collectGreenfieldContext(repoRoot, options, interactive) : undefined;

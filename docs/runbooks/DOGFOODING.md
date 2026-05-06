@@ -28,6 +28,46 @@ bin/agent-os inspect <issue> --repo .
 bin/agent-os runs inspect <run-id> --repo .
 ```
 
+## Daemon Environment Preflight
+
+For controlled restarts, persist required daemon environment in
+`.agent-os/env` inside the target repo:
+
+```bash
+LINEAR_API_KEY=lin_...
+AGENT_OS_SOURCE_REPO=/path/to/agent-os
+```
+
+`agent-os orchestrator once`, `agent-os orchestrator run`, registry
+orchestration, and setup load this file before workflow environment resolution.
+Startup health reports whether the file is missing, malformed, stale, or
+loaded, and the daemon refuses to dispatch when required Linear credentials,
+GitHub merge command configuration, or Codex command configuration are missing.
+Use `bin/agent-os status --registry` or `bin/agent-os inspect <issue> --repo .`
+to see the recorded preflight and next safe action.
+
+## Human Review Re-Entry
+
+Use trusted Linear comments when a supervisor needs to continue a Human Review
+issue. Authoritative comments must come from the issue assignee or a configured
+`lifecycle.trusted_decision_actors` entry; other comments remain prompt context
+only.
+
+Supported decision values:
+
+- `AgentOS-Human-Decision: fix-findings` to redispatch an active issue with the
+  latest comments and PR feedback.
+- `AgentOS-Human-Decision: approve-as-is` to keep Codex paused while accepting
+  the current handoff.
+- `AgentOS-Human-Decision: accept-risk` to accept named remaining findings.
+- `AgentOS-Human-Decision: split-follow-up` when remaining work is tracked in a
+  linked follow-up issue.
+- `AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix` after an
+  external fix, fresh validation, and green CI.
+
+Include `PR-Head-SHA`, `Validation-JSON`, `CI-State`, `Findings`, and a short
+`Decision-Summary` whenever the decision can affect merge or redispatch safety.
+
 ## Checklist
 
 For each issue, record:
@@ -40,6 +80,9 @@ For each issue, record:
   warnings.
 - Artifact hashes stay valid; `runs inspect` reports no unexpected mismatch.
 - Workspace locks do not block normal reuse or cleanup.
+- `.agent-os/env` is loaded when present, and missing, malformed, or placeholder
+  credentials are reported as daemon preflight health rather than product
+  failures.
 - Strict trust mode does not block legitimate small work.
 - Lifecycle smoke checks run in default `lifecycle.mode: orchestrator-owned`
   mode unless a test explicitly says otherwise.

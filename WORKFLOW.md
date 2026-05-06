@@ -154,6 +154,39 @@ Lifecycle `--file` arguments must be relative paths inside the repository, and
 must point at GitHub pull requests in the current repository before it is stored
 or posted.
 
+## Human Decision Re-Entry
+
+When a Human Review issue is returned to `Todo` or `In Progress`, recent Linear
+comments are included in the next prompt as re-entry context. A structured
+decision is authoritative only when the comment author matches the issue
+assignee or an entry in `lifecycle.trusted_decision_actors`; other comments stay
+visible as non-authoritative context and do not change lifecycle state.
+
+Structured decision format:
+
+```text
+AgentOS-Human-Decision: fix-findings
+PR-Head-SHA: <sha>
+Validation-JSON: .agent-os/validation/<issue>.json
+CI-State: passed|failed|pending
+Findings: resolved|accepted|open
+Decision-Summary: <short rationale>
+```
+
+Allowed `AgentOS-Human-Decision` values and effects:
+
+- `fix-findings`: records `human_continuation`; AgentOS may redispatch from an
+  active state with recent Linear comments, PR feedback, and review context.
+- `approve-as-is`: records `supervisor_continuation`; Codex stays paused until
+  accepted risk and fresh validation/CI allow a move to `Merging`.
+- `accept-risk`: records `supervisor_continuation`; remaining findings are
+  treated as accepted only with explicit validation/CI evidence.
+- `split-follow-up`: records `supervisor_continuation`; link the follow-up
+  issue in the comment or handoff before merge progression.
+- `proceed-to-merge-after-supervisor-fix`: records `externally_fixed`; stale
+  active runs and retries are suppressed, and merge shepherding should proceed
+  only after fresh validation and green CI.
+
 ## Automation And Repair Policy
 
 Automation behavior is a separate axis from trust and lifecycle ownership:
@@ -339,12 +372,16 @@ Responsibilities:
 4. If partially satisfied, preserve the existing implementation and change only
    the missing delta.
 5. Run `npm run agent-check`.
-6. Open or update a GitHub PR only when the issue produced repo changes and the
+6. Capture application proof when runtime behavior is in scope. Use
+   `scripts/agent-start-app.sh`, `scripts/agent-smoke-test.sh`,
+   `scripts/agent-capture-logs.sh`, and `scripts/agent-capture-proof.sh` when
+   the project has configured the matching app-legibility commands.
+7. Open or update a GitHub PR only when the issue produced repo changes and the
    workflow expects a PR, using `scripts/agent-create-pr.sh` or an explicit
    non-interactive `gh pr create` command. Do not use GitHub app/MCP PR creation
    tools.
-7. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, final authoritative `status`, and command entries for every `npm run agent-check` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
-8. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`.
-9. Follow `lifecycle.mode`: in the current `orchestrator-owned` mode, do not
+8. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, final authoritative `status`, and command entries for every `npm run agent-check` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
+9. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, app proof, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`. Use `App-Proof:` or `Proof-Artifact:` lines for proof files or URLs that should be visible in `agent-os inspect`.
+10. Follow `lifecycle.mode`: in the current `orchestrator-owned` mode, do not
    move or comment on the Linear issue directly; the AgentOS orchestrator owns
    Linear lifecycle updates.
