@@ -7,6 +7,38 @@ import type { AgentEvent, AgentRunResult, Issue, Workspace } from "./types.js";
 
 export const RUN_SUMMARY_SCHEMA_VERSION = 1;
 
+export const RUN_TIMING_PHASES = [
+  "implementation",
+  "validation",
+  "automated-review",
+  "fixer-turn",
+  "ci-wait",
+  "merge-shepherding",
+  "retry-backoff",
+  "stall-cancel",
+  "human-wait",
+  "needs-input"
+] as const;
+
+export type RunTimingPhase = (typeof RUN_TIMING_PHASES)[number];
+export type RunTimingStatus = "running" | "completed" | "failed" | "canceled" | "stalled" | "waiting";
+
+export interface RunPhaseTiming {
+  id: string;
+  phase: RunTimingPhase;
+  label?: string;
+  status: RunTimingStatus;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RunTimingState {
+  updatedAt: string;
+  phases: RunPhaseTiming[];
+}
+
 export interface RunSummary {
   schemaVersion: 1;
   runId: string;
@@ -32,6 +64,7 @@ export interface RunSummary {
     };
     rateLimits: Array<Record<string, unknown>>;
   };
+  timing?: RunTimingState;
   artifactHashes: Record<string, string>;
 }
 
@@ -83,11 +116,62 @@ export class RunArtifactStore {
     await this.touchEvent(runId, event.timestamp);
   }
 
+  async startPhase(
+    runId: string,
+    input: {
+      phase: RunTimingPhase;
+      label?: string;
+      startedAt?: string;
+      status?: Extract<RunTimingStatus, "running" | "waiting">;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<RunPhaseTiming> {
+    let entry!: RunPhaseTiming;
+    const startedAt = input.startedAt ?? new Date().toISOString();
+    await this.updateSummary(runId, (current) => {
+      const phases = current.timing?.phases ?? [];
+      entry = compactPhaseTiming({
+        id: `${input.phase}-${phases.length + 1}`,
+        phase: input.phase,
+        label: input.label,
+        status: input.status ?? "running",
+        startedAt,
+        metadata: input.metadata
+      });
+      return withTiming(current, [...phases, entry], startedAt);
+    });
+    return entry;
+  }
+
+  async finishPhase(
+    runId: string,
+    match: { id?: string; phase?: RunTimingPhase },
+    input: {
+      finishedAt?: string;
+      status?: Exclude<RunTimingStatus, "running">;
+      metadata?: Record<string, unknown>;
+    } = {}
+  ): Promise<RunPhaseTiming | null> {
+    let entry: RunPhaseTiming | null = null;
+    const finishedAt = input.finishedAt ?? new Date().toISOString();
+    await this.updateSummary(runId, (current) => {
+      const phases = current.timing?.phases ?? [];
+      const index = findOpenPhaseIndex(phases, match);
+      if (index === -1) return current;
+      const next = [...phases];
+      entry = finishPhaseTiming(next[index], finishedAt, input.status ?? "completed", input.metadata);
+      next[index] = entry;
+      return withTiming(current, next, finishedAt);
+    });
+    return entry;
+  }
+
   async completeRun(runId: string, result: AgentRunResult): Promise<RunSummary> {
+    const finishedAt = new Date().toISOString();
     return this.updateSummary(runId, async (current) => ({
       ...current,
       status: result.status,
-      finishedAt: new Date().toISOString(),
+      finishedAt,
       stopReason: result.error ?? (result.status === "succeeded" ? undefined : result.status),
       error: result.error,
       metrics: {
@@ -102,6 +186,7 @@ export class RunArtifactStore {
         },
         rateLimits: result.rateLimits ?? current.metrics.rateLimits
       },
+      timing: finalizeRunTiming(current, result, finishedAt),
       artifactHashes: await this.hashArtifacts(runId)
     }));
   }
@@ -241,6 +326,90 @@ export class RunArtifactStore {
   private pathFor(runId: string, name: string): string {
     return join(this.runDir(runId), name);
   }
+}
+
+function withTiming(summary: RunSummary, phases: RunPhaseTiming[], updatedAt: string): RunSummary {
+  return {
+    ...summary,
+    timing: {
+      updatedAt,
+      phases
+    }
+  };
+}
+
+function findOpenPhaseIndex(phases: RunPhaseTiming[], match: { id?: string; phase?: RunTimingPhase }): number {
+  for (let index = phases.length - 1; index >= 0; index -= 1) {
+    const phase = phases[index];
+    if (phase.finishedAt) continue;
+    if (match.id && phase.id !== match.id) continue;
+    if (match.phase && phase.phase !== match.phase) continue;
+    return index;
+  }
+  return -1;
+}
+
+function finishPhaseTiming(
+  phase: RunPhaseTiming,
+  finishedAt: string,
+  status: Exclude<RunTimingStatus, "running">,
+  metadata?: Record<string, unknown>
+): RunPhaseTiming {
+  return compactPhaseTiming({
+    ...phase,
+    status,
+    finishedAt,
+    durationMs: durationMs(phase.startedAt, finishedAt),
+    metadata: {
+      ...(phase.metadata ?? {}),
+      ...(metadata ?? {})
+    }
+  });
+}
+
+function finalizeRunTiming(summary: RunSummary, result: AgentRunResult, finishedAt: string): RunTimingState | undefined {
+  const terminalStatus = terminalTimingStatus(result.status);
+  const phases = (summary.timing?.phases ?? []).map((phase) => (phase.finishedAt ? phase : finishPhaseTiming(phase, finishedAt, terminalStatus)));
+  if (result.status === "stale" || result.status === "stalled" || result.status === "canceled") {
+    phases.push(
+      compactPhaseTiming({
+        id: `stall-cancel-${phases.length + 1}`,
+        phase: "stall-cancel",
+        status: result.status === "canceled" ? "canceled" : "stalled",
+        startedAt: summary.lastEventAt ?? summary.startedAt,
+        finishedAt,
+        durationMs: durationMs(summary.lastEventAt ?? summary.startedAt, finishedAt),
+        metadata: result.error ? { reason: result.error } : undefined
+      })
+    );
+  }
+  if (phases.length === 0) return summary.timing;
+  return {
+    updatedAt: finishedAt,
+    phases
+  };
+}
+
+function terminalTimingStatus(status: AgentRunResult["status"]): Exclude<RunTimingStatus, "running"> {
+  if (status === "succeeded") return "completed";
+  if (status === "canceled") return "canceled";
+  if (status === "stale" || status === "stalled") return "stalled";
+  return "failed";
+}
+
+function durationMs(startedAt: string, finishedAt: string): number | undefined {
+  const started = Date.parse(startedAt);
+  const finished = Date.parse(finishedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return undefined;
+  return Math.max(0, finished - started);
+}
+
+function compactPhaseTiming<T extends RunPhaseTiming>(entry: T): T {
+  const next = { ...entry };
+  if (!next.label) delete next.label;
+  if (next.durationMs == null) delete next.durationMs;
+  if (!next.metadata || Object.keys(next.metadata).length === 0) delete next.metadata;
+  return next;
 }
 
 export function formatRunInspect(result: { summary: RunSummary; warnings: string[] }): string {

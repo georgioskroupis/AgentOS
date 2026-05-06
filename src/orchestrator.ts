@@ -36,7 +36,7 @@ import {
   writeReviewArtifact
 } from "./review.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
-import { RunArtifactStore, type RunSummary } from "./runs.js";
+import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary, type RuntimeRetryEntry } from "./runtime-state.js";
 import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
@@ -190,6 +190,69 @@ export class Orchestrator {
   private async writeRunEvent(runId: string, entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }): Promise<void> {
     const payload = await this.logger.write({ ...entry, runId });
     await this.runArtifacts.writeEvent(runId, payload);
+  }
+
+  private async startRunPhase(runId: string, issue: Issue, phase: RunTimingPhase, label?: string, metadata?: Record<string, unknown>): Promise<RunPhaseTiming> {
+    const timing = await this.runArtifacts.startPhase(runId, { phase, label, metadata });
+    await this.writeRunEvent(runId, {
+      type: "phase_started",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: label ?? phase,
+      timestamp: timing.startedAt,
+      payload: { timing }
+    });
+    return timing;
+  }
+
+  private async finishRunPhase(
+    runId: string,
+    issue: Issue,
+    timing: RunPhaseTiming,
+    status: Exclude<RunTimingStatus, "running"> = "completed",
+    metadata?: Record<string, unknown>
+  ): Promise<void> {
+    const finished = await this.runArtifacts.finishPhase(runId, { id: timing.id }, { status, metadata });
+    if (!finished) return;
+    await this.writeRunEvent(runId, {
+      type: "phase_finished",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: finished.label ?? finished.phase,
+      timestamp: finished.finishedAt,
+      payload: { timing: finished }
+    });
+  }
+
+  private async writePhaseTimingEvent(
+    issue: Issue,
+    input: {
+      phase: RunTimingPhase;
+      status: RunTimingStatus;
+      startedAt?: string;
+      finishedAt?: string;
+      label?: string;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<void> {
+    const startedAt = input.startedAt ?? new Date().toISOString();
+    const timing = compactTimingEvent({
+      phase: input.phase,
+      status: input.status,
+      label: input.label,
+      startedAt,
+      finishedAt: input.finishedAt,
+      durationMs: input.finishedAt ? timingDurationMs(startedAt, input.finishedAt) : undefined,
+      metadata: input.metadata
+    });
+    await this.logger.write({
+      type: "phase_timing",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: input.label ?? input.phase,
+      timestamp: input.status === "waiting" ? startedAt : input.finishedAt ?? startedAt,
+      payload: { timing }
+    });
   }
 
   private async refreshDaemonRuntimeState(): Promise<void> {
@@ -815,7 +878,23 @@ export class Orchestrator {
           await assertPullRequestUrlsMatchRepo(resolve(this.options.repoRoot), extractPullRequestUrls(handoff));
         }
         const stateFromHandoff = handoff ? issueStateFromHandoff(issue, handoff) : null;
-        const validation = handoff ? await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId }) : null;
+        let validation: Awaited<ReturnType<typeof verifyValidationEvidence>> | null = null;
+        if (handoff) {
+          const validationTiming = await this.startRunPhase(runId, issue, "validation", "validation evidence", {
+            evidencePath: `.agent-os/validation/${issue.identifier}.json`
+          });
+          try {
+            validation = await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId });
+            await this.finishRunPhase(runId, issue, validationTiming, validation.state.status === "passed" ? "completed" : "failed", {
+              status: validation.state.status,
+              path: validation.state.path,
+              finalStatus: validation.state.finalStatus
+            });
+          } catch (error) {
+            await this.finishRunPhase(runId, issue, validationTiming, "failed", { error: error instanceof Error ? error.message : String(error) });
+            throw error;
+          }
+        }
         if (validation && validation.state.status !== "passed") {
           const error = validationFailureMessage(validation.state);
           await this.recordIssueState(issue, {
@@ -871,7 +950,7 @@ export class Orchestrator {
             });
           }
         }
-        const reviewedState = await this.reviewIfNeeded(issue, workspace, persistedState, attempt, abortController.signal);
+        const reviewedState = await this.reviewIfNeeded(issue, workspace, persistedState, attempt, abortController.signal, runId);
         await this.markLinearSucceeded(issue, workspace, handoff, reviewedState ?? persistedState ?? undefined);
         await this.writeRunEvent(runId, {
           type: "run_succeeded",
@@ -909,18 +988,25 @@ export class Orchestrator {
       const prompt = await this.implementationPrompt(issue, attempt, turnNumber, runId);
       await this.runArtifacts.writePrompt(runId, prompt);
       await this.recordIssueState(issue, { phase: "streaming-turn" });
-      result = await this.runner.run({
-        issue,
-        prompt,
-        attempt,
-        workspace,
-        config: this.config,
-        signal,
-        onEvent: (event) => {
-          this.markRunningActivity(issue.id, event.timestamp);
-          void this.writeRunEvent(runId, { ...event, runId });
-        }
-      });
+      const implementationTiming = await this.startRunPhase(runId, issue, "implementation", `implementation turn ${turnNumber}`, { turnNumber, maxTurns: this.config.agent.maxTurns });
+      try {
+        result = await this.runner.run({
+          issue,
+          prompt,
+          attempt,
+          workspace,
+          config: this.config,
+          signal,
+          onEvent: (event) => {
+            this.markRunningActivity(issue.id, event.timestamp);
+            void this.writeRunEvent(runId, { ...event, runId });
+          }
+        });
+      } catch (error) {
+        await this.finishRunPhase(runId, issue, implementationTiming, "failed", { turnNumber, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+      await this.finishRunPhase(runId, issue, implementationTiming, timingStatusForRunResult(result), { turnNumber, resultStatus: result.status });
       await this.writeRunEvent(runId, {
         type: "turn_completed",
         issueId: issue.id,
@@ -1046,6 +1132,20 @@ export class Orchestrator {
       message: latestDecision?.type ?? "unknown",
       payload: { decisions }
     });
+    if (latestDecision) {
+      await this.writePhaseTimingEvent(issue, {
+        phase: "human-wait",
+        status: "completed",
+        startedAt: currentState?.updatedAt ?? latestDecision.decidedAt,
+        finishedAt: latestDecision.decidedAt,
+        label: "human decision recorded",
+        metadata: {
+          decisionType: latestDecision.type,
+          actor: latestDecision.actor,
+          source: latestDecision.source
+        }
+      });
+    }
     return state;
   }
 
@@ -1115,12 +1215,12 @@ export class Orchestrator {
   }
 
   private async reconcile(): Promise<void> {
-    const stale: string[] = [];
+    const stale: RunningEntry[] = [];
     for (const [id, entry] of this.running.entries()) {
       const elapsed = Date.now() - (entry.lastCodexEventAt ?? entry.startedAt);
       if (this.config.codex.stallTimeoutMs > 0 && elapsed > this.config.codex.stallTimeoutMs) {
         entry.abortController.abort();
-        stale.push(id);
+        stale.push(entry);
       }
     }
     if (this.running.size === 0) return;
@@ -1133,13 +1233,37 @@ export class Orchestrator {
       const normalized = issue.state.toLowerCase();
       if (this.config.tracker.terminalStates.map((state) => state.toLowerCase()).includes(normalized)) {
         running.abortController.abort();
+        await this.writePhaseTimingEvent(issue, {
+          phase: "stall-cancel",
+          status: "canceled",
+          startedAt: new Date(running.lastCodexEventAt ?? running.startedAt).toISOString(),
+          finishedAt: new Date().toISOString(),
+          label: "terminal-state cancel",
+          metadata: { state: issue.state }
+        });
         await workspaceManager.remove(issue.identifier);
       } else if (!isStateIn(issue.state, runningAllowedStates(this.config))) {
         running.abortController.abort();
+        await this.writePhaseTimingEvent(issue, {
+          phase: "stall-cancel",
+          status: "canceled",
+          startedAt: new Date(running.lastCodexEventAt ?? running.startedAt).toISOString(),
+          finishedAt: new Date().toISOString(),
+          label: "non-dispatchable-state cancel",
+          metadata: { state: issue.state }
+        });
       }
     }
-    for (const id of stale) {
-      await this.logger.write({ type: "run_stalled", issueId: id, message: "stall timeout exceeded" });
+    for (const entry of stale) {
+      await this.writePhaseTimingEvent(entry.issue, {
+        phase: "stall-cancel",
+        status: "stalled",
+        startedAt: new Date(entry.lastCodexEventAt ?? entry.startedAt).toISOString(),
+        finishedAt: new Date().toISOString(),
+        label: "stall timeout exceeded",
+        metadata: { stallTimeoutMs: this.config.codex.stallTimeoutMs }
+      });
+      await this.logger.write({ type: "run_stalled", issueId: entry.issue.id, issueIdentifier: entry.issue.identifier, message: "stall timeout exceeded" });
     }
   }
 
@@ -1152,13 +1276,26 @@ export class Orchestrator {
     }
   }
 
-  private async reviewIfNeeded(issue: Issue, workspace: Workspace, state: IssueState | null, attempt: number | null, signal?: AbortSignal): Promise<IssueState | null> {
+  private async reviewIfNeeded(issue: Issue, workspace: Workspace, state: IssueState | null, attempt: number | null, signal?: AbortSignal, runId?: string): Promise<IssueState | null> {
     if (!this.config.review.enabled) return state;
     const reviewTargetMode = this.config.review.targetMode ?? "merge-eligible";
     if (!state || state.outcome === "already_satisfied") return state;
+    let latestState: IssueState | null = state;
+    const reviewTiming = runId ? await this.startRunPhase(runId, issue, "automated-review", "automated review", { reviewTargetMode }) : null;
+    const finishReviewTiming = async (): Promise<void> => {
+      if (!runId || !reviewTiming) return;
+      const reviewStatus = latestState?.reviewStatus;
+      await this.finishRunPhase(runId, issue, reviewTiming, reviewStatus === "approved" ? "completed" : reviewStatus === "pending" ? "completed" : "failed", {
+        reviewStatus,
+        reviewIteration: latestState?.reviewIteration,
+        reviewTargetMode
+      });
+    };
+    try {
     const initialReviewTargets = reviewTargetPullRequests(state, reviewTargetMode);
     if (initialReviewTargets.length === 0) {
-      return pullRequestUrls(state).length > 0 ? this.recordReviewTargetSelectionFailure(issue, state, reviewTargetMode) : state;
+      latestState = pullRequestUrls(state).length > 0 ? await this.recordReviewTargetSelectionFailure(issue, state, reviewTargetMode) : state;
+      return latestState;
     }
     const initialReviewTargetUrls = initialReviewTargets.map((target) => target.url);
     const initialReviewTargetList = formatPullRequestTargets(initialReviewTargets);
@@ -1179,7 +1316,7 @@ export class Orchestrator {
 
     const repoRoot = resolve(this.options.repoRoot);
     let previousFindings = state.findings ?? [];
-    let latestState = await this.recordIssueState(issue, {
+    latestState = await this.recordIssueState(issue, {
       phase: "review",
       reviewStatus: "pending",
       reviewIteration: state.reviewIteration ?? 0,
@@ -1189,7 +1326,8 @@ export class Orchestrator {
     for (let iteration = (state.reviewIteration ?? 0) + 1; iteration <= this.config.review.maxIterations; iteration += 1) {
       const reviewTargets = reviewTargetPullRequests(latestState, reviewTargetMode);
       if (reviewTargets.length === 0) {
-        return pullRequestUrls(latestState).length > 0 ? this.recordReviewTargetSelectionFailure(issue, latestState, reviewTargetMode) : latestState;
+        latestState = pullRequestUrls(latestState).length > 0 ? await this.recordReviewTargetSelectionFailure(issue, latestState, reviewTargetMode) : latestState;
+        return latestState;
       }
       const reviewPr = reviewTargets[0].url;
       const reviewTargetUrls = reviewTargets.map((target) => target.url);
@@ -1412,26 +1550,34 @@ export class Orchestrator {
         ].join("\n")
       );
       await this.recordIssueState(issue, { phase: "fix", reviewStatus: "changes_requested" });
-      const fixResult = await this.runner.run({
-        issue,
-        prompt: fixPrompt({
+      const fixTiming = runId ? await this.startRunPhase(runId, issue, "fixer-turn", `fixer turn ${iteration}`, { iteration, blockingFindings: blocking.length }) : null;
+      let fixResult: AgentRunResult;
+      try {
+        fixResult = await this.runner.run({
           issue,
-          prUrl: reviewPr,
-          reviewTargets: reviewTargetUrls,
-          iteration,
-          findings: blocking,
-          handoffPath: join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
-          feedbackSummary: githubContext.feedback
-        }),
-        attempt,
-        workspace,
-        config: this.config,
-        signal,
-        onEvent: (event) => {
-          this.markRunningActivity(issue.id, event.timestamp);
-          void this.logger.write({ ...event, type: `review_fix_${event.type}` });
-        }
-      });
+          prompt: fixPrompt({
+            issue,
+            prUrl: reviewPr,
+            reviewTargets: reviewTargetUrls,
+            iteration,
+            findings: blocking,
+            handoffPath: join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
+            feedbackSummary: githubContext.feedback
+          }),
+          attempt,
+          workspace,
+          config: this.config,
+          signal,
+          onEvent: (event) => {
+            this.markRunningActivity(issue.id, event.timestamp);
+            void this.logger.write({ ...event, type: `review_fix_${event.type}` });
+          }
+        });
+      } catch (error) {
+        if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, "failed", { iteration, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+      if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, timingStatusForRunResult(fixResult), { iteration, resultStatus: fixResult.status });
       if (fixResult.status !== "succeeded") {
         latestState = await this.recordIssueState(issue, {
           phase: "fix",
@@ -1493,6 +1639,9 @@ export class Orchestrator {
       previousFindings = findings;
     }
     return latestState;
+    } finally {
+      await finishReviewTiming();
+    }
   }
 
   private async recordReviewTargetSelectionFailure(issue: Issue, state: IssueState, reviewTargetMode: ReviewTargetMode): Promise<IssueState> {
@@ -1570,149 +1719,193 @@ export class Orchestrator {
   }
 
   private async shepherdMergeIssue(issue: Issue): Promise<void> {
+    const timingStartedAt = new Date().toISOString();
+    let timingStatus: RunTimingStatus = "completed";
+    let timingLabel = "merge shepherding completed";
+    let timingMetadata: Record<string, unknown> = {};
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
     const state = await stateStore.read(issue.identifier);
     const mergeTarget = mergeTargetPullRequest(state);
     const mergePr = mergeTarget?.url ?? null;
     const mergeEligiblePrs = mergeEligiblePullRequests(state);
-    if (state && !mergePr && isNoPrHandoffApproved(state) && mergeEligiblePrs.length === 0) {
-      await this.commentIssue(
-        issue,
-        [
-          "### AgentOS merge shepherd",
-          "",
-          "No merge-eligible pull request output was selected for this issue. Treating the Linear `Merging` move as approval of the handoff without a merge.",
-          "",
-          state.prs?.length ? formatPullRequestTargets(state.prs) : "- PRs: none",
-          "- Result: moving issue to Done"
-        ].join("\n")
-      );
-      await this.moveIssue(issue, this.config.github.doneState);
+    try {
+      if (state && !mergePr && isNoPrHandoffApproved(state) && mergeEligiblePrs.length === 0) {
+        timingMetadata = { result: "approved no-PR handoff" };
+        await this.commentIssue(
+          issue,
+          [
+            "### AgentOS merge shepherd",
+            "",
+            "No merge-eligible pull request output was selected for this issue. Treating the Linear `Merging` move as approval of the handoff without a merge.",
+            "",
+            state.prs?.length ? formatPullRequestTargets(state.prs) : "- PRs: none",
+            "- Result: moving issue to Done"
+          ].join("\n")
+        );
+        await this.moveIssue(issue, this.config.github.doneState);
+        await this.logger.write({
+          type: "merge_no_pr_succeeded",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: "approved no-PR handoff"
+        });
+        return;
+      }
+      if (state && !mergePr && mergeEligiblePrs.length > 0) {
+        const reason = mergeTargetAmbiguityReason(state) ?? "Merge target selection is ambiguous; select exactly one primary PR before merging.";
+        timingStatus = "failed";
+        timingLabel = "merge shepherding failed";
+        timingMetadata = { reason };
+        await this.markMergeFailed(issue, reason);
+        return;
+      }
+      if (!state || !mergePr) {
+        const reason = "No pull request metadata was found for this issue.";
+        timingStatus = "failed";
+        timingLabel = "merge shepherding failed";
+        timingMetadata = { reason };
+        await this.markMergeFailed(issue, reason);
+        return;
+      }
+
       await this.logger.write({
-        type: "merge_no_pr_succeeded",
+        type: "merge_shepherd_started",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
-        message: "approved no-PR handoff"
+        message: mergePr,
+        payload: { prUrl: mergePr, role: mergeTarget?.role ?? "primary", mergeTarget: this.config.github.mergeTarget ?? "primary" }
       });
-      return;
-    }
-    if (state && !mergePr && mergeEligiblePrs.length > 0) {
-      await this.markMergeFailed(issue, mergeTargetAmbiguityReason(state) ?? "Merge target selection is ambiguous; select exactly one primary PR before merging.");
-      return;
-    }
-    if (!state || !mergePr) {
-      await this.markMergeFailed(issue, "No pull request metadata was found for this issue.");
-      return;
-    }
 
-    await this.logger.write({
-      type: "merge_shepherd_started",
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      message: mergePr,
-      payload: { prUrl: mergePr, role: mergeTarget?.role ?? "primary", mergeTarget: this.config.github.mergeTarget ?? "primary" }
-    });
+      const github = new GitHubClient(this.config.github.command);
+      try {
+        const repoRoot = resolve(this.options.repoRoot);
+        await assertPullRequestUrlMatchesRepo(repoRoot, mergePr);
+        const pr = await github.getPullRequest(mergePr, repoRoot);
+        await stateStore.merge(issue.identifier, {
+          ...state,
+          mergeTargetUrl: mergePr,
+          mergeTargetRole: mergeTarget?.role ?? "primary",
+          updatedAt: new Date().toISOString()
+        });
+        if (pr.merged) {
+          const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
+          timingMetadata = { prUrl: mergePr, result: "already merged", cleanupWarnings };
+          await this.recordIssueState(issue, {
+            phase: "completed",
+            lifecycleStatus: "already_merged_pr",
+            mergedAt: new Date().toISOString(),
+            nextRetryAt: undefined,
+            retryAttempt: undefined,
+            stopReason: undefined
+          });
+          await this.runtimeState.clearIssue(issue.id);
+          await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged. Treating that as authoritative and completing the issue.\n\n- PR: ${mergePr}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
+          await this.moveIssue(issue, this.config.github.doneState);
+          return;
+        }
 
-    const github = new GitHubClient(this.config.github.command);
-    try {
-      const repoRoot = resolve(this.options.repoRoot);
-      await assertPullRequestUrlMatchesRepo(repoRoot, mergePr);
-      const pr = await github.getPullRequest(mergePr, repoRoot);
-      await stateStore.merge(issue.identifier, {
-        ...state,
-        mergeTargetUrl: mergePr,
-        mergeTargetRole: mergeTarget?.role ?? "primary",
-        updatedAt: new Date().toISOString()
-      });
-      if (pr.merged) {
+        if (this.config.review.enabled && state.reviewStatus !== "approved") {
+          if (!this.config.github.allowHumanMergeOverride) {
+            const reason = `automated review is not approved (reviewStatus=${state.reviewStatus ?? "missing"})`;
+            timingStatus = "failed";
+            timingLabel = "merge shepherding failed";
+            timingMetadata = { prUrl: mergePr, reason };
+            await this.markMergeFailed(issue, reason, mergePr);
+            return;
+          }
+          if (!state.humanOverrideAt) {
+            const overrideAt = new Date().toISOString();
+            await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
+              ...state,
+              humanOverrideAt: overrideAt,
+              humanContinuationAt: overrideAt,
+              lifecycleStatus: "human_continuation",
+              updatedAt: overrideAt
+            });
+            await this.commentIssue(
+              issue,
+              [
+                "### AgentOS review override recorded",
+                "",
+                "This issue is in `Merging` before automated review approval. Treating the Linear status move as explicit human approval for this merge attempt.",
+                "",
+                `- PR: ${mergePr}`,
+                `- Previous reviewStatus: ${state.reviewStatus ?? "missing"}`
+              ].join("\n")
+            );
+            await this.logger.write({
+              type: "review_human_override",
+              issueId: issue.id,
+              issueIdentifier: issue.identifier,
+              message: state.reviewStatus ?? "missing",
+              payload: { prUrl: mergePr }
+            });
+          }
+          const validationFresh = state.validation?.status === "passed" || state.validation?.finalStatus === "passed";
+          if (!validationFresh) {
+            const reason = "human continuation requires fresh passing validation evidence before merge progression";
+            timingStatus = "failed";
+            timingLabel = "merge shepherding failed";
+            timingMetadata = { prUrl: mergePr, reason };
+            await this.markMergeFailed(issue, reason, mergePr);
+            return;
+          }
+        }
+
+        const readiness = evaluateMergeReadiness(pr, this.config.github.requireChecks);
+        if (!readiness.ready) {
+          if (readiness.reason.includes("pending")) {
+            timingStatus = "waiting";
+            timingLabel = "merge shepherding waiting on CI";
+            timingMetadata = { prUrl: mergePr, reason: readiness.reason };
+            await this.markMergeWaiting(issue, mergePr, readiness.reason);
+          } else {
+            timingStatus = "failed";
+            timingLabel = "merge shepherding failed";
+            timingMetadata = { prUrl: mergePr, reason: readiness.reason };
+            await this.markMergeFailed(issue, readiness.reason, mergePr);
+          }
+          return;
+        }
+
+        await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
+        await github.mergePullRequest(mergePr, this.config.github, repoRoot);
         const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
+        timingMetadata = { prUrl: mergePr, mergeMethod: this.config.github.mergeMethod, cleanupWarnings };
         await this.recordIssueState(issue, {
           phase: "completed",
-          lifecycleStatus: "already_merged_pr",
+          lifecycleStatus: cleanupWarnings.length ? "post_merge_cleanup_warning" : "merge_success",
           mergedAt: new Date().toISOString(),
           nextRetryAt: undefined,
           retryAttempt: undefined,
           stopReason: undefined
         });
         await this.runtimeState.clearIssue(issue.id);
-        await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged. Treating that as authoritative and completing the issue.\n\n- PR: ${mergePr}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
+        await this.commentIssue(issue, `### AgentOS merge complete\n\nMerged successfully.\n\n- PR: ${mergePr}\n- Method: ${this.config.github.mergeMethod}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
         await this.moveIssue(issue, this.config.github.doneState);
-        return;
+        await this.logger.write({
+          type: cleanupWarnings.length ? "merge_succeeded_with_cleanup_warnings" : "merge_succeeded",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: mergePr,
+          payload: cleanupWarnings.length ? { cleanupWarnings } : undefined
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        timingStatus = "failed";
+        timingLabel = "merge shepherding failed";
+        timingMetadata = { prUrl: mergePr, reason };
+        await this.markMergeFailed(issue, reason, mergePr);
       }
-
-      if (this.config.review.enabled && state.reviewStatus !== "approved") {
-        if (!this.config.github.allowHumanMergeOverride) {
-          await this.markMergeFailed(issue, `automated review is not approved (reviewStatus=${state.reviewStatus ?? "missing"})`, mergePr);
-          return;
-        }
-        if (!state.humanOverrideAt) {
-          const overrideAt = new Date().toISOString();
-          await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
-            ...state,
-            humanOverrideAt: overrideAt,
-            humanContinuationAt: overrideAt,
-            lifecycleStatus: "human_continuation",
-            updatedAt: overrideAt
-          });
-          await this.commentIssue(
-            issue,
-            [
-              "### AgentOS review override recorded",
-              "",
-              "This issue is in `Merging` before automated review approval. Treating the Linear status move as explicit human approval for this merge attempt.",
-              "",
-              `- PR: ${mergePr}`,
-              `- Previous reviewStatus: ${state.reviewStatus ?? "missing"}`
-            ].join("\n")
-          );
-          await this.logger.write({
-            type: "review_human_override",
-            issueId: issue.id,
-            issueIdentifier: issue.identifier,
-            message: state.reviewStatus ?? "missing",
-            payload: { prUrl: mergePr }
-          });
-        }
-        const validationFresh = state.validation?.status === "passed" || state.validation?.finalStatus === "passed";
-        if (!validationFresh) {
-          await this.markMergeFailed(issue, "human continuation requires fresh passing validation evidence before merge progression", mergePr);
-          return;
-        }
-      }
-
-      const readiness = evaluateMergeReadiness(pr, this.config.github.requireChecks);
-      if (!readiness.ready) {
-        if (readiness.reason.includes("pending")) {
-          await this.markMergeWaiting(issue, mergePr, readiness.reason);
-        } else {
-          await this.markMergeFailed(issue, readiness.reason, mergePr);
-        }
-        return;
-      }
-
-      await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
-      await github.mergePullRequest(mergePr, this.config.github, repoRoot);
-      const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
-      await this.recordIssueState(issue, {
-        phase: "completed",
-        lifecycleStatus: cleanupWarnings.length ? "post_merge_cleanup_warning" : "merge_success",
-        mergedAt: new Date().toISOString(),
-        nextRetryAt: undefined,
-        retryAttempt: undefined,
-        stopReason: undefined
+    } finally {
+      await this.writePhaseTimingEvent(issue, {
+        phase: "merge-shepherding",
+        status: timingStatus,
+        startedAt: timingStartedAt,
+        finishedAt: new Date().toISOString(),
+        label: timingLabel,
+        metadata: timingMetadata
       });
-      await this.runtimeState.clearIssue(issue.id);
-      await this.commentIssue(issue, `### AgentOS merge complete\n\nMerged successfully.\n\n- PR: ${mergePr}\n- Method: ${this.config.github.mergeMethod}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
-      await this.moveIssue(issue, this.config.github.doneState);
-      await this.logger.write({
-        type: cleanupWarnings.length ? "merge_succeeded_with_cleanup_warnings" : "merge_succeeded",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: mergePr,
-        payload: cleanupWarnings.length ? { cleanupWarnings } : undefined
-      });
-    } catch (error) {
-      await this.markMergeFailed(issue, error instanceof Error ? error.message : String(error), mergePr);
     }
   }
 
@@ -1870,6 +2063,7 @@ export class Orchestrator {
   private async scheduleRetry(issue: Issue, previousAttempt: number | null, error: string | null, overrideDelayMs?: number, runId?: string, workspace?: Workspace): Promise<RetryEntry> {
     const attempt = previousAttempt == null ? 1 : previousAttempt + 1;
     const delay = overrideDelayMs ?? Math.min(10_000 * 2 ** Math.max(attempt - 1, 0), this.config.agent.maxRetryBackoffMs);
+    const scheduledAt = new Date().toISOString();
     const retry = {
       issueId: issue.id,
       identifier: issue.identifier,
@@ -1887,10 +2081,24 @@ export class Orchestrator {
       dueAt: new Date(retry.dueAtMs).toISOString(),
       error,
       errorCategory: error ? categorizeRunError(error) : undefined,
-      scheduledAt: new Date().toISOString(),
+      scheduledAt,
       runId,
       workspacePath: workspace?.path,
       workspaceKey: workspace?.workspaceKey
+    });
+    await this.writePhaseTimingEvent(issue, {
+      phase: "retry-backoff",
+      status: "waiting",
+      startedAt: scheduledAt,
+      finishedAt: new Date(retry.dueAtMs).toISOString(),
+      label: "retry backoff scheduled",
+      metadata: {
+        attempt,
+        maxAttempts: this.config.agent.maxRetryAttempts,
+        delayMs: delay,
+        errorCategory: error ? categorizeRunError(error) : undefined,
+        runId
+      }
     });
     return retry;
   }
@@ -1960,6 +2168,15 @@ export class Orchestrator {
       );
     }
     await this.moveIssue(issue, this.config.tracker.reviewState);
+    await this.writePhaseTimingEvent(issue, {
+      phase: "human-wait",
+      status: "waiting",
+      label: "human review wait started",
+      metadata: {
+        reviewState: this.config.tracker.reviewState,
+        reviewStatus: state?.reviewStatus
+      }
+    });
   }
 
   private async markLinearRetryScheduled(issue: Issue, workspace: Workspace, retry: RetryEntry): Promise<void> {
@@ -2004,6 +2221,15 @@ export class Orchestrator {
       "run_failed"
     );
     await this.moveIssue(issue, this.config.tracker.needsInputState);
+    await this.writePhaseTimingEvent(issue, {
+      phase: "needs-input",
+      status: "waiting",
+      label: "needs-input pause started",
+      metadata: {
+        needsInputState: this.config.tracker.needsInputState,
+        reason: "recoverable partial work"
+      }
+    });
   }
 
   private async markLinearRecoveryNeeded(issue: Issue, recovery: WorkspaceRecoveryDiagnostics): Promise<void> {
@@ -2019,6 +2245,17 @@ export class Orchestrator {
       "recovery_needed"
     );
     await this.moveIssue(issue, this.config.tracker.needsInputState);
+    await this.writePhaseTimingEvent(issue, {
+      phase: "needs-input",
+      status: "waiting",
+      label: "needs-input pause started",
+      metadata: {
+        needsInputState: this.config.tracker.needsInputState,
+        reason: "recoverable partial work",
+        dirty: recovery.dirty,
+        aheadCount: recovery.aheadCount
+      }
+    });
   }
 
   private async markLinearNeedsInput(issue: Issue, workspace: Workspace, attempt: number | null, error: string): Promise<void> {
@@ -2038,6 +2275,15 @@ export class Orchestrator {
       "run_needs_input"
     );
     await this.moveIssue(issue, this.config.tracker.needsInputState);
+    await this.writePhaseTimingEvent(issue, {
+      phase: "needs-input",
+      status: "waiting",
+      label: "needs-input pause started",
+      metadata: {
+        needsInputState: this.config.tracker.needsInputState,
+        error
+      }
+    });
   }
 
   private async markMergeWaiting(issue: Issue, prUrl: string, reason: string): Promise<void> {
@@ -2062,6 +2308,13 @@ export class Orchestrator {
       issueIdentifier: issue.identifier,
       message: reason,
       payload: { prUrl }
+    });
+    await this.writePhaseTimingEvent(issue, {
+      phase: "ci-wait",
+      status: "waiting",
+      startedAt: issue.updated_at ?? undefined,
+      label: "ci wait started",
+      metadata: { prUrl, reason }
     });
   }
 
@@ -2367,6 +2620,28 @@ function checkDiagnosticFingerprint(diagnostics: Awaited<ReturnType<GitHubClient
     .sort()
     .join("\n---\n");
   return createHash("sha256").update(stable).digest("hex").slice(0, 16);
+}
+
+function timingStatusForRunResult(result: AgentRunResult): Exclude<RunTimingStatus, "running"> {
+  if (result.status === "succeeded") return "completed";
+  if (result.status === "canceled") return "canceled";
+  if (result.status === "stale" || result.status === "stalled") return "stalled";
+  return "failed";
+}
+
+function timingDurationMs(startedAt: string, finishedAt: string): number | undefined {
+  const started = Date.parse(startedAt);
+  const finished = Date.parse(finishedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return undefined;
+  return Math.max(0, finished - started);
+}
+
+function compactTimingEvent<T extends { label?: string; durationMs?: number; metadata?: Record<string, unknown> }>(event: T): T {
+  const next = { ...event };
+  if (!next.label) delete next.label;
+  if (next.durationMs == null) delete next.durationMs;
+  if (!next.metadata || Object.keys(next.metadata).length === 0) delete next.metadata;
+  return next;
 }
 
 function singleLine(value: string): string {

@@ -77,8 +77,22 @@ describe("orchestrator", () => {
     expect(prompt).toContain("Do AG-1");
     expect(prompt).toContain("## AgentOS Run Context");
     expect(prompt).toContain("Validation evidence path: .agent-os/validation/AG-1.json");
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary.timing?.phases.map((phase) => phase.phase)).toEqual(expect.arrayContaining(["implementation", "validation"]));
+    expect(summary.timing?.phases.find((phase) => phase.phase === "implementation")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        startedAt: expect.any(String),
+        finishedAt: expect.any(String),
+        durationMs: expect.any(Number)
+      })
+    );
+    const events = await new RunArtifactStore(repo).replay(summary.runId);
+    expect(events.some((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "implementation")).toBe(true);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "validation")).toBe(true);
     const logs = await logger.tail(10);
     expect(logs.some((entry) => entry.type === "run_succeeded")).toBe(true);
+    expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
   });
 
   it("skips Todo issues blocked by nonterminal dependencies", async () => {
@@ -1570,9 +1584,13 @@ describe("orchestrator", () => {
     const [summary] = await new RunArtifactStore(repo).listRuns();
     expect(summary).toMatchObject({ status: "failed" });
     expect(summary.error).toContain("validation_failed");
+    expect(summary.timing?.phases.find((phase) => phase.phase === "validation")).toEqual(expect.objectContaining({ status: "failed" }));
     const events = await new RunArtifactStore(repo).replay(summary.runId);
     expect(events.some((event) => event.type === "validation_failed")).toBe(true);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "validation" && (event.payload as { timing?: { status?: string } }).timing?.status === "failed")).toBe(true);
     expect(events.some((event) => event.type === "run_succeeded")).toBe(false);
+    const logs = await logger.tail(20);
+    expect(logs.some((event) => event.type === "phase_timing" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(true);
   });
 
   it("fails and retries when max turns finish without a handoff", async () => {
@@ -2443,6 +2461,7 @@ describe("orchestrator", () => {
     );
     const moves: string[] = [];
     const comments: string[] = [];
+    const logger = new JsonlLogger(repo);
     const tracker: IssueTracker = {
       async fetchCandidates(states) {
         return states.includes("Merging") ? [mergingIssue] : [];
@@ -2467,13 +2486,16 @@ describe("orchestrator", () => {
           throw new Error("runner should not be called for Merging issues");
         }
       },
-      logger: new JsonlLogger(repo),
+      logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
 
     expect(moves).toEqual([]);
     expect(comments.join("\n")).toContain("merge waiting");
     expect(comments.join("\n")).toContain("1 GitHub check(s) still pending");
+    const logs = await logger.tail(20);
+    expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "ci-wait")).toBe(true);
+    expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "merge-shepherding" && (entry.payload as { timing?: { status?: string } }).timing?.status === "waiting")).toBe(true);
   });
 
   it("runs automated reviewers before moving an implemented PR to Human Review", async () => {
@@ -2595,6 +2617,13 @@ describe("orchestrator", () => {
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.reviewStatus).toBe("approved");
     expect(state.reviewTargetUrls).toEqual(["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]);
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary.timing?.phases.find((phase) => phase.phase === "automated-review")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        metadata: expect.objectContaining({ reviewStatus: "approved", reviewIteration: 1 })
+      })
+    );
   });
 
   it("records human_required when PR metadata has no selected review target", async () => {
@@ -2764,6 +2793,13 @@ describe("orchestrator", () => {
     expect(reviewPrompts[0]).toContain("- PR: https://github.com/o/r/pull/1");
     expect(reviewPrompts[1]).toContain("- PR: https://github.com/o/r/pull/2");
     expect(reviewPrompts[1]).not.toContain("- PR: https://github.com/o/r/pull/1");
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary.timing?.phases.find((phase) => phase.phase === "fixer-turn")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        metadata: expect.objectContaining({ iteration: 1, resultStatus: "succeeded" })
+      })
+    );
   });
 
   it("rejects off-repository PR metadata from focused fixer handoffs before state merge", async () => {
