@@ -2311,6 +2311,12 @@ describe("orchestrator", () => {
     const runStore = new RunArtifactStore(repo);
     const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
     await runStore.startPhase(completedRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
+    await runStore.startPhase(completedRun.runId, {
       phase: "ci-wait",
       status: "waiting",
       startedAt: "2026-01-02T00:00:00.000Z",
@@ -2391,6 +2397,15 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("https://github.com/o/r/pull/2");
     const inspected = await runStore.inspect(completedRun.runId);
     expect(inspected.warnings).toEqual([]);
+    expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "human-wait")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        label: "human review wait started",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        finishedAt: mergingIssue.updated_at,
+        metadata: expect.objectContaining({ reason: "issue entered merge state" })
+      })
+    );
     const ciWaits = inspected.summary.timing?.phases.filter((phase) => phase.phase === "ci-wait") ?? [];
     expect(ciWaits).toHaveLength(2);
     expect(ciWaits[0]).toEqual(
@@ -2403,6 +2418,7 @@ describe("orchestrator", () => {
     );
     expect(ciWaits[1]).toEqual(expect.objectContaining({ status: "completed", finishedAt: expect.any(String) }));
     const events = await runStore.replay(completedRun.runId);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
     expect(events.filter((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "ci-wait")).toHaveLength(2);
   });
 
@@ -2663,12 +2679,22 @@ describe("orchestrator", () => {
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    const runStore = new RunArtifactStore(repo);
+    const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
+    await runStore.startPhase(completedRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
+    await runStore.completeRun(completedRun.runId, { status: "succeeded" });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
       JSON.stringify({
         schemaVersion: 1,
         issueId: "issue-1",
         issueIdentifier: "AG-1",
+        lastRunId: completedRun.runId,
         phase: "completed",
         outcome: "already_satisfied",
         validation: {
@@ -2717,6 +2743,14 @@ describe("orchestrator", () => {
     expect(moves).toEqual(["AG-1 -> Done"]);
     expect(comments.join("\n")).toContain("No merge-eligible pull request output was selected");
     expect(comments.join("\n")).toContain("approval of the handoff without a merge");
+    const inspected = await runStore.inspect(completedRun.runId);
+    expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "human-wait")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        finishedAt: mergingIssue.updated_at,
+        metadata: expect.objectContaining({ reason: "issue entered merge state" })
+      })
+    );
   });
 
   it("routes ambiguous merge-eligible PR metadata back to Human Review", async () => {
@@ -2728,12 +2762,22 @@ describe("orchestrator", () => {
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    const runStore = new RunArtifactStore(repo);
+    const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
+    await runStore.startPhase(completedRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
+    await runStore.completeRun(completedRun.runId, { status: "succeeded" });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
       JSON.stringify({
         schemaVersion: 1,
         issueId: "issue-1",
         issueIdentifier: "AG-1",
+        lastRunId: completedRun.runId,
         phase: "completed",
         outcome: "implemented",
         reviewStatus: "approved",
@@ -2785,6 +2829,14 @@ describe("orchestrator", () => {
     expect(moves).toEqual(["AG-1 -> Human Review"]);
     expect(comments.join("\n")).toContain("Multiple merge-eligible pull requests");
     expect(comments.join("\n")).toContain("select exactly one primary PR");
+    const inspected = await runStore.inspect(completedRun.runId);
+    expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "human-wait")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        finishedAt: mergingIssue.updated_at,
+        metadata: expect.objectContaining({ reason: "issue entered merge state" })
+      })
+    );
   });
 
   it("rejects off-repository merge targets before invoking GitHub merge", async () => {
@@ -2995,6 +3047,12 @@ describe("orchestrator", () => {
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     const runStore = new RunArtifactStore(repo);
     const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
+    await runStore.startPhase(completedRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
     await runStore.completeRun(completedRun.runId, { status: "succeeded" });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -3092,6 +3150,12 @@ describe("orchestrator", () => {
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     const runStore = new RunArtifactStore(repo);
     const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
+    await runStore.startPhase(completedRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
     await runStore.completeRun(completedRun.runId, { status: "succeeded" });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -3147,6 +3211,13 @@ describe("orchestrator", () => {
     await runPendingPass();
 
     const inspected = await runStore.inspect(completedRun.runId);
+    expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "human-wait")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        finishedAt: "2026-01-02T00:00:00.000Z",
+        metadata: expect.objectContaining({ reason: "issue entered merge state" })
+      })
+    );
     const ciWaits = inspected.summary.timing?.phases.filter((phase) => phase.phase === "ci-wait") ?? [];
     expect(ciWaits).toHaveLength(1);
     expect(ciWaits[0]).toEqual(

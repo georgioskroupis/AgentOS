@@ -1793,6 +1793,7 @@ export class Orchestrator {
     let timingMetadata: Record<string, unknown> = {};
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
     const state = await stateStore.read(issue.identifier);
+    await this.finishOpenRunPhase(state?.lastRunId, issue, "human-wait", "completed", timingStartNoLaterThan(issue.updated_at, timingStartedAt), { reason: "issue entered merge state" });
     const mergeTarget = mergeTargetPullRequest(state);
     const mergePr = mergeTarget?.url ?? null;
     const mergeEligiblePrs = mergeEligiblePullRequests(state);
@@ -2560,7 +2561,6 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 function completionMarker(issue: Issue): string {
   return issue.updated_at ?? `${issue.state}:${issue.title}`;
 }
-
 function displayAttempt(attempt: number | null): number {
   return (attempt ?? 0) + 1;
 }
