@@ -6,6 +6,8 @@ import { redactText, redactValue } from "./redaction.js";
 import type { AgentEvent, AgentRunResult, Issue, Workspace } from "./types.js";
 
 export const RUN_SUMMARY_SCHEMA_VERSION = 1;
+const HASHED_ARTIFACTS = ["prompt.md", "events.jsonl", "handoff.md"] as const;
+export type RunArtifactName = (typeof HASHED_ARTIFACTS)[number];
 
 // Measurement buckets for run timing. These are not orchestrator lifecycle
 // states; write sites map lifecycle/review/merge events into these buckets.
@@ -325,12 +327,24 @@ export class RunArtifactStore {
       .map((line) => JSON.parse(line) as AgentEvent);
   }
 
-  async refreshArtifactHashes(runId: string): Promise<RunSummary> {
+  async refreshArtifactHashes(runId: string, artifactNames?: RunArtifactName[]): Promise<RunSummary> {
     await this.summaryQueues.get(runId);
-    return this.updateSummary(runId, async (current) => ({
-      ...current,
-      artifactHashes: await this.hashArtifacts(runId)
-    }));
+    const names = artifactNames ? [...new Set(artifactNames)] : null;
+    return this.updateSummary(runId, async (current) => {
+      if (!names) {
+        return {
+          ...current,
+          artifactHashes: await this.hashArtifacts(runId)
+        };
+      }
+      const selected = await this.hashArtifacts(runId, names);
+      const artifactHashes = { ...current.artifactHashes };
+      for (const name of names) {
+        if (selected[name]) artifactHashes[name] = selected[name];
+        else delete artifactHashes[name];
+      }
+      return { ...current, artifactHashes };
+    });
   }
 
   async simulateRun(input: { issueIdentifier: string; status?: AgentRunResult["status"] }): Promise<RunSummary> {
@@ -405,9 +419,9 @@ export class RunArtifactStore {
     return nextSummary;
   }
 
-  private async hashArtifacts(runId: string): Promise<Record<string, string>> {
+  private async hashArtifacts(runId: string, artifactNames: readonly RunArtifactName[] = HASHED_ARTIFACTS): Promise<Record<string, string>> {
     const hashes: Record<string, string> = {};
-    for (const name of ["prompt.md", "events.jsonl", "handoff.md"]) {
+    for (const name of artifactNames) {
       const path = this.pathFor(runId, name);
       if (!(await exists(path))) continue;
       if (!(await stat(path)).isFile()) continue;

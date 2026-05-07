@@ -36,6 +36,7 @@ export async function persistPhaseTimingToRun(
   options: { activeRunId?: string | null } = {}
 ): Promise<void> {
   const finishedStatus: Exclude<RunTimingStatus, "running"> = input.status === "running" ? "completed" : input.status;
+  let wroteEventArtifact = false;
   if (input.finishedAt && input.status !== "waiting") {
     const closed = await store.finishPhase(runId, { phase: input.phase }, { status: finishedStatus, finishedAt: input.finishedAt, metadata: input.metadata });
     if (closed) {
@@ -47,7 +48,8 @@ export async function persistPhaseTimingToRun(
         timestamp: closed.finishedAt ?? input.finishedAt,
         payload: { timing: closed }
       });
-      await refreshRunHashesIfInactive(store, runId, options.activeRunId);
+      wroteEventArtifact = true;
+      await refreshRunEventHashIfInactive(store, runId, options.activeRunId, wroteEventArtifact);
       return;
     }
   }
@@ -71,6 +73,7 @@ export async function persistPhaseTimingToRun(
       timestamp: started.startedAt,
       payload: { timing: started }
     });
+    wroteEventArtifact = true;
   }
 
   if (input.finishedAt) {
@@ -84,9 +87,10 @@ export async function persistPhaseTimingToRun(
         timestamp: finished.finishedAt ?? input.finishedAt,
         payload: { timing: finished }
       });
+      wroteEventArtifact = true;
     }
   }
-  await refreshRunHashesIfInactive(store, runId, options.activeRunId);
+  await refreshRunEventHashIfInactive(store, runId, options.activeRunId, wroteEventArtifact);
 }
 
 export function timingStatusForRunResult(result: AgentRunResult): Exclude<RunTimingStatus, "running"> {
@@ -159,9 +163,10 @@ export function validationTimingFromEvidence(
   };
 }
 
-async function refreshRunHashesIfInactive(store: RunArtifactStore, runId: string, activeRunId?: string | null): Promise<void> {
+async function refreshRunEventHashIfInactive(store: RunArtifactStore, runId: string, activeRunId: string | null | undefined, wroteEventArtifact: boolean): Promise<void> {
   if (activeRunId === runId) return;
-  await store.refreshArtifactHashes(runId);
+  if (!wroteEventArtifact) return;
+  await store.refreshArtifactHashes(runId, ["events.jsonl"]);
 }
 
 function validTimingInterval(startedAt: string | null | undefined, finishedAt: string | null | undefined): { startedAt: string; finishedAt: string; startedMs: number; finishedMs: number } | null {

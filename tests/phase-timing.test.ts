@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { appendFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -53,6 +53,32 @@ describe("phase timing", () => {
     ]);
     const startedEvents = (await store.replay(run.runId)).filter((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "ci-wait");
     expect(startedEvents).toHaveLength(1);
+  });
+
+  it("preserves existing artifact hashes when inactive timing events are appended", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-phase-hash-"));
+    const store = new RunArtifactStore(repo);
+    const run = await store.startRun({ issue, attempt: null });
+    await store.writePrompt(run.runId, "original prompt");
+    await store.writeHandoff(run.runId, "original handoff");
+    await store.completeRun(run.runId, { status: "succeeded" });
+    await appendFile(join(repo, ".agent-os", "runs", run.runId, "prompt.md"), "\ntampered", "utf8");
+
+    await persistPhaseTimingToRun(
+      store,
+      run.runId,
+      issue,
+      {
+        phase: "ci-wait",
+        status: "waiting",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        label: "ci wait started"
+      },
+      { activeRunId: null }
+    );
+
+    const inspected = await store.inspect(run.runId);
+    expect(inspected.warnings).toEqual(["artifact hash mismatch: prompt.md"]);
   });
 
   it("does not persist raw final validation command strings", () => {

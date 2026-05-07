@@ -155,7 +155,7 @@ export class Orchestrator {
       if (!this.hasSlot(issue.state)) continue;
       const retry = this.retries.get(issue.id);
       const prepared = await this.prepareForDispatch(issue);
-      if (!prepared) continue;
+      if (!prepared) { if (retry && retry.dueAtMs <= Date.now() && !this.retries.has(retry.issueId)) await this.finishRetryBackoff(retry, issue, "canceled", "retry skipped before dispatch"); continue; }
       const dueRetry = retry && retry.dueAtMs <= Date.now() ? retry : null;
       if (dueRetry) await this.finishRetryBackoff(dueRetry, prepared, "completed", "retry dispatched");
       await this.dispatch(prepared, dueRetry?.attempt ?? null);
@@ -243,7 +243,7 @@ export class Orchestrator {
           type: "phase_finished", issueId: issue.id, issueIdentifier: issue.identifier, message: timing.label ?? timing.phase, timestamp: timing.finishedAt ?? finishedAt, payload: { timing }
         });
       }
-      if (this.running.get(issue.id)?.runId !== runId) await this.runArtifacts.refreshArtifactHashes(runId);
+      if (this.running.get(issue.id)?.runId !== runId) await this.runArtifacts.refreshArtifactHashes(runId, ["events.jsonl"]);
       return true;
     } catch (error) {
       await this.writePhaseTimingPersistenceWarning(issue, phase, runId, error);
