@@ -151,7 +151,10 @@ capacity, transient tracker/network errors, daemon freshness, retry/review/CI
 wait states, and local validation timing splits when evidence records them.
 `status` and `inspect` also report recoverable partial work such as dirty
 workspaces, unpushed branch heads, stale PR heads, and CI evidence recorded for
-a different local head, including a next safe action for the operator.
+a different local head, including a next safe action for the operator. Terminal
+state contradictions and post-merge cleanup drift are surfaced as status
+warnings so operators can reconcile durable state without starting duplicate
+work.
 
 ### `daemon status` and `daemon launch-command`
 
@@ -170,11 +173,11 @@ bin/agent-os daemon launch-command --repo . --workflow WORKFLOW.md
 
 `runs list` shows durable run summaries. `runs inspect <run-id>` prints run
 status, session/token metrics, and warns if recorded artifact hashes no longer
-match the persisted artifacts. Phase timing metrics are recorded in the run
-summary artifact at `.agent-os/runs/<run-id>/summary.json`; CLI timing reports
-and SLO warnings are intentionally separate reporting work. `runs simulate` and
-`runs replay` are local-only: they read/write run artifacts without
-constructing Linear, GitHub, or Codex clients.
+match the persisted artifacts. It also prints phase-level cycle-time
+breakdowns from `.agent-os/runs/<run-id>/summary.json`, flags unhealthy
+stall/retry, review, human-wait, and merge/retry patterns, and includes next
+actions for operators. `runs simulate` and `runs replay` are local-only: they
+read/write run artifacts without constructing Linear, GitHub, or Codex clients.
 
 ```bash
 bin/agent-os runs list --repo <repo>

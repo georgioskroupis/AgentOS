@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { formatRunCycleDiagnostics } from "./cycle-time.js";
 import { ensureDir, exists, writeTextAtomicEnsuringDir, writeTextEnsuringDir } from "./fs-utils.js";
 import { redactText, redactValue } from "./redaction.js";
 import type { AgentEvent, AgentRunResult, Issue, Workspace } from "./types.js";
@@ -572,7 +573,7 @@ function compactPhaseTiming<T extends RunPhaseTiming>(entry: T): T {
   return next;
 }
 
-export function formatRunInspect(result: { summary: RunSummary; warnings: string[] }): string {
+export function formatRunInspect(result: { summary: RunSummary; warnings: string[] }, options: { now?: string } = {}): string {
   const { summary, warnings } = result;
   const lines = [
     `Run: ${summary.runId}`,
@@ -584,6 +585,7 @@ export function formatRunInspect(result: { summary: RunSummary; warnings: string
     summary.metrics.sessions.turnId ? `Turn: ${summary.metrics.sessions.turnId}` : null,
     tokenLine(summary),
     rateLimitLine(summary),
+    formatRunCycleDiagnostics(summary, options),
     summary.error ? `Error: ${summary.error}` : null,
     warnings.length ? `Warnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}` : "Warnings: none"
   ].filter((line): line is string => line !== null);

@@ -91,6 +91,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     .slice(-limit);
   const state = (await exists(statePath)) ? normalizeIssueState(JSON.parse(await readText(statePath))) : null;
   const recovery = await inspectWorkspaceRecovery(root, state).catch(() => null);
+  const statusDiagnostics = state ? issueStatusDiagnostics(state, recovery) : [];
   const prs = state?.prs ?? [];
   const reviewRoot = join(root, ".agent-os", "reviews", safeFileName(identifier));
   const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot) : [];
@@ -107,6 +108,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state ? `Next safe action: ${nextSafeAction(state, recovery)}` : null,
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
     state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
+    statusDiagnostics.length ? `Status warnings:\n${statusDiagnostics.map(formatIssueStatusDiagnostic).join("\n")}` : "Status warnings: none",
     validationDetails(state?.validation),
     state?.lastError ? `Last error: ${state.lastError}` : null,
     state?.stopReason ? `Stop reason: ${state.stopReason}` : null,
@@ -205,6 +207,8 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (runtimeActive) return `running (${runtimeActive.phase ?? issue.phase ?? "active"})`;
   const retry = runtime.retryQueue.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
   if (retry) return `retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`;
+  const statusDiagnostics = issueStatusDiagnostics(issue, recovery);
+  if (statusDiagnostics.length) return `status warning - ${statusDiagnostics[0].message}; next: ${statusDiagnostics[0].nextAction}`;
   if (recovery?.recoverable) return `recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`;
   const mergeWaiting = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_waiting");
   if (mergeWaiting) return `waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`;
@@ -260,4 +264,113 @@ function validationStatusPhrase(validation: ValidationState): string | null {
   }
   if (validation.status === "failed") return `validation failed${validation.errors?.length ? ` - ${validation.errors.join("; ")}` : ""}`;
   return null;
+}
+
+interface IssueStatusDiagnostic {
+  message: string;
+  nextAction: string;
+}
+
+const TERMINAL_LIFECYCLE_STATUSES = new Set<NonNullable<IssueState["lifecycleStatus"]>>([
+  "merge_success",
+  "post_merge_cleanup_warning",
+  "terminal_linear",
+  "already_merged_pr",
+  "terminal_missing_workspace"
+]);
+
+function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null): IssueStatusDiagnostic[] {
+  const diagnostics: IssueStatusDiagnostic[] = [];
+  const terminal = isTerminalIssueState(issue);
+  if (terminal && issue.reviewStatus === "human_required") {
+    diagnostics.push({
+      message: "contradictory terminal state: terminal issue still has reviewStatus human_required",
+      nextAction: terminalReconciliationAction()
+    });
+  }
+  if (terminal && (issue.lastError || issue.errorCategory)) {
+    diagnostics.push({
+      message: `contradictory terminal state: stale error metadata remains${issue.errorCategory ? ` (${issue.errorCategory})` : ""}${issue.lastError ? ` - ${issue.lastError}` : ""}`,
+      nextAction: terminalReconciliationAction()
+    });
+  }
+  const ciHeadSha = issue.validation?.githubCi?.headSha ?? null;
+  if (terminal && issue.headSha && ciHeadSha && issue.headSha !== ciHeadSha) {
+    diagnostics.push({
+      message: `contradictory terminal state: stale validation/CI head SHA ${shortSha(ciHeadSha)} differs from recorded head ${shortSha(issue.headSha)}`,
+      nextAction: "rerun or verify validation/CI against the selected terminal head before relying on the stale evidence"
+    });
+  }
+  if (terminal && issue.validation?.githubCi?.status && issue.validation.githubCi.status !== "passed") {
+    diagnostics.push({
+      message: `contradictory terminal state: terminal issue still records GitHub CI as ${issue.validation.githubCi.status}`,
+      nextAction: "verify the selected PR's latest checks before treating the terminal state as clean"
+    });
+  }
+  if (terminal && (issue.nextRetryAt || issue.retryAttempt != null)) {
+    diagnostics.push({
+      message: `merge/retry drift: terminal issue still has retry metadata${issue.nextRetryAt ? ` for ${issue.nextRetryAt}` : ""}`,
+      nextAction: terminalReconciliationAction()
+    });
+  }
+  if (terminal && issue.workspacePath) {
+    diagnostics.push({
+      message: `contradictory terminal state: terminal issue still records workspacePath ${issue.workspacePath}`,
+      nextAction: "inspect the workspace once; if no recovery is needed, clear stale workspace metadata through the reconciliation path"
+    });
+  }
+  if (terminal && hasTerminalWorkspaceWarning(issue)) {
+    diagnostics.push({
+      message: `terminal workspace warning: workspace was missing during terminal reconciliation${issue.workspaceMissingAt ? ` at ${issue.workspaceMissingAt}` : ""}`,
+      nextAction: "inspect the last handoff and run artifacts; do not start duplicate work solely to recreate the workspace"
+    });
+  }
+  if (terminal && recovery && !recovery.exists && !hasTerminalWorkspaceWarning(issue)) {
+    diagnostics.push({
+      message: `missing terminal workspace warning: workspacePath points to missing workspace ${recovery.workspacePath} but no terminal missing marker was recorded`,
+      nextAction: "explain the missing workspace from run artifacts before redispatching or cleaning durable state"
+    });
+  }
+  const cleanupDrift = cleanupDriftWarning(issue);
+  if (cleanupDrift) {
+    diagnostics.push({
+      message: cleanupDrift,
+      nextAction: "verify local and remote AgentOS branch cleanup manually or through the merge cleanup path; do not rerun implementation for cleanup drift"
+    });
+  }
+  return diagnostics;
+}
+
+function formatIssueStatusDiagnostic(diagnostic: IssueStatusDiagnostic): string {
+  return `- ${diagnostic.message}\n  Next safe action: ${diagnostic.nextAction}`;
+}
+
+function isTerminalIssueState(issue: IssueState): boolean {
+  return Boolean(
+    issue.phase === "completed" ||
+      issue.phase === "canceled" ||
+      issue.terminalState ||
+      issue.mergedAt ||
+      (issue.lifecycleStatus && TERMINAL_LIFECYCLE_STATUSES.has(issue.lifecycleStatus))
+  );
+}
+
+function hasTerminalWorkspaceWarning(issue: IssueState): boolean {
+  return Boolean(issue.workspaceMissingAt || issue.lifecycleStatus === "terminal_missing_workspace");
+}
+
+function cleanupDriftWarning(issue: IssueState): string | null {
+  if (!issue.mergedAt && issue.lifecycleStatus !== "post_merge_cleanup_warning" && issue.lifecycleStatus !== "already_merged_pr") return null;
+  const warnings = issue.mergeCleanupWarnings ?? [];
+  if (warnings.length === 0) return null;
+  const branchWarning = warnings.find((warning) => /(?:local|remote) branch cleanup|branch still exists|delete.*branch/i.test(warning)) ?? warnings[0];
+  return `post-merge cleanup drift: selected PR is merged but AgentOS branch cleanup warning remains (${branchWarning})`;
+}
+
+function terminalReconciliationAction(): string {
+  return "verify the terminal PR/Linear evidence, then use the reconciliation path to clear stale durable fields without redispatching Codex";
+}
+
+function shortSha(sha: string): string {
+  return sha.length > 12 ? sha.slice(0, 12) : sha;
 }
