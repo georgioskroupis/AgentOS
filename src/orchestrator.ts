@@ -762,12 +762,13 @@ export class Orchestrator {
       payload: { state: issue.state, phase, missingWorkspace }
     });
   }
-
   private async classifyAlreadyMergedIssue(issue: Issue, state: IssueState | null, reason: string): Promise<boolean> {
     const prUrl = await this.alreadyMergedPullRequestUrl(state);
     if (!prUrl) return false;
+    const terminalAt = new Date().toISOString();
     const retry = await readRuntimeRetryForIssue(this.runtimeState, issue);
-    if (retry) await this.finishRetryBackoff(retry, issue, "completed", reason);
+    if (retry) await this.finishRetryBackoff(retry, issue, "completed", reason, terminalAt);
+    for (const wait of terminalWaitPhaseFinishes({ ...issue, state: this.config.github.doneState }, state, reason)) await this.finishOpenRunPhase(wait.runId, issue, wait.phase, "completed", terminalAt, wait.metadata);
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     await workspaceManager.remove(issue.identifier).catch((error: Error) =>
       this.logger.write({
@@ -780,9 +781,9 @@ export class Orchestrator {
     await this.recordIssueState(issue, {
       phase: "completed",
       lifecycleStatus: "already_merged_pr",
-      mergedAt: new Date().toISOString(),
+      mergedAt: terminalAt,
       terminalReason: reason,
-      terminalAt: new Date().toISOString(),
+      terminalAt,
       activeRunId: undefined,
       nextRetryAt: undefined,
       retryAttempt: undefined,

@@ -1120,6 +1120,27 @@ describe("orchestrator", () => {
       `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  terminal_states: [Done, Canceled, Duplicate]\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
+    const waitRunStore = new RunArtifactStore(repo);
+    const waitRun = await waitRunStore.startRun({ issue: readyIssue, attempt: null });
+    await waitRunStore.startPhase(waitRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
+    await waitRunStore.startPhase(waitRun.runId, {
+      phase: "needs-input",
+      status: "waiting",
+      startedAt: "2026-01-01T00:05:00.000Z",
+      label: "needs-input pause started"
+    });
+    await waitRunStore.startPhase(waitRun.runId, {
+      phase: "ci-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:10:00.000Z",
+      label: "ci wait started"
+    });
+    await waitRunStore.completeRun(waitRun.runId, { status: "succeeded" });
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -1128,6 +1149,7 @@ describe("orchestrator", () => {
         issueId: "issue-1",
         issueIdentifier: "AG-1",
         phase: "streaming-turn",
+        lastRunId: waitRun.runId,
         prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: new Date().toISOString() }],
         nextRetryAt: "2026-01-01T00:00:00.000Z",
         updatedAt: new Date().toISOString()
@@ -1215,6 +1237,26 @@ describe("orchestrator", () => {
     );
     const retryRunEvents = await retryRunStore.replay(retryRun.runId);
     expect(retryRunEvents.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(true);
+    const waitRunSummary = await waitRunStore.inspect(waitRun.runId);
+    for (const phase of ["human-wait", "needs-input", "ci-wait"]) {
+      expect(waitRunSummary.summary.timing?.phases.find((entry) => entry.phase === phase)).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          finishedAt: state.terminalAt,
+          metadata: expect.objectContaining({
+            reason: "startup recovery: recorded pull request is already merged",
+            terminalState: "Done"
+          })
+        })
+      );
+    }
+    const waitRunEvents = await waitRunStore.replay(waitRun.runId);
+    const finishedWaitPhases = waitRunEvents
+      .filter((event) => event.type === "phase_finished")
+      .map((event) => (event.payload as { timing?: { phase?: string } }).timing?.phase)
+      .filter((phase) => phase === "human-wait" || phase === "needs-input" || phase === "ci-wait")
+      .sort();
+    expect(finishedWaitPhases).toEqual(["ci-wait", "human-wait", "needs-input"]);
   });
 
   it("does not treat merged review-only PRs as terminal already-merged truth", async () => {
