@@ -26,6 +26,7 @@ import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan,
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
+import { retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import {
   blockingFindings,
   ensureReviewIterationDir,
@@ -41,7 +42,7 @@ import {
 import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
-import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary, type RuntimeRetryEntry } from "./runtime-state.js";
+import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
 import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
@@ -77,15 +78,6 @@ interface RunningEntry {
   lastCodexEventAt: number | null;
   abortController: AbortController;
   promise: Promise<void>;
-}
-
-interface RetryEntry {
-  issueId: string;
-  identifier: string;
-  issue: Issue;
-  attempt: number;
-  dueAtMs: number;
-  error: string | null;
 }
 
 export class Orchestrator {
@@ -1231,10 +1223,12 @@ export class Orchestrator {
       const current = states?.get(retry.issueId);
       if (current === null) {
         this.retries.delete(retry.issueId);
+        await this.finishRetryBackoff(retry, retry.issue, "canceled", "issue no longer exists in tracker");
         continue;
       }
       const issue = current ?? retry.issue;
       if (isStateIn(issue.state, this.config.tracker.terminalStates)) {
+        await this.finishRetryBackoff(retry, issue, "canceled", `Linear state is terminal: ${issue.state}`);
         await this.classifyTerminalIssue(issue, "retry skipped because Linear state is terminal");
         this.retries.delete(retry.issueId);
         await this.runtimeState.clearIssue(retry.issueId);
@@ -1242,7 +1236,11 @@ export class Orchestrator {
       }
       if (!this.hasSlot(issue.state)) continue;
       const prepared = await this.prepareForDispatch(issue);
-      if (!prepared) continue;
+      if (!prepared) {
+        if (!this.retries.has(retry.issueId)) await this.finishRetryBackoff(retry, issue, "canceled", "retry skipped before dispatch");
+        continue;
+      }
+      await this.finishRetryBackoff(retry, prepared, "completed", "retry dispatched");
       await this.dispatch(prepared, retry.attempt);
       dispatched += 1;
     }
@@ -1340,6 +1338,8 @@ export class Orchestrator {
     const reviewTargetMode = this.config.review.targetMode ?? "merge-eligible";
     if (!state || state.outcome === "already_satisfied") return state;
     let latestState: IssueState | null = state;
+    const initialReviewTargets = reviewTargetPullRequests(state, reviewTargetMode);
+    if (initialReviewTargets.length === 0 && pullRequestUrls(state).length === 0) return latestState;
     const reviewTiming = runId ? await this.startRunPhase(runId, issue, "automated-review", "automated review", { reviewTargetMode }) : null;
     const finishReviewTiming = async (unwoundByError: boolean): Promise<void> => {
       if (!runId || !reviewTiming) return;
@@ -1353,13 +1353,12 @@ export class Orchestrator {
     };
     let reviewUnwoundByError = false;
     try {
-    const initialReviewTargets = reviewTargetPullRequests(state, reviewTargetMode);
-    if (initialReviewTargets.length === 0) {
-      latestState = pullRequestUrls(state).length > 0 ? await this.recordReviewTargetSelectionFailure(issue, state, reviewTargetMode) : state;
-      return latestState;
-    }
-    const initialReviewTargetUrls = initialReviewTargets.map((target) => target.url);
-    const initialReviewTargetList = formatPullRequestTargets(initialReviewTargets);
+      if (initialReviewTargets.length === 0) {
+        latestState = await this.recordReviewTargetSelectionFailure(issue, state, reviewTargetMode);
+        return latestState;
+      }
+      const initialReviewTargetUrls = initialReviewTargets.map((target) => target.url);
+      const initialReviewTargetList = formatPullRequestTargets(initialReviewTargets);
 
     await this.commentIssue(
       issue,
@@ -2141,15 +2140,18 @@ export class Orchestrator {
       issue,
       attempt,
       dueAtMs: Date.now() + delay,
-      error
+      scheduledAt,
+      error,
+      runId
     };
+    const dueAt = new Date(retry.dueAtMs).toISOString();
     this.retries.set(issue.id, retry);
     await this.runtimeState.upsertRetry({
       issueId: issue.id,
       identifier: issue.identifier,
       issue,
       attempt,
-      dueAt: new Date(retry.dueAtMs).toISOString(),
+      dueAt,
       error,
       errorCategory: error ? categorizeRunError(error) : undefined,
       scheduledAt,
@@ -2162,17 +2164,26 @@ export class Orchestrator {
       status: "waiting",
       runId,
       startedAt: scheduledAt,
-      finishedAt: new Date(retry.dueAtMs).toISOString(),
       label: "retry backoff scheduled",
       metadata: {
         attempt,
         maxAttempts: this.config.agent.maxRetryAttempts,
         delayMs: delay,
+        dueAt,
         errorCategory: error ? categorizeRunError(error) : undefined,
         runId
       }
     });
     return retry;
+  }
+
+  private async finishRetryBackoff(
+    retry: RetryEntry,
+    issue: Issue,
+    status: Exclude<RunTimingStatus, "running" | "waiting">,
+    reason: string
+  ): Promise<void> {
+    await this.finishOpenRunPhase(retry.runId, issue, "retry-backoff", status, new Date().toISOString(), retryBackoffFinishMetadata(retry, reason));
   }
 
   private async markLinearStarted(issue: Issue, workspace: Workspace, attempt: number | null): Promise<void> {
@@ -2702,18 +2713,6 @@ function singleLine(value: string): string {
 function validationFailureMessage(validation: NonNullable<IssueState["validation"]>): string {
   const reason = validation.errors?.length ? validation.errors.join("; ") : `status=${validation.status}`;
   return `validation_failed: ${reason}`;
-}
-
-function runtimeRetryToMemory(retry: RuntimeRetryEntry): RetryEntry {
-  const due = Date.parse(retry.dueAt);
-  return {
-    issueId: retry.issueId,
-    identifier: retry.identifier,
-    issue: retry.issue,
-    attempt: retry.attempt,
-    dueAtMs: Number.isFinite(due) ? due : Date.now(),
-    error: retry.error
-  };
 }
 
 function issueFromState(state: IssueState): Issue {

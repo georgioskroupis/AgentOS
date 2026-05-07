@@ -106,6 +106,32 @@ describe("run artifacts", () => {
     ]);
   });
 
+  it("emits run events for synthetic stall and cancel timing", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-stall-events-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    const completed = await store.completeRun(summary.runId, {
+      status: "stalled",
+      error: "stall timeout exceeded"
+    });
+
+    expect(completed.timing?.phases.find((phase) => phase.phase === "stall-cancel")).toEqual(
+      expect.objectContaining({
+        status: "stalled",
+        metadata: { reason: "stall timeout exceeded" }
+      })
+    );
+    const events = await store.replay(summary.runId);
+    expect(events.some((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "stall-cancel")).toBe(true);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "stall-cancel" && (event.payload as { timing?: { status?: string } }).timing?.status === "stalled")).toBe(true);
+    expect((await store.inspect(summary.runId)).warnings).toEqual([]);
+  });
+
   it("reads legacy summaries without phase timing", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-legacy-"));
     const runId = "run_20260501000000_AG-1_legacy";

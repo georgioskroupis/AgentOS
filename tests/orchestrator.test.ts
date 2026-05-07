@@ -1331,8 +1331,9 @@ describe("orchestrator", () => {
     expect(staleRun.summary.status).toBe("stale");
     expect(staleRun.summary.timing?.phases.find((phase) => phase.phase === "retry-backoff")).toEqual(
       expect.objectContaining({
-        status: "waiting",
-        metadata: expect.objectContaining({ runId: run.runId })
+        status: "completed",
+        finishedAt: expect.any(String),
+        metadata: expect.objectContaining({ runId: run.runId, reason: "retry dispatched" })
       })
     );
     expect(prompts).toHaveLength(1);
@@ -1795,17 +1796,77 @@ describe("orchestrator", () => {
     expect(summary.timing?.phases.find((phase) => phase.phase === "retry-backoff")).toEqual(
       expect.objectContaining({
         status: "waiting",
-        durationMs: expect.any(Number),
-        metadata: expect.objectContaining({ attempt: 1, runId: summary.runId })
+        startedAt: expect.any(String),
+        metadata: expect.objectContaining({ attempt: 1, runId: summary.runId, dueAt: expect.any(String) })
       })
     );
+    expect(summary.timing?.phases.find((phase) => phase.phase === "retry-backoff")?.finishedAt).toBeUndefined();
     const events = await new RunArtifactStore(repo).replay(summary.runId);
     expect(events.some((event) => event.type === "validation_failed")).toBe(true);
     expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "validation" && (event.payload as { timing?: { status?: string } }).timing?.status === "failed")).toBe(true);
-    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(true);
+    expect(events.some((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(true);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(false);
     expect(events.some((event) => event.type === "run_succeeded")).toBe(false);
     const logs = await logger.tail(20);
     expect(logs.some((event) => event.type === "phase_timing" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(true);
+  });
+
+  it("closes retry backoff timing when a due retry is dispatched", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-retry-timing-close-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\nagent:\n  max_turns: 1\n  max_retry_attempts: 2\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment() {}
+    };
+    let runs = 0;
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        runs += 1;
+        if (runs === 1) return { status: "failed", error: "transient runner failure" };
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented");
+        return { status: "succeeded" };
+      }
+    };
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+    const store = new RunArtifactStore(repo);
+    const [firstRun] = await store.listRuns();
+    expect(firstRun.timing?.phases.find((phase) => phase.phase === "retry-backoff")?.status).toBe("waiting");
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await orchestrator.runOnce(true);
+
+    expect(runs).toBe(2);
+    const closed = await store.inspect(firstRun.runId);
+    expect(closed.summary.timing?.phases.find((phase) => phase.phase === "retry-backoff")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        finishedAt: expect.any(String),
+        durationMs: expect.any(Number),
+        metadata: expect.objectContaining({ reason: "retry dispatched" })
+      })
+    );
+    const events = await store.replay(firstRun.runId);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "retry-backoff" && (event.payload as { timing?: { status?: string } }).timing?.status === "completed")).toBe(true);
   });
 
   it("fails and retries when max turns finish without a handoff", async () => {
@@ -3054,6 +3115,48 @@ describe("orchestrator", () => {
         metadata: expect.objectContaining({ reviewStatus: "approved", reviewIteration: 1 })
       })
     );
+  });
+
+  it("does not record automated review timing for handoffs without pull requests", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-no-pr-timing-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: true\n  max_iterations: 1\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented");
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary.timing?.phases.some((phase) => phase.phase === "automated-review")).toBe(false);
+    expect(comments.join("\n")).not.toContain("AgentOS automated review started");
   });
 
   it("marks automated review timing failed when review exits through an exception while pending", async () => {
