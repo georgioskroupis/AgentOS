@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -65,6 +65,140 @@ describe("run artifacts", () => {
 
     await appendFile(join(repo, ".agent-os", "runs", summary.runId, "prompt.md"), "\ntampered", "utf8");
     expect(formatRunInspect(await store.inspect(summary.runId))).toContain("artifact hash mismatch: prompt.md");
+  });
+
+  it("records optional phase timing fields in run summaries", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-timing-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    const phase = await store.startPhase(summary.runId, {
+      phase: "implementation",
+      label: "implementation turn 1",
+      startedAt: "2026-05-01T00:00:00.000Z",
+      metadata: { turnNumber: 1 }
+    });
+    await store.finishPhase(
+      summary.runId,
+      { id: phase.id },
+      {
+        finishedAt: "2026-05-01T00:00:01.500Z",
+        metadata: { resultStatus: "succeeded" }
+      }
+    );
+
+    const inspected = await store.inspect(summary.runId);
+    expect(inspected.summary.timing?.phases).toEqual([
+      expect.objectContaining({
+        id: "implementation-1",
+        phase: "implementation",
+        label: "implementation turn 1",
+        status: "completed",
+        startedAt: "2026-05-01T00:00:00.000Z",
+        finishedAt: "2026-05-01T00:00:01.500Z",
+        durationMs: 1500,
+        metadata: { turnNumber: 1, resultStatus: "succeeded" }
+      })
+    ]);
+  });
+
+  it("emits run events for synthetic stall and cancel timing", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-stall-events-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    const completed = await store.completeRun(summary.runId, {
+      status: "stalled",
+      error: "stall timeout exceeded"
+    });
+
+    expect(completed.timing?.phases.find((phase) => phase.phase === "stall-cancel")).toEqual(
+      expect.objectContaining({
+        status: "stalled",
+        metadata: { reason: "stall timeout exceeded" }
+      })
+    );
+    const events = await store.replay(summary.runId);
+    expect(events.some((event) => event.type === "phase_started" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "stall-cancel")).toBe(true);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "stall-cancel" && (event.payload as { timing?: { status?: string } }).timing?.status === "stalled")).toBe(true);
+    expect((await store.inspect(summary.runId)).warnings).toEqual([]);
+  });
+
+  it("emits run events for open phases finalized during completion", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-finalized-phase-events-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    await store.startPhase(summary.runId, {
+      phase: "implementation",
+      label: "implementation turn 1",
+      startedAt: "2026-05-01T00:00:00.000Z",
+      metadata: { turnNumber: 1 }
+    });
+    const completed = await store.markRunCanceled(summary.runId, "startup recovery canceled run");
+
+    expect(completed.timing?.phases.find((phase) => phase.phase === "implementation")).toEqual(
+      expect.objectContaining({
+        status: "canceled",
+        startedAt: "2026-05-01T00:00:00.000Z",
+        finishedAt: expect.any(String),
+        durationMs: expect.any(Number),
+        metadata: { turnNumber: 1 }
+      })
+    );
+    const events = await store.replay(summary.runId);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "phase_finished" &&
+          (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "implementation" &&
+          (event.payload as { timing?: { status?: string } }).timing?.status === "canceled"
+      )
+    ).toBe(true);
+    expect((await store.inspect(summary.runId)).warnings).toEqual([]);
+  });
+
+  it("reads legacy summaries without phase timing", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-legacy-"));
+    const runId = "run_20260501000000_AG-1_legacy";
+    await mkdir(join(repo, ".agent-os", "runs", runId), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "runs", runId, "summary.json"),
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          runId,
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          attempt: 1,
+          status: "succeeded",
+          startedAt: "2026-05-01T00:00:00.000Z",
+          finishedAt: "2026-05-01T00:00:01.000Z",
+          metrics: { tokens: {}, sessions: {}, rateLimits: [] },
+          artifactHashes: {}
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const inspected = await new RunArtifactStore(repo).inspect(runId);
+    expect(inspected.summary.timing).toBeUndefined();
+    expect(formatRunInspect(inspected)).toContain("Status: succeeded");
+    expect(await new RunArtifactStore(repo).listRuns()).toHaveLength(1);
   });
 
   it("simulates and replays local-only fake runs", async () => {

@@ -81,6 +81,9 @@ It keeps orchestration logic narrow:
   transient tracker/network failures from issue run failures, surfaces daemon
   freshness after `main` advances, shows CI/review/merge/retry waits, and
   preserves local validation timing evidence alongside GitHub CI authority.
+- Phase timing is a durable measurement surface stored in run summaries and
+  events. Operator-facing timing reports and SLO diagnostics are a separate
+  reporting layer, not part of the measurement-only timing recorder.
 
 ## Replication Layer
 

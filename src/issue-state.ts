@@ -257,7 +257,7 @@ export function extractHumanDecisionsFromComments(comments: IssueComment[], opti
         source: "linear-comment",
         actor: comment.author,
         commentId: comment.id,
-        createdAt: comment.createdAt ?? comment.updatedAt
+        createdAt: comment.updatedAt ?? comment.createdAt
       })
     )
     .filter((decision): decision is HumanDecisionState => Boolean(decision))
@@ -280,6 +280,10 @@ export function latestHumanDecision(decisions: HumanDecisionState[] | undefined)
   return sorted[sorted.length - 1] ?? null;
 }
 
+export function hasHumanDecision(decisions: HumanDecisionState[], decision: HumanDecisionState): boolean {
+  return decisions.some((candidate) => humanDecisionKey(candidate) === humanDecisionKey(decision) && humanDecisionContentKey(candidate) === humanDecisionContentKey(decision));
+}
+
 function normalizePullRequestRefs(existing: PullRequestRef[], legacyUrl?: string | null, updatedAt = new Date().toISOString()): PullRequestRef[] {
   const legacy = legacyUrl ? [{ url: legacyUrl, discoveredAt: updatedAt, source: "legacy" as const }] : [];
   return mergePullRequestRefs(existing, legacy);
@@ -296,6 +300,21 @@ function mergeHumanDecisions(existing: HumanDecisionState[], incoming: HumanDeci
 
 function humanDecisionKey(decision: HumanDecisionState): string {
   return decision.commentId ? `comment:${decision.commentId}` : `${decision.source}:${decision.decidedAt}:${decision.type}:${decision.body ?? ""}`;
+}
+
+function humanDecisionContentKey(decision: HumanDecisionState): string {
+  return JSON.stringify({
+    type: decision.type,
+    decidedAt: decision.decidedAt,
+    source: decision.source,
+    actor: decision.actor ?? null,
+    body: decision.body ?? null,
+    prHeadSha: decision.prHeadSha ?? null,
+    validationEvidence: decision.validationEvidence ?? null,
+    ciState: decision.ciState ?? null,
+    findings: decision.findings ?? null,
+    summary: decision.summary ?? null
+  });
 }
 
 function mergeAppProof(existing: AppProofState | undefined, incoming: AppProofState | undefined): AppProofState | undefined {
