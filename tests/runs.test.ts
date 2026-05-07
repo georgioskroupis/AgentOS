@@ -132,6 +132,44 @@ describe("run artifacts", () => {
     expect((await store.inspect(summary.runId)).warnings).toEqual([]);
   });
 
+  it("emits run events for open phases finalized during completion", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-finalized-phase-events-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    await store.startPhase(summary.runId, {
+      phase: "implementation",
+      label: "implementation turn 1",
+      startedAt: "2026-05-01T00:00:00.000Z",
+      metadata: { turnNumber: 1 }
+    });
+    const completed = await store.markRunCanceled(summary.runId, "startup recovery canceled run");
+
+    expect(completed.timing?.phases.find((phase) => phase.phase === "implementation")).toEqual(
+      expect.objectContaining({
+        status: "canceled",
+        startedAt: "2026-05-01T00:00:00.000Z",
+        finishedAt: expect.any(String),
+        durationMs: expect.any(Number),
+        metadata: { turnNumber: 1 }
+      })
+    );
+    const events = await store.replay(summary.runId);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "phase_finished" &&
+          (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "implementation" &&
+          (event.payload as { timing?: { status?: string } }).timing?.status === "canceled"
+      )
+    ).toBe(true);
+    expect((await store.inspect(summary.runId)).warnings).toEqual([]);
+  });
+
   it("reads legacy summaries without phase timing", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-legacy-"));
     const runId = "run_20260501000000_AG-1_legacy";

@@ -245,9 +245,11 @@ export class RunArtifactStore {
   async completeRun(runId: string, result: AgentRunResult): Promise<RunSummary> {
     const finishedAt = new Date().toISOString();
     let syntheticPhase: RunPhaseTiming | null = null;
+    let finalizedPhases: RunPhaseTiming[] = [];
     const completed = await this.updateSummary(runId, async (current) => {
       const finalizedTiming = finalizeRunTiming(current, result, finishedAt);
       syntheticPhase = finalizedTiming.syntheticPhase;
+      finalizedPhases = finalizedTiming.finalizedPhases;
       return {
         ...current,
         status: result.status,
@@ -270,8 +272,11 @@ export class RunArtifactStore {
         artifactHashes: await this.hashArtifacts(runId)
       };
     });
-    if (!syntheticPhase) return completed;
-    await this.writePhaseTimingEvents(runId, completed, syntheticPhase);
+    if (finalizedPhases.length === 0 && !syntheticPhase) return completed;
+    for (const phase of finalizedPhases) {
+      await this.writePhaseFinishedEvent(runId, completed, phase);
+    }
+    if (syntheticPhase) await this.writePhaseTimingEvents(runId, completed, syntheticPhase);
     return this.refreshArtifactHashes(runId);
   }
 
@@ -436,6 +441,10 @@ export class RunArtifactStore {
       timestamp: started.startedAt,
       payload: { timing: started }
     });
+    await this.writePhaseFinishedEvent(runId, summary, phase);
+  }
+
+  private async writePhaseFinishedEvent(runId: string, summary: RunSummary, phase: RunPhaseTiming): Promise<void> {
     await this.writeEvent(runId, {
       type: "phase_finished",
       issueId: summary.issueId,
@@ -490,9 +499,19 @@ function finishPhaseTiming(
   });
 }
 
-function finalizeRunTiming(summary: RunSummary, result: AgentRunResult, finishedAt: string): { timing: RunTimingState | undefined; syntheticPhase: RunPhaseTiming | null } {
+function finalizeRunTiming(
+  summary: RunSummary,
+  result: AgentRunResult,
+  finishedAt: string
+): { timing: RunTimingState | undefined; syntheticPhase: RunPhaseTiming | null; finalizedPhases: RunPhaseTiming[] } {
   const terminalStatus = terminalTimingStatus(result.status);
-  const phases = (summary.timing?.phases ?? []).map((phase) => (phase.finishedAt || phase.status === "waiting" ? phase : finishPhaseTiming(phase, finishedAt, terminalStatus)));
+  const finalizedPhases: RunPhaseTiming[] = [];
+  const phases = (summary.timing?.phases ?? []).map((phase) => {
+    if (phase.finishedAt || phase.status === "waiting") return phase;
+    const finished = finishPhaseTiming(phase, finishedAt, terminalStatus);
+    finalizedPhases.push(finished);
+    return finished;
+  });
   let syntheticPhase: RunPhaseTiming | null = null;
   if ((result.status === "stale" || result.status === "stalled" || result.status === "canceled") && !phases.some((phase) => phase.phase === "stall-cancel" && phase.finishedAt)) {
     syntheticPhase = compactPhaseTiming({
@@ -506,13 +525,14 @@ function finalizeRunTiming(summary: RunSummary, result: AgentRunResult, finished
     });
     phases.push(syntheticPhase);
   }
-  if (phases.length === 0) return { timing: summary.timing, syntheticPhase };
+  if (phases.length === 0) return { timing: summary.timing, syntheticPhase, finalizedPhases };
   return {
     timing: {
       updatedAt: finishedAt,
       phases
     },
-    syntheticPhase
+    syntheticPhase,
+    finalizedPhases
   };
 }
 

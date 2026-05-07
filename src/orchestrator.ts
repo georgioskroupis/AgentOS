@@ -26,7 +26,7 @@ import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan,
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
-import { retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
+import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import {
   blockingFindings,
   ensureReviewIterationDir,
@@ -417,6 +417,7 @@ export class Orchestrator {
     for (const retry of runtimeAfterStale.retryQueue) {
       const current = states?.get(retry.issueId);
       if (current === null) {
+        await this.finishRetryBackoff(runtimeRetryToMemory(retry), retry.issue, "canceled", "issue no longer exists in tracker");
         await this.runtimeState.clearIssue(retry.issueId);
         this.retries.delete(retry.issueId);
         messages.push(`cleared retry for ${retry.identifier}: issue no longer exists in tracker`);
@@ -720,6 +721,8 @@ export class Orchestrator {
 
   private async classifyTerminalIssue(issue: Issue, reason: string): Promise<void> {
     const phase: IssueState["phase"] = issue.state.toLowerCase() === this.config.github.doneState.toLowerCase() ? "completed" : "canceled";
+    const retry = await readRuntimeRetryForIssue(this.runtimeState, issue);
+    if (retry) await this.finishRetryBackoff(retry, issue, phase === "completed" ? "completed" : "canceled", reason);
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     const workspacePath = join(this.config.workspace.root, issue.identifier.replace(/[^A-Za-z0-9._-]/g, "_"));
     const missingWorkspace = !(await exists(workspacePath));
@@ -758,6 +761,8 @@ export class Orchestrator {
   private async classifyAlreadyMergedIssue(issue: Issue, state: IssueState | null, reason: string): Promise<boolean> {
     const prUrl = await this.alreadyMergedPullRequestUrl(state);
     if (!prUrl) return false;
+    const retry = await readRuntimeRetryForIssue(this.runtimeState, issue);
+    if (retry) await this.finishRetryBackoff(retry, issue, "completed", reason);
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     await workspaceManager.remove(issue.identifier).catch((error: Error) =>
       this.logger.write({

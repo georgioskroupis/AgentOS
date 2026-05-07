@@ -967,6 +967,15 @@ describe("orchestrator", () => {
       }),
       "utf8"
     );
+    const retryRunStore = new RunArtifactStore(repo);
+    const retryRun = await retryRunStore.startRun({ issue: readyIssue, attempt: 1 });
+    await retryRunStore.startPhase(retryRun.runId, {
+      phase: "retry-backoff",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "retry backoff scheduled"
+    });
+    await retryRunStore.completeRun(retryRun.runId, { status: "failed", error: "stale retry" });
     await new RuntimeStateStore(repo).upsertRetry({
       issueId: readyIssue.id,
       identifier: readyIssue.identifier,
@@ -974,7 +983,8 @@ describe("orchestrator", () => {
       attempt: 1,
       dueAt: "2026-01-01T00:00:00.000Z",
       error: "stale retry",
-      scheduledAt: "2026-01-01T00:00:00.000Z"
+      scheduledAt: "2026-01-01T00:00:00.000Z",
+      runId: retryRun.runId
     });
     const moves: string[] = [];
     const tracker: IssueTracker = {
@@ -1015,6 +1025,16 @@ describe("orchestrator", () => {
     expect(state.nextRetryAt).toBeUndefined();
     const runtime = await new RuntimeStateStore(repo).read();
     expect(runtime.retryQueue).toEqual([]);
+    const retryRunSummary = await retryRunStore.inspect(retryRun.runId);
+    expect(retryRunSummary.summary.timing?.phases.find((phase) => phase.phase === "retry-backoff")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        finishedAt: expect.any(String),
+        metadata: expect.objectContaining({ reason: "startup recovery: recorded pull request is already merged" })
+      })
+    );
+    const retryRunEvents = await retryRunStore.replay(retryRun.runId);
+    expect(retryRunEvents.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "retry-backoff")).toBe(true);
   });
 
   it("does not treat merged review-only PRs as terminal already-merged truth", async () => {
