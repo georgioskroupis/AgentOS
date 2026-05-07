@@ -177,7 +177,7 @@ describe("issue inspection", () => {
           schemaVersion: 1,
           issueId: "issue-2",
           issueIdentifier: "AG-2",
-          phase: "completed",
+          phase: "merge",
           reviewStatus: "approved",
           workspacePath: ".agent-os/workspaces/AG-2",
           headSha: "abc123",
@@ -202,7 +202,6 @@ describe("issue inspection", () => {
           issueId: "issue-3",
           issueIdentifier: "AG-3",
           phase: "completed",
-          workspacePath: ".agent-os/workspaces/AG-3",
           headSha: "def456",
           validation: {
             status: "passed",
@@ -386,9 +385,109 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("stale validation/CI head SHA old-ci-sha differs from recorded head new-head-sha");
     expect(inspectOutput).toContain("terminal issue still records GitHub CI as failed");
     expect(inspectOutput).toContain("merge/retry drift: terminal issue still has retry metadata for 2026-05-05T00:20:00.000Z");
-    expect(inspectOutput).toContain("missing terminal workspace warning: workspacePath points to missing workspace");
     expect(inspectOutput).toContain("post-merge cleanup drift: selected PR is merged but AgentOS branch cleanup warning remains");
     expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+  });
+
+  it("treats completed local state with stale durable fields as terminal diagnostics", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-completed-drift-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-4.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-4",
+          issueIdentifier: "AG-4",
+          phase: "completed",
+          reviewStatus: "human_required",
+          lastError: "codex_stall_timeout",
+          errorCategory: "stall",
+          workspacePath: ".agent-os/workspaces/AG-4",
+          headSha: "new-head-sha",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "failed", headSha: "old-ci-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-4");
+
+    expect(output).toContain("Status warnings:");
+    expect(output).toContain("contradictory terminal state: terminal issue still has reviewStatus human_required");
+    expect(output).toContain("stale error metadata remains (stall) - codex_stall_timeout");
+    expect(output).toContain("stale validation/CI head SHA old-ci-sha differs from recorded head new-head-sha");
+    expect(output).toContain("terminal issue still records GitHub CI as failed");
+    expect(output).toContain("missing terminal workspace warning: workspacePath points to missing workspace");
+    expect(output).toContain("Next safe action: verify the terminal PR/Linear evidence");
+  });
+
+  it("does not warn when clean post-merge cleanup removed the recorded workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-clean-merge-"));
+    const repo = join(root, "alpha");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-5.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-5",
+          issueIdentifier: "AG-5",
+          phase: "completed",
+          lifecycleStatus: "merge_success",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          workspacePath: ".agent-os/workspaces/AG-5",
+          headSha: "merged-head-sha",
+          prs: [{ url: "https://github.com/o/r/pull/5", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          mergeTargetUrl: "https://github.com/o/r/pull/5",
+          mergeTargetRole: "primary",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "merged-head-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).not.toContain("AG-5: status warning");
+
+    const inspectOutput = await inspectIssue(repo, "AG-5");
+    expect(inspectOutput).toContain("Status warnings: none");
+    expect(inspectOutput).not.toContain("missing terminal workspace warning");
   });
 });
 

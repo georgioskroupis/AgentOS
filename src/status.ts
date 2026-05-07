@@ -319,7 +319,7 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
       nextAction: "inspect the last handoff and run artifacts; do not start duplicate work solely to recreate the workspace"
     });
   }
-  if (terminal && recovery && !recovery.exists && !hasTerminalWorkspaceWarning(issue)) {
+  if (terminal && recovery && !recovery.exists && shouldReportMissingTerminalWorkspace(issue)) {
     diagnostics.push({
       message: `missing terminal workspace warning: workspacePath points to missing workspace ${recovery.workspacePath} but no terminal missing marker was recorded`,
       nextAction: "explain the missing workspace from run artifacts before redispatching or cleaning durable state"
@@ -341,7 +341,8 @@ function formatIssueStatusDiagnostic(diagnostic: IssueStatusDiagnostic): string 
 
 function isTerminalIssueState(issue: IssueState): boolean {
   return Boolean(
-    issue.terminalState ||
+    issue.phase === "completed" ||
+      issue.terminalState ||
       issue.mergedAt ||
       (issue.lifecycleStatus && TERMINAL_LIFECYCLE_STATUSES.has(issue.lifecycleStatus))
   );
@@ -349,6 +350,20 @@ function isTerminalIssueState(issue: IssueState): boolean {
 
 function hasTerminalWorkspaceWarning(issue: IssueState): boolean {
   return Boolean(issue.workspaceMissingAt || issue.lifecycleStatus === "terminal_missing_workspace");
+}
+
+function shouldReportMissingTerminalWorkspace(issue: IssueState): boolean {
+  if (hasTerminalWorkspaceWarning(issue)) return false;
+  return !isExpectedPostMergeWorkspaceCleanup(issue);
+}
+
+function isExpectedPostMergeWorkspaceCleanup(issue: IssueState): boolean {
+  return Boolean(
+    issue.mergedAt ||
+      issue.lifecycleStatus === "merge_success" ||
+      issue.lifecycleStatus === "post_merge_cleanup_warning" ||
+      issue.lifecycleStatus === "already_merged_pr"
+  );
 }
 
 function cleanupDriftWarning(issue: IssueState): string | null {
