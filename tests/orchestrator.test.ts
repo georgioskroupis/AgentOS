@@ -2,7 +2,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
 import type { AgentRunResult, AgentRunner, Issue, IssueTracker } from "../src/types.js";
 import { JsonlLogger } from "../src/logging.js";
@@ -1886,6 +1886,84 @@ describe("orchestrator", () => {
       })
     );
     const events = await store.replay(firstRun.runId);
+    expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "retry-backoff" && (event.payload as { timing?: { status?: string } }).timing?.status === "completed")).toBe(true);
+  });
+
+  it("closes retry backoff timing when a retry becomes due during candidate dispatch", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-retry-timing-candidate-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\nagent:\n  max_turns: 1\n  max_retry_attempts: 2\n  max_retry_backoff_ms: 1000\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nAttempt {{ attempt | default: 0 }} for {{ issue.identifier }}`,
+      "utf8"
+    );
+    const retryRunStore = new RunArtifactStore(repo);
+    const retryRun = await retryRunStore.startRun({ issue: readyIssue, attempt: 1 });
+    await retryRunStore.startPhase(retryRun.runId, {
+      phase: "retry-backoff",
+      status: "waiting",
+      startedAt: "1970-01-01T00:00:01.000Z",
+      label: "retry backoff scheduled"
+    });
+    await retryRunStore.completeRun(retryRun.runId, { status: "failed", error: "pending retry" });
+    await new RuntimeStateStore(repo).upsertRetry({
+      issueId: readyIssue.id,
+      identifier: readyIssue.identifier,
+      issue: readyIssue,
+      attempt: 1,
+      dueAt: "1970-01-01T00:00:02.000Z",
+      error: "pending retry",
+      scheduledAt: "1970-01-01T00:00:01.000Z",
+      runId: retryRun.runId
+    });
+
+    let nowMs = 1_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        nowMs = 2_000;
+        return states.includes("Ready") ? [readyIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment() {}
+    };
+    let prompt = "";
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        prompt = input.prompt;
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+        return { status: "succeeded" };
+      }
+    };
+
+    try {
+      await new Orchestrator({
+        repoRoot: repo,
+        workflowPath,
+        tracker,
+        runner,
+        logger: new JsonlLogger(repo),
+        env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+      }).runOnce(true);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(prompt).toContain("Attempt 1 for AG-1");
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.retryQueue).toEqual([]);
+    const closed = await retryRunStore.inspect(retryRun.runId);
+    expect(closed.summary.timing?.phases.find((phase) => phase.phase === "retry-backoff")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        finishedAt: expect.any(String),
+        metadata: expect.objectContaining({ reason: "retry dispatched" })
+      })
+    );
+    const events = await retryRunStore.replay(retryRun.runId);
     expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "retry-backoff" && (event.payload as { timing?: { status?: string } }).timing?.status === "completed")).toBe(true);
   });
 

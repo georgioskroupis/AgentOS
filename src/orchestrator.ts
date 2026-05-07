@@ -49,7 +49,6 @@ import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfi
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
-
 export interface OrchestratorOptions {
   repoRoot: string;
   workflowPath: string;
@@ -63,7 +62,6 @@ export interface OrchestratorOptions {
 export interface OrchestratorRunOptions {
   dispatchLimit?: number;
 }
-
 export interface OrchestratorRunSummary {
   dispatched: number;
   retryDispatched: number;
@@ -158,7 +156,9 @@ export class Orchestrator {
       const retry = this.retries.get(issue.id);
       const prepared = await this.prepareForDispatch(issue);
       if (!prepared) continue;
-      await this.dispatch(prepared, retry && retry.dueAtMs <= Date.now() ? retry.attempt : null);
+      const dueRetry = retry && retry.dueAtMs <= Date.now() ? retry : null;
+      if (dueRetry) await this.finishRetryBackoff(dueRetry, prepared, "completed", "retry dispatched");
+      await this.dispatch(prepared, dueRetry?.attempt ?? null);
       dispatched += 1;
       candidateDispatched += 1;
     }
