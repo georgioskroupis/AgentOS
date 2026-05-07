@@ -1019,6 +1019,97 @@ describe("orchestrator", () => {
     expect(runtime.retryQueue).toEqual([]);
   });
 
+  it("closes stored wait phases when a recorded issue becomes terminal", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-terminal-waits-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  terminal_states: [Done, Canceled, Duplicate]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const runStore = new RunArtifactStore(repo);
+    const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
+    await runStore.startPhase(completedRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
+    await runStore.startPhase(completedRun.runId, {
+      phase: "needs-input",
+      status: "waiting",
+      startedAt: "2026-01-01T00:05:00.000Z",
+      label: "needs-input pause started"
+    });
+    await runStore.startPhase(completedRun.runId, {
+      phase: "ci-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:10:00.000Z",
+      label: "ci wait started"
+    });
+    await runStore.completeRun(completedRun.runId, { status: "succeeded" });
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "review",
+      lastRunId: completedRun.runId,
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+    const doneIssue = { ...readyIssue, state: "Done", updated_at: "2026-01-03T00:00:00.000Z" };
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, doneIssue]]);
+      },
+      async comment() {},
+      async move() {}
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for terminal issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const state = await new IssueStateStore(repo).read(readyIssue.identifier);
+    expect(state).toMatchObject({
+      phase: "completed",
+      terminalState: "Done",
+      terminalReason: "startup recovery: Linear state is Done",
+      terminalAt: expect.any(String)
+    });
+    const inspected = await runStore.inspect(completedRun.runId);
+    const terminalAt = state?.terminalAt;
+    for (const phase of ["human-wait", "needs-input", "ci-wait"]) {
+      expect(inspected.summary.timing?.phases.find((entry) => entry.phase === phase)).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          finishedAt: terminalAt,
+          metadata: expect.objectContaining({
+            reason: "startup recovery: Linear state is Done",
+            terminalState: "Done"
+          })
+        })
+      );
+    }
+    const finishedWaitPhases = (await runStore.replay(completedRun.runId))
+      .filter((event) => event.type === "phase_finished")
+      .map((event) => (event.payload as { timing?: { phase?: string } }).timing?.phase)
+      .filter((phase) => phase === "human-wait" || phase === "needs-input" || phase === "ci-wait")
+      .sort();
+    expect(finishedWaitPhases).toEqual(["ci-wait", "human-wait", "needs-input"]);
+  });
+
   it("clears stale retries for already-merged pull requests instead of redispatching implementation", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-already-merged-retry-"));
     await initGitRemote(repo);

@@ -27,6 +27,7 @@ import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
+import { terminalWaitPhaseFinishes } from "./orchestrator-terminal.js";
 import {
   blockingFindings,
   ensureReviewIterationDir,
@@ -721,8 +722,12 @@ export class Orchestrator {
 
   private async classifyTerminalIssue(issue: Issue, reason: string): Promise<void> {
     const phase: IssueState["phase"] = issue.state.toLowerCase() === this.config.github.doneState.toLowerCase() ? "completed" : "canceled";
+    const terminalAt = new Date().toISOString();
+    const terminalTimingStatus = phase === "completed" ? "completed" : "canceled";
+    const storedState = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier).catch(() => null);
     const retry = await readRuntimeRetryForIssue(this.runtimeState, issue);
-    if (retry) await this.finishRetryBackoff(retry, issue, phase === "completed" ? "completed" : "canceled", reason);
+    if (retry) await this.finishRetryBackoff(retry, issue, terminalTimingStatus, reason, terminalAt);
+    for (const wait of terminalWaitPhaseFinishes(issue, storedState, reason)) await this.finishOpenRunPhase(wait.runId, issue, wait.phase, terminalTimingStatus, terminalAt, wait.metadata);
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     const workspacePath = join(this.config.workspace.root, issue.identifier.replace(/[^A-Za-z0-9._-]/g, "_"));
     const missingWorkspace = !(await exists(workspacePath));
@@ -739,12 +744,12 @@ export class Orchestrator {
       lifecycleStatus: missingWorkspace ? "terminal_missing_workspace" : "terminal_linear",
       terminalState: issue.state,
       terminalReason: reason,
-      terminalAt: new Date().toISOString(),
+      terminalAt,
       activeRunId: undefined,
       nextRetryAt: undefined,
       retryAttempt: undefined,
       stopReason: reason,
-      ...(missingWorkspace ? { workspaceMissingAt: new Date().toISOString() } : {})
+      ...(missingWorkspace ? { workspaceMissingAt: terminalAt } : {})
     });
     await this.runtimeState.clearIssue(issue.id);
     this.retries.delete(issue.id);
@@ -2183,13 +2188,8 @@ export class Orchestrator {
     return retry;
   }
 
-  private async finishRetryBackoff(
-    retry: RetryEntry,
-    issue: Issue,
-    status: Exclude<RunTimingStatus, "running" | "waiting">,
-    reason: string
-  ): Promise<void> {
-    await this.finishOpenRunPhase(retry.runId, issue, "retry-backoff", status, new Date().toISOString(), retryBackoffFinishMetadata(retry, reason));
+  private async finishRetryBackoff(retry: RetryEntry, issue: Issue, status: Exclude<RunTimingStatus, "running" | "waiting">, reason: string, finishedAt = new Date().toISOString()): Promise<void> {
+    await this.finishOpenRunPhase(retry.runId, issue, "retry-backoff", status, finishedAt, retryBackoffFinishMetadata(retry, reason));
   }
 
   private async markLinearStarted(issue: Issue, workspace: Workspace, attempt: number | null): Promise<void> {
