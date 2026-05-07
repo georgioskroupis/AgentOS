@@ -258,6 +258,95 @@ describe("orchestrator", () => {
     expect(state?.lifecycleStatus).toBe("human_continuation");
   });
 
+  it("updates stored human decisions when a trusted Linear comment is edited", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-reentry-edited-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor", updated_at: "2026-01-03T00:00:00.000Z" };
+    const runStore = new RunArtifactStore(repo);
+    const priorRun = await runStore.startRun({ issue, attempt: null });
+    await runStore.startPhase(priorRun.runId, {
+      phase: "human-wait",
+      status: "waiting",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      label: "human review wait started"
+    });
+    await runStore.completeRun(priorRun.runId, { status: "succeeded" });
+    const originalDecision = {
+      type: "fix_findings" as const,
+      decidedAt: "2026-01-02T00:00:00.000Z",
+      source: "linear-comment" as const,
+      actor: "Supervisor",
+      commentId: "comment-1",
+      body: "AgentOS-Human-Decision: fix-findings"
+    };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "review",
+      lifecycleStatus: "human_continuation",
+      lastRunId: priorRun.runId,
+      humanDecisions: [originalDecision],
+      lastHumanDecision: originalDecision,
+      updatedAt: "2026-01-02T00:00:00.000Z"
+    });
+
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-1",
+            author: "Supervisor",
+            createdAt: "2026-01-02T00:00:00.000Z",
+            updatedAt: "2026-01-03T00:01:00.000Z",
+            body: ["AgentOS-Human-Decision: approve-as-is", "Decision-Summary: approved after reviewer recheck"].join("\n")
+          }
+        ];
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("supervisor continuation should pause redispatch");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lastHumanDecision).toMatchObject({
+      type: "approve_as_is",
+      decidedAt: "2026-01-03T00:01:00.000Z",
+      summary: "approved after reviewer recheck"
+    });
+    expect(state?.humanDecisions).toHaveLength(1);
+    expect(state?.humanDecisions?.[0]?.type).toBe("approve_as_is");
+    expect(state?.lifecycleStatus).toBe("supervisor_continuation");
+    const prior = await runStore.inspect(priorRun.runId);
+    expect(prior.summary.timing?.phases.find((phase) => phase.phase === "human-wait")).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        finishedAt: "2026-01-03T00:01:00.000Z"
+      })
+    );
+  });
+
   it("closes human decision waits on the prior run without duplicating timing on the new run", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-reentry-timing-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -2835,6 +2924,18 @@ describe("orchestrator", () => {
         status: "completed",
         finishedAt: mergingIssue.updated_at,
         metadata: expect.objectContaining({ reason: "issue entered merge state" })
+      })
+    );
+    const humanWaits = inspected.summary.timing?.phases.filter((phase) => phase.phase === "human-wait") ?? [];
+    expect(humanWaits).toHaveLength(2);
+    expect(humanWaits[1]).toEqual(
+      expect.objectContaining({
+        status: "waiting",
+        label: "human review wait restarted",
+        metadata: expect.objectContaining({
+          reviewState: "Human Review",
+          reason: expect.stringContaining("Multiple merge-eligible pull requests")
+        })
       })
     );
   });

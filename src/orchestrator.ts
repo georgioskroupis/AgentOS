@@ -1825,7 +1825,7 @@ export class Orchestrator {
         timingStatus = "failed";
         timingLabel = "merge shepherding failed";
         timingMetadata = { reason };
-        await this.markMergeFailed(issue, reason);
+        await this.markMergeFailed(issue, reason, { runId: state.lastRunId });
         return;
       }
       if (!state || !mergePr) {
@@ -1833,7 +1833,7 @@ export class Orchestrator {
         timingStatus = "failed";
         timingLabel = "merge shepherding failed";
         timingMetadata = { reason };
-        await this.markMergeFailed(issue, reason);
+        await this.markMergeFailed(issue, reason, { runId: state?.lastRunId });
         return;
       }
 
@@ -1881,7 +1881,7 @@ export class Orchestrator {
             timingStatus = "failed";
             timingLabel = "merge shepherding failed";
             timingMetadata = { prUrl: mergePr, reason };
-            await this.markMergeFailed(issue, reason, mergePr);
+            await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
             return;
           }
           if (!state.humanOverrideAt) {
@@ -1918,7 +1918,7 @@ export class Orchestrator {
             timingStatus = "failed";
             timingLabel = "merge shepherding failed";
             timingMetadata = { prUrl: mergePr, reason };
-            await this.markMergeFailed(issue, reason, mergePr);
+            await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
             return;
           }
         }
@@ -1936,7 +1936,7 @@ export class Orchestrator {
             timingStatus = "failed";
             timingLabel = "merge shepherding failed";
             timingMetadata = { prUrl: mergePr, reason: readiness.reason };
-            await this.markMergeFailed(issue, readiness.reason, mergePr);
+            await this.markMergeFailed(issue, readiness.reason, { prUrl: mergePr, runId: state.lastRunId });
           }
           return;
         }
@@ -1970,7 +1970,7 @@ export class Orchestrator {
         timingStatus = "failed";
         timingLabel = "merge shepherding failed";
         timingMetadata = { prUrl: mergePr, reason };
-        await this.markMergeFailed(issue, reason, mergePr);
+        await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
       }
     } finally {
       await this.writePhaseTimingEvent(issue, {
@@ -2408,7 +2408,8 @@ export class Orchestrator {
     });
   }
 
-  private async markMergeFailed(issue: Issue, reason: string, prUrl?: string): Promise<void> {
+  private async markMergeFailed(issue: Issue, reason: string, options: { prUrl?: string | null; runId?: string | null } = {}): Promise<void> {
+    const prUrl = options.prUrl ?? undefined;
     await this.commentIssue(
       issue,
       [
@@ -2420,12 +2421,14 @@ export class Orchestrator {
         `- Reason: ${reason}`,
         "",
         "Please resolve the issue and move it back to `Merging` when ready."
-      ]
-        .filter((line): line is string => line !== null)
-        .join("\n"),
+      ].filter((line): line is string => line !== null).join("\n"),
       "merge_failed"
     );
     await this.moveIssue(issue, this.config.tracker.reviewState);
+    await this.writePhaseTimingEvent(issue, {
+      phase: "human-wait", status: "waiting", runId: options.runId, label: "human review wait restarted",
+      metadata: { reviewState: this.config.tracker.reviewState, reason, ...(prUrl ? { prUrl } : {}) }
+    });
     await this.logger.write({
       type: "merge_failed",
       issueId: issue.id,
@@ -2484,13 +2487,9 @@ export class Orchestrator {
   }
 }
 
-function isNoPrHandoffApproved(state: IssueState): boolean {
-  return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed");
-}
+function isNoPrHandoffApproved(state: IssueState): boolean { return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed"); }
 
-function isLocallySettledIssueState(state: IssueState): boolean {
-  return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required";
-}
+function isLocallySettledIssueState(state: IssueState): boolean { return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required"; }
 
 function isSupervisorContinuationPaused(state: IssueState | null): boolean {
   if (!state?.lifecycleStatus) return false;
