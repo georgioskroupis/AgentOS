@@ -169,6 +169,20 @@ describe("run artifacts", () => {
     expect(output).toContain("Next action: check decision comments");
   });
 
+  it("flags merge and CI wait drift in run cycle time", () => {
+    const output = formatRunInspect({
+      summary: runSummaryWithTiming("failed", "2026-05-01T00:50:00.000Z", [
+        phase("implementation", "completed", "2026-05-01T00:00:00.000Z", "2026-05-01T00:10:00.000Z"),
+        phase("ci-wait", "failed", "2026-05-01T00:10:00.000Z", "2026-05-01T00:45:00.000Z")
+      ]),
+      warnings: []
+    });
+
+    expect(output).toContain("- ci-wait: 35m (1 failed)");
+    expect(output).toContain("merge/retry drift: 35m spent in merge, CI wait, or retry backoff");
+    expect(output).toContain("Next action: inspect selected PR checks and durable merge/retry state");
+  });
+
   it("emits run events for synthetic stall and cancel timing", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-stall-events-"));
     const store = new RunArtifactStore(repo);

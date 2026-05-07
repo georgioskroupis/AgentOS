@@ -313,12 +313,6 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
       nextAction: terminalReconciliationAction()
     });
   }
-  if (terminal && issue.workspacePath) {
-    diagnostics.push({
-      message: `contradictory terminal state: terminal issue still records workspacePath ${issue.workspacePath}`,
-      nextAction: "inspect the workspace once; if no recovery is needed, clear stale workspace metadata through the reconciliation path"
-    });
-  }
   if (terminal && hasTerminalWorkspaceWarning(issue)) {
     diagnostics.push({
       message: `terminal workspace warning: workspace was missing during terminal reconciliation${issue.workspaceMissingAt ? ` at ${issue.workspaceMissingAt}` : ""}`,
@@ -347,9 +341,7 @@ function formatIssueStatusDiagnostic(diagnostic: IssueStatusDiagnostic): string 
 
 function isTerminalIssueState(issue: IssueState): boolean {
   return Boolean(
-    issue.phase === "completed" ||
-      issue.phase === "canceled" ||
-      issue.terminalState ||
+    issue.terminalState ||
       issue.mergedAt ||
       (issue.lifecycleStatus && TERMINAL_LIFECYCLE_STATUSES.has(issue.lifecycleStatus))
   );

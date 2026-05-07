@@ -179,7 +179,36 @@ describe("issue inspection", () => {
           issueIdentifier: "AG-2",
           phase: "completed",
           reviewStatus: "approved",
+          workspacePath: ".agent-os/workspaces/AG-2",
+          headSha: "abc123",
           prs: [{ url: "https://github.com/o/r/pull/2", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:08:00.000Z",
+            githubCi: { status: "pending", headSha: "abc123", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:08:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-3.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-3",
+          issueIdentifier: "AG-3",
+          phase: "completed",
+          workspacePath: ".agent-os/workspaces/AG-3",
+          headSha: "def456",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:08:00.000Z",
+            githubCi: { status: "passed", headSha: "def456", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
           updatedAt: "2026-05-05T00:08:00.000Z"
         },
         null,
@@ -203,6 +232,9 @@ describe("issue inspection", () => {
     expect(output).toContain("Daemon preflight: missing_credentials - tracker.api_key is required after environment resolution");
     expect(output).toContain("Repo env: missing");
     expect(output).toContain("AG-2: waiting on CI - 1 GitHub check(s) still pending");
+    expect(output).toContain("AG-3: completed locally");
+    expect(output).not.toContain("AG-2: status warning");
+    expect(output).not.toContain("AG-3: status warning");
     expect(output).toContain("AG-1: local full-suite validation timing failure recorded separately; focused test passed; GitHub CI passed at abc123");
   });
 
@@ -354,7 +386,6 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("stale validation/CI head SHA old-ci-sha differs from recorded head new-head-sha");
     expect(inspectOutput).toContain("terminal issue still records GitHub CI as failed");
     expect(inspectOutput).toContain("merge/retry drift: terminal issue still has retry metadata for 2026-05-05T00:20:00.000Z");
-    expect(inspectOutput).toContain("terminal issue still records workspacePath .agent-os/workspaces/AG-3");
     expect(inspectOutput).toContain("missing terminal workspace warning: workspacePath points to missing workspace");
     expect(inspectOutput).toContain("post-merge cleanup drift: selected PR is merged but AgentOS branch cleanup warning remains");
     expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
