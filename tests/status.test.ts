@@ -390,7 +390,7 @@ describe("issue inspection", () => {
     expect(inspectOutput).not.toContain("record `AgentOS-Human-Decision: fix-findings`");
   });
 
-  it("keeps completed local state without terminal evidence on the non-terminal status path", async () => {
+  it("reports completed local state contradictions even without explicit terminal metadata", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-completed-local-"));
     const repo = join(root, "alpha");
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -441,15 +441,18 @@ describe("issue inspection", () => {
     );
 
     const registryOutput = await getRegistryStatus(registryPath);
-    expect(registryOutput).toContain("AG-4: waiting on Human Review - codex_stall_timeout");
-    expect(registryOutput).not.toContain("AG-4: status warning");
+    expect(registryOutput).toContain("AG-4: status warning - contradictory terminal state: terminal issue still has reviewStatus human_required");
 
     const output = await inspectIssue(repo, "AG-4");
 
-    expect(output).toContain("Status warnings: none");
-    expect(output).toContain("Next safe action: record `AgentOS-Human-Decision: fix-findings`");
-    expect(output).not.toContain("contradictory terminal state");
-    expect(output).not.toContain("missing terminal workspace warning");
+    expect(output).toContain("Status warnings:");
+    expect(output).toContain("contradictory terminal state: terminal issue still has reviewStatus human_required");
+    expect(output).toContain("stale error metadata remains (stall) - codex_stall_timeout");
+    expect(output).toContain("stale validation/CI head SHA old-ci-sha differs from recorded head new-head-sha");
+    expect(output).toContain("terminal issue still records GitHub CI as failed");
+    expect(output).toContain("missing terminal workspace warning");
+    expect(output).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(output).not.toContain("record `AgentOS-Human-Decision: fix-findings`");
   });
 
   it("does not warn when clean post-merge cleanup removed the recorded workspace", async () => {
@@ -504,13 +507,54 @@ describe("issue inspection", () => {
       ),
       "utf8"
     );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-6.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-6",
+          issueIdentifier: "AG-6",
+          phase: "completed",
+          lifecycleStatus: "already_merged_pr",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          workspacePath: ".agent-os/workspaces/AG-6",
+          headSha: "merged-head-sha",
+          prs: [{ url: "https://github.com/o/r/pull/6", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          mergeTargetUrl: "https://github.com/o/r/pull/6",
+          mergeTargetRole: "primary",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "merged-head-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
 
     const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-5: merged");
+    expect(registryOutput).toContain("AG-6: already merged");
+    expect(registryOutput).not.toContain("AG-5: waiting on merge");
+    expect(registryOutput).not.toContain("AG-6: waiting on merge");
     expect(registryOutput).not.toContain("AG-5: status warning");
+    expect(registryOutput).not.toContain("AG-6: status warning");
 
     const inspectOutput = await inspectIssue(repo, "AG-5");
     expect(inspectOutput).toContain("Status warnings: none");
+    expect(inspectOutput).toContain("Next safe action: no operator action required; selected PR is merged and terminal state is recorded");
+    expect(inspectOutput).not.toContain("move the issue to Merging");
     expect(inspectOutput).not.toContain("missing terminal workspace warning");
+
+    const alreadyMergedOutput = await inspectIssue(repo, "AG-6");
+    expect(alreadyMergedOutput).toContain("Status warnings: none");
+    expect(alreadyMergedOutput).toContain("Next safe action: no operator action required; selected PR is already merged and terminal state is recorded");
+    expect(alreadyMergedOutput).not.toContain("move the issue to Merging");
+    expect(alreadyMergedOutput).not.toContain("missing terminal workspace warning");
   });
 });
 

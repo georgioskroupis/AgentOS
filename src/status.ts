@@ -210,6 +210,8 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   const statusDiagnostics = issueStatusDiagnostics(issue, recovery);
   if (statusDiagnostics.length) return `status warning - ${statusDiagnostics[0].message}; next: ${statusDiagnostics[0].nextAction}`;
   if (recovery?.recoverable) return `recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`;
+  const terminalStatus = cleanTerminalStatusLine(issue);
+  if (terminalStatus) return terminalStatus;
   const mergeWaiting = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_waiting");
   if (mergeWaiting) return `waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`;
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
@@ -232,6 +234,8 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
 
 function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null = null): string {
   if (recovery?.recoverable) return recovery.nextSafeAction;
+  const terminalAction = cleanTerminalNextSafeAction(issue);
+  if (terminalAction) return terminalAction;
   const decision = issue.lastHumanDecision ?? latestHumanDecision(issue.humanDecisions);
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
@@ -340,11 +344,33 @@ function formatIssueStatusDiagnostic(diagnostic: IssueStatusDiagnostic): string 
 }
 
 function isTerminalIssueState(issue: IssueState): boolean {
+  return issue.phase === "completed" || isAuthoritativeTerminalIssueState(issue);
+}
+
+function isAuthoritativeTerminalIssueState(issue: IssueState): boolean {
   return Boolean(
     issue.terminalState ||
       issue.mergedAt ||
       (issue.lifecycleStatus && TERMINAL_LIFECYCLE_STATUSES.has(issue.lifecycleStatus))
   );
+}
+
+function cleanTerminalStatusLine(issue: IssueState): string | null {
+  if (!isAuthoritativeTerminalIssueState(issue)) return null;
+  if (issue.lifecycleStatus === "already_merged_pr") return "already merged";
+  if (issue.mergedAt || issue.lifecycleStatus === "merge_success" || issue.lifecycleStatus === "post_merge_cleanup_warning") return "merged";
+  if (issue.terminalState) return `terminal (${issue.terminalState})`;
+  return "terminal";
+}
+
+function cleanTerminalNextSafeAction(issue: IssueState): string | null {
+  if (!isAuthoritativeTerminalIssueState(issue)) return null;
+  if (issue.lifecycleStatus === "already_merged_pr") return "no operator action required; selected PR is already merged and terminal state is recorded";
+  if (issue.mergedAt || issue.lifecycleStatus === "merge_success" || issue.lifecycleStatus === "post_merge_cleanup_warning") {
+    return "no operator action required; selected PR is merged and terminal state is recorded";
+  }
+  if (issue.terminalState) return `no operator action required; issue is already in terminal state ${issue.terminalState}`;
+  return "no operator action required; terminal state is recorded";
 }
 
 function hasTerminalWorkspaceWarning(issue: IssueState): boolean {
