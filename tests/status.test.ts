@@ -389,9 +389,30 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
   });
 
-  it("treats completed local state with stale durable fields as terminal diagnostics", async () => {
-    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-completed-drift-"));
+  it("keeps completed local state without terminal evidence on the non-terminal status path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-completed-local-"));
+    const repo = join(root, "alpha");
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-4.json"),
       JSON.stringify(
@@ -418,15 +439,16 @@ describe("issue inspection", () => {
       "utf8"
     );
 
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-4: waiting on Human Review - codex_stall_timeout");
+    expect(registryOutput).not.toContain("AG-4: status warning");
+
     const output = await inspectIssue(repo, "AG-4");
 
-    expect(output).toContain("Status warnings:");
-    expect(output).toContain("contradictory terminal state: terminal issue still has reviewStatus human_required");
-    expect(output).toContain("stale error metadata remains (stall) - codex_stall_timeout");
-    expect(output).toContain("stale validation/CI head SHA old-ci-sha differs from recorded head new-head-sha");
-    expect(output).toContain("terminal issue still records GitHub CI as failed");
-    expect(output).toContain("missing terminal workspace warning: workspacePath points to missing workspace");
-    expect(output).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(output).toContain("Status warnings: none");
+    expect(output).toContain("Next safe action: record `AgentOS-Human-Decision: fix-findings`");
+    expect(output).not.toContain("contradictory terminal state");
+    expect(output).not.toContain("missing terminal workspace warning");
   });
 
   it("does not warn when clean post-merge cleanup removed the recorded workspace", async () => {

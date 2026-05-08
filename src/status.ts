@@ -341,8 +341,7 @@ function formatIssueStatusDiagnostic(diagnostic: IssueStatusDiagnostic): string 
 
 function isTerminalIssueState(issue: IssueState): boolean {
   return Boolean(
-    issue.phase === "completed" ||
-      issue.terminalState ||
+    issue.terminalState ||
       issue.mergedAt ||
       (issue.lifecycleStatus && TERMINAL_LIFECYCLE_STATUSES.has(issue.lifecycleStatus))
   );
