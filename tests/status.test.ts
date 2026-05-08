@@ -396,10 +396,58 @@ describe("issue inspection", () => {
       error: "stale retry queue",
       scheduledAt: "2026-05-05T00:15:00.000Z"
     });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-7.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-7",
+          issueIdentifier: "AG-7",
+          phase: "completed",
+          lifecycleStatus: "merge_success",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          headSha: "merged-head-sha",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "merged-head-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await new RuntimeStateStore(repo).upsertRetry({
+      issueId: "issue-7",
+      identifier: "AG-7",
+      issue: {
+        id: "issue-7",
+        identifier: "AG-7",
+        title: "Clean terminal retry drift",
+        description: null,
+        priority: 1,
+        state: "Done",
+        branch_name: null,
+        url: null,
+        labels: [],
+        blocked_by: [],
+        created_at: null,
+        updated_at: null
+      },
+      attempt: 1,
+      dueAt: "2026-05-05T00:40:00.000Z",
+      error: "stale clean retry queue",
+      scheduledAt: "2026-05-05T00:25:00.000Z"
+    });
 
     const registryOutput = await getRegistryStatus(registryPath);
     expect(registryOutput).toContain("AG-3: status warning - contradictory terminal state: terminal issue still has reviewStatus human_required");
     expect(registryOutput).not.toContain("AG-3: retrying after stale retry queue");
+    expect(registryOutput).toContain("AG-7: status warning - merge/retry drift: terminal issue still has retry queue entry for 2026-05-05T00:40:00.000Z");
+    expect(registryOutput).not.toContain("AG-7: retrying after stale clean retry queue");
 
     const inspectOutput = await inspectIssue(repo, "AG-3");
     expect(inspectOutput).toContain("Status warnings:");
