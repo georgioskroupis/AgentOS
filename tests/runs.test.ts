@@ -185,6 +185,36 @@ describe("run artifacts", () => {
     expect(output).toContain("Next action: check decision comments");
   });
 
+  it("does not count closed human-wait time toward the open-wait SLO", () => {
+    const output = formatRunInspect(
+      {
+        summary: runSummaryWithTiming("succeeded", undefined, [
+          phase("human-wait", "completed", "2026-05-01T00:00:00.000Z", "2026-05-01T01:10:00.000Z"),
+          phase("human-wait", "waiting", "2026-05-01T01:10:00.000Z")
+        ]),
+        warnings: []
+      },
+      { now: "2026-05-01T01:15:00.000Z" }
+    );
+
+    expect(output).toContain("- human-wait: 1h 15m (1 completed, 1 waiting, 1 open)");
+    expect(output).toContain("SLO diagnostics: healthy");
+    expect(output).not.toContain("long human-wait");
+  });
+
+  it("flags open human-wait when the open wait crosses its SLO", () => {
+    const output = formatRunInspect(
+      {
+        summary: runSummaryWithTiming("succeeded", undefined, [phase("human-wait", "waiting", "2026-05-01T00:00:00.000Z")]),
+        warnings: []
+      },
+      { now: "2026-05-01T01:05:00.000Z" }
+    );
+
+    expect(output).toContain("- human-wait: 1h 5m (1 waiting, 1 open)");
+    expect(output).toContain("long human-wait: 1h 5m with an open wait");
+  });
+
   it("flags merge and CI wait drift in run cycle time", () => {
     const output = formatRunInspect({
       summary: runSummaryWithTiming("failed", "2026-05-01T00:50:00.000Z", [

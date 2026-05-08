@@ -18,6 +18,7 @@ interface PhaseAggregate {
   count: number;
   durationMs: number;
   openCount: number;
+  openDurationMs: number;
   firstStartedMs: number;
   statuses: Map<RunTimingStatus, number>;
 }
@@ -84,12 +85,17 @@ function aggregatePhases(phases: RunPhaseTiming[], referenceAt: string): PhaseAg
       count: 0,
       durationMs: 0,
       openCount: 0,
+      openDurationMs: 0,
       firstStartedMs: Number.POSITIVE_INFINITY,
       statuses: new Map<RunTimingStatus, number>()
     };
     aggregate.count += 1;
-    aggregate.durationMs += phaseDurationMs(phase, referenceAt);
-    if (!phase.finishedAt) aggregate.openCount += 1;
+    const durationMs = phaseDurationMs(phase, referenceAt);
+    aggregate.durationMs += durationMs;
+    if (!phase.finishedAt) {
+      aggregate.openCount += 1;
+      aggregate.openDurationMs += durationMs;
+    }
     aggregate.firstStartedMs = Math.min(aggregate.firstStartedMs, phaseStartedMs(phase));
     aggregate.statuses.set(phase.status, (aggregate.statuses.get(phase.status) ?? 0) + 1);
     byPhase.set(phase.phase, aggregate);
@@ -120,7 +126,8 @@ function cycleWarnings(phases: PhaseAggregate[], totalMs: number): CycleWarning[
 
   const humanWaitMs = phaseDuration(phases, ["human-wait", "needs-input"]);
   const humanOpen = phaseOpenCount(phases, ["human-wait", "needs-input"]);
-  if (humanWaitMs >= HUMAN_WAIT_WARNING_MS || (humanOpen > 0 && humanWaitMs >= OPEN_HUMAN_WAIT_WARNING_MS)) {
+  const humanOpenMs = phaseOpenDuration(phases, ["human-wait", "needs-input"]);
+  if (humanWaitMs >= HUMAN_WAIT_WARNING_MS || humanOpenMs >= OPEN_HUMAN_WAIT_WARNING_MS) {
     warnings.push({
       message: `long human-wait: ${formatDuration(humanWaitMs)}${humanOpen > 0 ? " with an open wait" : ""}`,
       nextAction: "check decision comments, PR/CI evidence, and move forward only after structured human input or merge-ready evidence"
@@ -153,6 +160,10 @@ function phaseCount(phases: PhaseAggregate[], names: RunTimingPhase[]): number {
 
 function phaseOpenCount(phases: PhaseAggregate[], names: RunTimingPhase[]): number {
   return phases.filter((phase) => names.includes(phase.phase)).reduce((total, phase) => total + phase.openCount, 0);
+}
+
+function phaseOpenDuration(phases: PhaseAggregate[], names: RunTimingPhase[]): number {
+  return phases.filter((phase) => names.includes(phase.phase)).reduce((total, phase) => total + phase.openDurationMs, 0);
 }
 
 function phaseHasStatus(phases: PhaseAggregate[], names: RunTimingPhase[], statuses: RunTimingStatus[]): boolean {
