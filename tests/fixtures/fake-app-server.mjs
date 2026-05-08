@@ -156,6 +156,19 @@ rl.on("line", (line) => {
       }, 10);
       return;
     }
+    if (process.argv.includes("--ongoing-raw-stdout")) {
+      let writes = 0;
+      const timer = setInterval(() => {
+        writes += 1;
+        process.stdout.write("R".repeat(8_500));
+        if (writes >= 12) {
+          clearInterval(timer);
+          process.stdout.write("\n");
+          complete();
+        }
+      }, 100);
+      return;
+    }
     if (process.argv.includes("--large-json-event-split")) {
       const event = JSON.stringify({
         method: "item/completed",
@@ -174,6 +187,15 @@ rl.on("line", (line) => {
       process.stdout.write(event.slice(0, 9_000));
       setTimeout(() => {
         process.stdout.write(`${event.slice(9_000)}\n`);
+        complete();
+      }, 10);
+      return;
+    }
+    if (process.argv.includes("--oversized-json-like-stdout")) {
+      const raw = `{${"J".repeat(70_000)}`;
+      process.stdout.write(raw.slice(0, 65_000));
+      setTimeout(() => {
+        process.stdout.write(`${raw.slice(65_000)}\n`);
         complete();
       }, 10);
       return;

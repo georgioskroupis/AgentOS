@@ -61,9 +61,8 @@ export interface OrchestratorOptions {
   maxConcurrentAgents?: number;
 }
 
-export interface OrchestratorRunOptions {
-  dispatchLimit?: number;
-}
+export interface OrchestratorRunOptions { dispatchLimit?: number; }
+
 export interface OrchestratorRunSummary {
   dispatched: number;
   retryDispatched: number;
@@ -186,7 +185,8 @@ export class Orchestrator {
   }
 
   private async writeRunEvent(runId: string, entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }): Promise<void> {
-    const payload = await this.logger.write({ ...entry, runId });
+    const payload = { ...entry, runId, timestamp: entry.timestamp ?? new Date().toISOString() };
+    await this.logger.write(payload);
     await this.runArtifacts.writeEvent(runId, payload);
   }
 
