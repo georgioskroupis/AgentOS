@@ -387,6 +387,7 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("merge/retry drift: terminal issue still has retry metadata for 2026-05-05T00:20:00.000Z");
     expect(inspectOutput).toContain("post-merge cleanup drift: selected PR is merged but AgentOS branch cleanup warning remains");
     expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(inspectOutput).not.toContain("record `AgentOS-Human-Decision: fix-findings`");
   });
 
   it("keeps completed local state without terminal evidence on the non-terminal status path", async () => {

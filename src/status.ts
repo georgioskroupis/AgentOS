@@ -105,7 +105,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     humanDecisionDetails(state),
     appProofDetails(state),
     recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null,
-    state ? `Next safe action: ${nextSafeAction(state, recovery)}` : null,
+    state ? `Next safe action: ${statusDiagnostics[0]?.nextAction ?? nextSafeAction(state, recovery)}` : null,
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
     state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
     statusDiagnostics.length ? `Status warnings:\n${statusDiagnostics.map(formatIssueStatusDiagnostic).join("\n")}` : "Status warnings: none",
