@@ -1,7 +1,8 @@
-import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { BoundedTextAccumulator } from "../src/output-capture.js";
 import { formatRunInspect, formatRunReplay, RunArtifactStore } from "../src/runs.js";
 import type { RunPhaseTiming, RunSummary } from "../src/runs.js";
 import type { Issue } from "../src/types.js";
@@ -377,6 +378,70 @@ describe("run artifacts", () => {
     expect(artifactText).toContain("line from command");
     expect(artifactText).toContain("[REDACTED]");
     expect(artifactText).not.toContain(secret);
+  });
+
+  it("hashes event capture sidecars and detects tampering or deletion", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-sidecar-hash-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    await store.writeEvent(summary.runId, {
+      type: "codex_stdout",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: "large command output",
+      payload: { stdout: "line from command\n".repeat(800) },
+      timestamp: "2026-05-01T00:00:00.000Z"
+    });
+
+    const logPath = join(repo, ".agent-os", "runs", summary.runId, "events.jsonl");
+    const entry = JSON.parse((await readFile(logPath, "utf8")).trim()) as { payload: { agentOsCapture: { artifact: string } } };
+    const artifact = entry.payload.agentOsCapture.artifact;
+    const artifactHashName = artifact.replace(`.agent-os/runs/${summary.runId}/`, "");
+    const completed = await store.completeRun(summary.runId, { status: "succeeded" });
+
+    expect(completed.artifactHashes[artifactHashName]).toBeTruthy();
+    await appendFile(join(repo, artifact), "\ntampered", "utf8");
+    expect((await store.inspect(summary.runId)).warnings).toContain(`artifact hash mismatch: ${artifactHashName}`);
+
+    await rm(join(repo, artifact));
+    expect((await store.inspect(summary.runId)).warnings).toContain(`artifact hash mismatch: ${artifactHashName}`);
+  });
+
+  it("persists bounded stderr artifacts above the raw artifact cap", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-large-stderr-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+    const stderr = new BoundedTextAccumulator();
+    stderr.append("E".repeat(510_000));
+    const stderrText = stderr.text();
+
+    expect(stderrText.length).toBeLessThanOrEqual(500_000);
+    await store.writeEvent(summary.runId, {
+      type: "codex_stderr",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: stderrText,
+      payload: { capturedChars: stderr.length },
+      timestamp: "2026-05-01T00:00:00.000Z"
+    });
+
+    const log = await readFile(join(repo, ".agent-os", "runs", summary.runId, "events.jsonl"), "utf8");
+    const entry = JSON.parse(log.trim()) as { message: string };
+    const match = entry.message.match(/\[full redacted artifact: ([^\]\n]+)\]/);
+    expect(match?.[1]).toBeTruthy();
+
+    const artifactText = await readFile(join(repo, match![1]), "utf8");
+    expect(artifactText.length).toBeLessThanOrEqual(500_001);
+    expect(artifactText).toContain("AgentOS capture omitted");
   });
 
   it("keeps binary-like event output valid and concise", async () => {

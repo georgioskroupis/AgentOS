@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { formatRunCycleDiagnostics } from "./cycle-time.js";
 import { ensureDir, exists, writeTextAtomicEnsuringDir, writeTextEnsuringDir } from "./fs-utils.js";
 import { boundEventForJsonl, parseAgentEventsFromJsonl, safeJsonStringify, summarizeText } from "./output-capture.js";
+import { artifactNameFromReference, captureArtifactReferences } from "./run-capture-artifacts.js";
 import { redactText, redactValue } from "./redaction.js";
 import type { AgentEvent, AgentRunResult, Issue, Workspace } from "./types.js";
 
@@ -301,9 +302,15 @@ export class RunArtifactStore {
     await this.summaryQueues.get(runId);
     const summary = await this.readSummary(runId);
     const actualHashes = await this.hashArtifacts(runId);
+    const referencedArtifacts = await this.referencedCaptureArtifacts(runId);
     const warnings = Object.entries(summary.artifactHashes)
       .filter(([name, hash]) => actualHashes[name] !== hash)
       .map(([name]) => `artifact hash mismatch: ${name}`);
+    for (const name of referencedArtifacts) {
+      if (!summary.artifactHashes[name] && !(await this.isFileArtifact(runId, name))) {
+        warnings.push(`artifact missing: ${name}`);
+      }
+    }
     return { summary, warnings };
   }
 
@@ -418,15 +425,39 @@ export class RunArtifactStore {
     return nextSummary;
   }
 
-  private async hashArtifacts(runId: string, artifactNames: readonly RunArtifactName[] = HASHED_ARTIFACTS): Promise<Record<string, string>> {
+  private async hashArtifacts(runId: string, artifactNames?: readonly string[]): Promise<Record<string, string>> {
     const hashes: Record<string, string> = {};
-    for (const name of artifactNames) {
+    const names = new Set<string>(artifactNames ?? HASHED_ARTIFACTS);
+    if (!artifactNames || artifactNames.includes("events.jsonl")) {
+      for (const name of await this.referencedCaptureArtifacts(runId)) names.add(name);
+    }
+    for (const name of names) {
       const path = this.pathFor(runId, name);
-      if (!(await exists(path))) continue;
-      if (!(await stat(path)).isFile()) continue;
+      if (!(await this.isFilePath(path))) continue;
       hashes[name] = createHash("sha256").update(await readFile(path)).digest("hex");
     }
     return hashes;
+  }
+
+  private async referencedCaptureArtifacts(runId: string): Promise<string[]> {
+    const path = this.pathFor(runId, "events.jsonl");
+    if (!(await exists(path))) return [];
+    const references = captureArtifactReferences(await readFile(path, "utf8"));
+    const names = new Set<string>();
+    for (const reference of references) {
+      const name = artifactNameFromReference(runId, reference);
+      if (name) names.add(name);
+    }
+    return [...names].sort();
+  }
+
+  private async isFileArtifact(runId: string, name: string): Promise<boolean> {
+    return this.isFilePath(this.pathFor(runId, name));
+  }
+
+  private async isFilePath(path: string): Promise<boolean> {
+    if (!(await exists(path))) return false;
+    return (await stat(path)).isFile();
   }
 
   private runDir(runId: string): string {

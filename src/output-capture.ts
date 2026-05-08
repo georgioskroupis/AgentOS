@@ -46,8 +46,23 @@ export class BoundedTextAccumulator {
 
   text(): string {
     if (this.totalChars <= this.head.length) return this.head;
-    const omitted = Math.max(0, this.totalChars - this.head.length - this.tail.length);
-    return `${this.head}\n[AgentOS capture omitted ${omitted} character(s) beyond the safe artifact limit]\n${this.tail}`;
+    let headLength = this.head.length;
+    let tailLength = this.tail.length;
+    let banner = "";
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const availableForText = Math.max(0, this.headLimit - banner.length);
+      tailLength = Math.min(this.tail.length, availableForText);
+      headLength = Math.min(this.head.length, Math.max(0, availableForText - tailLength));
+      const omitted = Math.max(0, this.totalChars - headLength - tailLength);
+      const nextBanner = `\n[AgentOS capture omitted ${omitted} character(s) beyond the safe artifact limit]\n`;
+      if (nextBanner.length === banner.length) {
+        banner = nextBanner;
+        break;
+      }
+      banner = nextBanner;
+    }
+    const text = `${this.head.slice(0, headLength)}${banner}${this.tail.slice(-tailLength)}`;
+    return text.length <= this.headLimit ? text : text.slice(0, this.headLimit);
   }
 
   tailText(limit = INLINE_TEXT_LIMIT): string {

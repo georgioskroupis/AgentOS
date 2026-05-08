@@ -136,6 +136,48 @@ rl.on("line", (line) => {
     if (process.argv.includes("--exit-before-completion")) {
       process.exit(42);
     }
+    const complete = () => {
+      write({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed" }
+        }
+      });
+    };
+    if (process.argv.includes("--large-stderr")) {
+      process.stderr.write("E".repeat(510_000));
+    }
+    if (process.argv.includes("--long-raw-stdout")) {
+      process.stdout.write("R".repeat(20_500));
+      setTimeout(() => {
+        process.stdout.write("\n");
+        complete();
+      }, 10);
+      return;
+    }
+    if (process.argv.includes("--large-json-event-split")) {
+      const event = JSON.stringify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            command: "printf large-output",
+            status: "completed",
+            exitCode: 0,
+            output: "O".repeat(12_000)
+          }
+        }
+      });
+      process.stdout.write(event.slice(0, 9_000));
+      setTimeout(() => {
+        process.stdout.write(`${event.slice(9_000)}\n`);
+        complete();
+      }, 10);
+      return;
+    }
     write({
       method: "thread/tokenUsage/updated",
       params: {
@@ -155,15 +197,6 @@ rl.on("line", (line) => {
         }
       }
     });
-    const complete = () => {
-      write({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "turn-1", status: "completed" }
-        }
-      });
-    };
     if (process.argv.includes("--instant")) complete();
     else setTimeout(complete, 10);
   } else if (message.method === "turn/interrupt") {
