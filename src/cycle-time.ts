@@ -127,8 +127,12 @@ function cycleWarnings(phases: PhaseAggregate[], totalMs: number): CycleWarning[
     });
   }
 
-  const mergeRetryMs = phaseDuration(phases, ["merge-shepherding", "ci-wait", "retry-backoff"]);
-  const mergeRetryHasDrift = mergeRetryMs >= MERGE_RETRY_WARNING_MS && (phaseDuration(phases, ["retry-backoff"]) > 0 || phaseHasStatus(phases, ["merge-shepherding", "ci-wait"], ["failed", "waiting"]));
+  const mergeCiPhases = ["merge-shepherding", "ci-wait"] satisfies RunTimingPhase[];
+  const mergeRetryMs = phaseDuration(phases, [...mergeCiPhases, "retry-backoff"]);
+  const mergeRetryHasDrift =
+    phaseCount(phases, mergeCiPhases) > 0 &&
+    mergeRetryMs >= MERGE_RETRY_WARNING_MS &&
+    (phaseDuration(phases, ["retry-backoff"]) > 0 || phaseHasStatus(phases, mergeCiPhases, ["failed", "waiting"]));
   if (mergeRetryHasDrift) {
     warnings.push({
       message: `merge/retry drift: ${formatDuration(mergeRetryMs)} spent in merge, CI wait, or retry backoff`,

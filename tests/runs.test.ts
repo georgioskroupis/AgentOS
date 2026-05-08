@@ -152,6 +152,22 @@ describe("run artifacts", () => {
     expect(output).toContain("Next action: inspect stall timeout");
   });
 
+  it("keeps retry-backoff-only cycle time on the stall/retry path", () => {
+    const output = formatRunInspect({
+      summary: runSummaryWithTiming("failed", "2026-05-01T00:40:00.000Z", [
+        phase("implementation", "failed", "2026-05-01T00:00:00.000Z", "2026-05-01T00:05:00.000Z"),
+        phase("retry-backoff", "completed", "2026-05-01T00:05:00.000Z", "2026-05-01T00:40:00.000Z")
+      ]),
+      warnings: []
+    });
+
+    expect(output).toContain("- retry-backoff: 35m (1 completed)");
+    expect(output).toContain("excessive stall/retry overhead: 35m");
+    expect(output).toContain("Next action: inspect stall timeout");
+    expect(output).not.toContain("merge/retry drift");
+    expect(output).not.toContain("inspect selected PR checks");
+  });
+
   it("flags human-wait run cycle time", () => {
     const output = formatRunInspect(
       {

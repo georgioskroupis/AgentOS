@@ -91,7 +91,9 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     .slice(-limit);
   const state = (await exists(statePath)) ? normalizeIssueState(JSON.parse(await readText(statePath))) : null;
   const recovery = await inspectWorkspaceRecovery(root, state).catch(() => null);
-  const statusDiagnostics = state ? issueStatusDiagnostics(state, recovery) : [];
+  const runtime = await new RuntimeStateStore(root).read();
+  const retry = state ? findRuntimeRetry(runtime.retryQueue, state) : null;
+  const statusDiagnostics = state ? issueStatusDiagnostics(state, recovery, retry) : [];
   const prs = state?.prs ?? [];
   const reviewRoot = join(root, ".agent-os", "reviews", safeFileName(identifier));
   const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot) : [];
@@ -104,7 +106,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
     humanDecisionDetails(state),
     appProofDetails(state),
-    recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null,
+    shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
     state ? `Next safe action: ${statusDiagnostics[0]?.nextAction ?? nextSafeAction(state, recovery)}` : null,
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
     state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
@@ -205,7 +207,7 @@ function fallbackProjectSummary(name: string, repoRoot: string, workflowPath: st
 function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeStateStore["read"]>>, logs: Awaited<ReturnType<JsonlLogger["tail"]>>, recovery: WorkspaceRecoveryDiagnostics | null): string {
   const runtimeActive = runtime.activeRuns.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
   if (runtimeActive) return `running (${runtimeActive.phase ?? issue.phase ?? "active"})`;
-  const retry = runtime.retryQueue.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
+  const retry = findRuntimeRetry(runtime.retryQueue, issue);
   const statusDiagnostics = issueStatusDiagnostics(issue, recovery, retry ?? null);
   if (statusDiagnostics.length) return `status warning - ${statusDiagnostics[0].message}; next: ${statusDiagnostics[0].nextAction}`;
   if (retry) return `retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`;
@@ -339,6 +341,16 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
     });
   }
   return diagnostics;
+}
+
+function findRuntimeRetry(retryQueue: RuntimeRetryEntry[], issue: Pick<IssueState, "issueId" | "issueIdentifier">): RuntimeRetryEntry | null {
+  return retryQueue.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier) ?? null;
+}
+
+function shouldFormatRecoveryDiagnostics(issue: IssueState | null, recovery: WorkspaceRecoveryDiagnostics | null): recovery is WorkspaceRecoveryDiagnostics {
+  if (!recovery) return false;
+  if (issue && !recovery.exists && isExpectedPostMergeWorkspaceCleanup(issue) && !hasTerminalWorkspaceWarning(issue)) return false;
+  return true;
 }
 
 function formatIssueStatusDiagnostic(diagnostic: IssueStatusDiagnostic): string {

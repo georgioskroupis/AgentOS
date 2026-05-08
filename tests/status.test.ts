@@ -459,6 +459,13 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("post-merge cleanup drift: selected PR is merged but AgentOS branch cleanup warning remains");
     expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
     expect(inspectOutput).not.toContain("record `AgentOS-Human-Decision: fix-findings`");
+
+    const inspectRetryOnlyOutput = await inspectIssue(repo, "AG-7");
+    expect(inspectRetryOnlyOutput).toContain("Status warnings:");
+    expect(inspectRetryOnlyOutput).toContain("merge/retry drift: terminal issue still has retry queue entry for 2026-05-05T00:40:00.000Z");
+    expect(inspectRetryOnlyOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(inspectRetryOnlyOutput).not.toContain("Status warnings: none");
+    expect(inspectRetryOnlyOutput).not.toContain("retrying after stale clean retry queue");
   });
 
   it("keeps completed local handoffs on the non-terminal status path without explicit terminal evidence", async () => {
@@ -619,12 +626,18 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("Next safe action: no operator action required; selected PR is merged and terminal state is recorded");
     expect(inspectOutput).not.toContain("move the issue to Merging");
     expect(inspectOutput).not.toContain("missing terminal workspace warning");
+    expect(inspectOutput).not.toContain("Workspace recovery: workspace missing");
+    expect(inspectOutput).not.toContain("Recovery reasons: workspace is missing");
+    expect(inspectOutput).not.toContain("inspect runtime state and recover from the last handoff or run artifact");
 
     const alreadyMergedOutput = await inspectIssue(repo, "AG-6");
     expect(alreadyMergedOutput).toContain("Status warnings: none");
     expect(alreadyMergedOutput).toContain("Next safe action: no operator action required; selected PR is already merged and terminal state is recorded");
     expect(alreadyMergedOutput).not.toContain("move the issue to Merging");
     expect(alreadyMergedOutput).not.toContain("missing terminal workspace warning");
+    expect(alreadyMergedOutput).not.toContain("Workspace recovery: workspace missing");
+    expect(alreadyMergedOutput).not.toContain("Recovery reasons: workspace is missing");
+    expect(alreadyMergedOutput).not.toContain("inspect runtime state and recover from the last handoff or run artifact");
   });
 });
 
