@@ -126,6 +126,165 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
   });
 
+  it("emits a pre-dispatch scope report without blocking broad missing work", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-scope-report-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const broadIssue: Issue = {
+      ...readyIssue,
+      title: "Add orchestration report across Linear GitHub runtime validation docs and workspaces",
+      description: [
+        "Roadmap item for broad orchestrator observability.",
+        "- Audit Linear lifecycle state.",
+        "- Inspect GitHub pull request state.",
+        "- Read runtime state and run events.",
+        "- Include validation and handoff evidence.",
+        "- Estimate docs and tests impact.",
+        "- Surface workspace recovery and branch state."
+      ].join("\n")
+    };
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [broadIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[broadIssue.id, broadIssue]]);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          runnerCalled = true;
+          await writePassingHandoff(input.workspace.path, broadIssue.identifier, input.prompt, "AgentOS-Outcome: already-satisfied");
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const reportEvent = (await logger.tail(50)).find((entry) => entry.type === "pre_dispatch_scope_report");
+    const report = reportEvent?.payload as { implementationStatus?: string; scopeSize?: string; likelyLarge?: boolean; dispatchAdvice?: { shouldBlock?: boolean } } | undefined;
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(true);
+    expect(report).toMatchObject({
+      implementationStatus: "missing",
+      scopeSize: "large",
+      likelyLarge: true,
+      dispatchAdvice: { shouldBlock: false }
+    });
+  });
+
+  it("includes fetched Linear comments and trusted human decisions in the pre-dispatch scope report", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-scope-comments-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor", updated_at: "2026-05-08T00:00:00.000Z" };
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-context",
+            author: "Teammate",
+            createdAt: "2026-05-08T00:01:00.000Z",
+            body: "Please preserve the existing branch."
+          },
+          {
+            id: "comment-decision",
+            author: "Supervisor",
+            createdAt: "2026-05-08T00:02:00.000Z",
+            body: [
+              "AgentOS-Human-Decision: fix-findings",
+              "PR-Head-SHA: abc123",
+              "CI-State: pending",
+              "Findings: open",
+              "Decision-Summary: fix the reviewer notes and reuse the existing PR"
+            ].join("\n")
+          }
+        ];
+      }
+    };
+    const logger = new JsonlLogger(repo);
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          await writePassingHandoff(input.workspace.path, issue.identifier, input.prompt, "AgentOS-Outcome: implemented");
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const reportEvent = (await logger.tail(50)).find((entry) => entry.type === "pre_dispatch_scope_report");
+    const report = reportEvent?.payload as
+      | {
+          evidence?: {
+            linearComments?: {
+              fetched?: boolean;
+              count?: number;
+              latestCommentAuthor?: string | null;
+              recent?: Array<{ id?: string; bodyPreview?: string; hasStructuredHumanDecision?: boolean }>;
+            };
+            humanDecisions?: {
+              present?: boolean;
+              count?: number;
+              latest?: { type?: string; actor?: string | null; source?: string; commentId?: string; prHeadSha?: string | null };
+            };
+          };
+        }
+      | undefined;
+    expect(report?.evidence?.linearComments).toMatchObject({
+      fetched: true,
+      count: 2,
+      latestCommentAuthor: "Supervisor"
+    });
+    expect(report?.evidence?.linearComments?.recent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "comment-decision",
+          hasStructuredHumanDecision: true,
+          bodyPreview: expect.stringContaining("AgentOS-Human-Decision: fix-findings")
+        })
+      ])
+    );
+    expect(report?.evidence?.humanDecisions).toMatchObject({
+      present: true,
+      count: 1,
+      latest: {
+        type: "fix_findings",
+        actor: "Supervisor",
+        source: "linear-comment",
+        commentId: "comment-decision",
+        prHeadSha: "abc123"
+      }
+    });
+  });
+
   it("hashes original long runner stdout artifacts written through run events", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-stdout-artifact-"));
     const workflowPath = join(repo, "WORKFLOW.md");

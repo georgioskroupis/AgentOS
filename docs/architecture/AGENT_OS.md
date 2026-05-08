@@ -37,6 +37,13 @@ It keeps orchestration logic narrow:
   opens or updates pull requests only when the issue produced repo changes and
   the workflow expects a PR, and writes a handoff file for the orchestrator to
   post.
+- Before dispatch, the orchestrator emits a read-only scope report for the
+  active candidate. The report classifies existing implementation evidence as
+  already satisfied, partially satisfied, missing, or unclear; estimates touched
+  subsystems, docs/tests impact, PR likelihood, review risk, and likely-large
+  scope; and records Linear comment, trusted human-decision,
+  run/runtime/workspace/PR/validation/handoff signals without creating child
+  issues or blocking dispatch.
 - Every agent run starts with an implementation audit. Already-satisfied issues
   are reported as `AgentOS-Outcome: already-satisfied`, persisted as issue
   state, and moved to review without requiring a PR.

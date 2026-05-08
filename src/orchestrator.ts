@@ -47,6 +47,7 @@ import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
+import { logPreDispatchScopeReport } from "./scope-report.js";
 import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
@@ -614,7 +615,9 @@ export class Orchestrator {
       return null;
     }
     let state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
-    state = await this.ingestHumanDecisions(latest, state);
+    const linearComments = await this.fetchRecentIssueComments(latest, 20);
+    state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined);
+    await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments, logger: this.logger });
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
       return null;
     }
@@ -1156,16 +1159,8 @@ export class Orchestrator {
   }
 
   private async linearReentryContext(issue: Issue, currentState: IssueState | null): Promise<string> {
-    if (!this.tracker.fetchIssueComments) return "";
-    const comments = await this.tracker.fetchIssueComments(issue.identifier, 10).catch(async (error: Error) => {
-      await this.logger.write({
-        type: "linear_comment_read_failed",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: error.message
-      });
-      return [];
-    });
+    const comments = await this.fetchRecentIssueComments(issue, 10);
+    if (!comments) return "";
     const state = await this.ingestHumanDecisions(issue, currentState, comments);
     if (comments.length === 0 && !state?.lastHumanDecision) return "";
     const latestDecision = state?.lastHumanDecision ?? latestHumanDecision(state?.humanDecisions);
@@ -1184,6 +1179,15 @@ export class Orchestrator {
       .filter((line): line is string => line !== null)
       .join("\n");
   }
+
+  private async fetchRecentIssueComments(issue: Issue, limit: number): Promise<IssueComment[] | null> {
+    if (!this.tracker.fetchIssueComments) return null;
+    return this.tracker.fetchIssueComments(issue.identifier, limit).catch(async (error: Error) => {
+      await this.logger.write({ type: "linear_comment_read_failed", issueId: issue.id, issueIdentifier: issue.identifier, message: error.message });
+      return [];
+    });
+  }
+
   private async ingestHumanDecisions(issue: Issue, currentState: IssueState | null, comments?: IssueComment[]): Promise<IssueState | null> {
     if (!this.tracker.fetchIssueComments && !comments) return currentState;
     const fetchedComments = comments ?? (await this.tracker.fetchIssueComments!(issue.identifier, 20).catch(() => []));
