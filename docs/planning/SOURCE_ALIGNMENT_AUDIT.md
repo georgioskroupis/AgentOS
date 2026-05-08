@@ -83,6 +83,11 @@ AgentOS aligns well with the Harness Engineering article on these points:
   every implementation turn. Agents must compare acceptance criteria against
   existing source, docs, tests, issue state, workspaces, and PR metadata before
   editing and continue from partial artifacts instead of duplicating work.
+- Targeted context packs now apply progressive disclosure to implementation
+  re-entry, automated review, fixer, and mechanical CI repair turns. Packs keep
+  authoritative decisions, selected PR metadata, bounded diffs, current
+  findings, validation summaries, sanitized log excerpts, and artifact
+  references while excluding stale transcripts and unrelated historic output.
 
 The remaining Harness gaps are real:
 

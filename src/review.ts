@@ -22,6 +22,7 @@ export interface ReviewContext {
   artifactPath: string;
   githubSummary: string;
   feedbackSummary?: string;
+  contextPack?: string;
 }
 
 export function isBlockingFinding(finding: ReviewFinding, config: ServiceConfig): boolean {
@@ -145,8 +146,8 @@ export function reviewerPrompt(context: ReviewContext): string {
     `- Iteration: ${context.iteration}`,
     "",
     "GitHub context:",
-    context.githubSummary,
-    context.feedbackSummary ? ["", "Recent feedback:", context.feedbackSummary].join("\n") : "",
+    context.contextPack ?? context.githubSummary,
+    !context.contextPack && context.feedbackSummary ? ["", "Recent feedback:", context.feedbackSummary].join("\n") : "",
     "",
     "Reviewer focus:",
     reviewerFocus(context.reviewer),
@@ -187,6 +188,7 @@ export function fixPrompt(input: {
   findings: ReviewFinding[];
   handoffPath: string;
   feedbackSummary?: string;
+  contextPack?: string;
 }): string {
   return [
     `You are fixing blocking automated review findings for ${input.issue.identifier}.`,
@@ -194,10 +196,10 @@ export function fixPrompt(input: {
     "Stay on the existing branch and update the existing pull request. Do not start a parallel implementation.",
     input.reviewTargets?.length && input.reviewTargets.length > 1 ? `PRs under review: ${input.reviewTargets.join(", ")}` : `PR: ${input.prUrl}`,
     `Iteration: ${input.iteration}`,
-    input.feedbackSummary ? ["", "Human/agent feedback to include:", input.feedbackSummary].join("\n") : "",
+    !input.contextPack && input.feedbackSummary ? ["", "Human/agent feedback to include:", input.feedbackSummary].join("\n") : "",
     "",
     "Blocking findings:",
-    JSON.stringify(input.findings, null, 2),
+    input.contextPack ?? JSON.stringify(input.findings, null, 2),
     "",
     "Responsibilities:",
     "1. Change only what is needed to address the blocking findings.",
