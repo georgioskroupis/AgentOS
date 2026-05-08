@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -123,6 +123,71 @@ describe("orchestrator", () => {
     const logs = await logger.tail(10);
     expect(logs.some((entry) => entry.type === "run_succeeded")).toBe(true);
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
+  });
+
+  it("hashes original long runner stdout artifacts written through run events", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-stdout-artifact-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move() {},
+      async comment() {}
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        input.onEvent({
+          type: "codex_stdout",
+          issueId: input.issue.id,
+          issueIdentifier: input.issue.identifier,
+          message: "line from command\n".repeat(800),
+          timestamp: "2026-05-01T00:00:00.000Z"
+        });
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const store = new RunArtifactStore(repo);
+    const [summary] = await store.listRuns();
+    const eventsJsonl = await readFile(join(repo, ".agent-os", "runs", summary.runId, "events.jsonl"), "utf8");
+    const stdoutEntry = eventsJsonl
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; message?: string })
+      .find((event) => event.type === "codex_stdout");
+    const artifact = stdoutEntry?.message?.match(/\[full redacted artifact: ([^\]\n]+)\]/)?.[1];
+    expect(artifact).toBeTruthy();
+    const artifactHashName = artifact!.replace(`.agent-os/runs/${summary.runId}/`, "");
+    const artifactText = await readFile(join(repo, artifact!), "utf8");
+
+    expect(artifactText).toContain("line from command");
+    expect(artifactText).not.toContain("full redacted artifact");
+    expect((await store.inspect(summary.runId)).summary.artifactHashes[artifactHashName]).toBeTruthy();
+    await appendFile(join(repo, artifact!), "\ntampered", "utf8");
+    expect((await store.inspect(summary.runId)).warnings).toContain(`artifact hash mismatch: ${artifactHashName}`);
+
+    await rm(join(repo, artifact!));
+    expect((await store.inspect(summary.runId)).warnings).toContain(`artifact hash mismatch: ${artifactHashName}`);
   });
 
   it("skips Todo issues blocked by nonterminal dependencies", async () => {

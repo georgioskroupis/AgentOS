@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { CodexAppServerRunner, verifyCodexAppServer } from "../src/runner/app-server.js";
-import type { Issue, ServiceConfig, Workspace } from "../src/types.js";
+import type { AgentEvent, Issue, ServiceConfig, Workspace } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
 const fixture = resolve("tests/fixtures/fake-app-server.mjs");
@@ -21,6 +21,10 @@ const nestedOrchestratorFixtureCommand = `node ${JSON.stringify(fixture)} --nest
 const nestedOrchestratorShellFixtureCommand = `node ${JSON.stringify(fixture)} --nested-orchestrator-shell`;
 const safeNestedTextSearchFixtureCommand = `node ${JSON.stringify(fixture)} --safe-nested-text-search`;
 const exitBeforeCompletionFixtureCommand = `node ${JSON.stringify(fixture)} --exit-before-completion`;
+const longRawStdoutAndStderrFixtureCommand = `node ${JSON.stringify(fixture)} --long-raw-stdout --large-stderr`;
+const ongoingRawStdoutFixtureCommand = `node ${JSON.stringify(fixture)} --ongoing-raw-stdout`;
+const largeJsonEventSplitFixtureCommand = `node ${JSON.stringify(fixture)} --large-json-event-split`;
+const oversizedJsonLikeStdoutFixtureCommand = `node ${JSON.stringify(fixture)} --oversized-json-like-stdout`;
 
 const issue: Issue = {
   id: "issue-1",
@@ -151,6 +155,109 @@ describe("CodexAppServerRunner", () => {
         onEvent() {}
       })
     ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+  });
+
+  it("bounds raw stdout without splitting large protocol events", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-stdout-capture-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, longRawStdoutAndStderrFixtureCommand);
+    const events: AgentEvent[] = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Capture command output",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push(event);
+        }
+      })
+    ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+
+    const stdoutEvents = events.filter((event) => event.type === "codex_stdout");
+    expect(stdoutEvents.length).toBeGreaterThanOrEqual(3);
+    expect(stdoutEvents.every((event) => (event.message?.length ?? 0) <= 8_000)).toBe(true);
+    expect(stdoutEvents.some((event) => (event.payload as { partial?: boolean } | undefined)?.partial)).toBe(true);
+
+    const stderrEvent = events.find((event) => event.type === "codex_stderr");
+    expect(stderrEvent?.payload).toMatchObject({ capturedChars: 510_000 });
+    expect(stderrEvent?.message?.length).toBeLessThanOrEqual(500_000);
+    expect(stderrEvent?.message).toContain("AgentOS capture omitted");
+  });
+
+  it("treats ongoing raw stdout capture as stall activity", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-stdout-stall-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, ongoingRawStdoutFixtureCommand);
+    config.codex.stallTimeoutMs = 300;
+    const events: AgentEvent[] = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Capture ongoing command output",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push(event);
+        }
+      })
+    ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+
+    expect(events.filter((event) => event.type === "codex_stdout").length).toBeGreaterThan(5);
+  });
+
+  it("parses a large JSON-RPC event split across stdout chunks", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-large-json-event-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, largeJsonEventSplitFixtureCommand);
+    const events: AgentEvent[] = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Capture large protocol event",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push(event);
+        }
+      })
+    ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+
+    const commandEvent = events.find((event) => event.type === "item/completed");
+    const payload = commandEvent?.payload as { params?: { item?: { output?: string } } } | undefined;
+    expect(payload?.params?.item?.output).toHaveLength(80_000);
+    expect(events.some((event) => event.type === "codex_stdout")).toBe(false);
+  });
+
+  it("spills oversized JSON-looking stdout lines instead of buffering them indefinitely", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-json-like-stdout-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, oversizedJsonLikeStdoutFixtureCommand);
+    const events: AgentEvent[] = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Capture oversized malformed protocol output",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push(event);
+        }
+      })
+    ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+
+    const stdoutEvents = events.filter((event) => event.type === "codex_stdout");
+    expect(stdoutEvents.length).toBeGreaterThan(5);
+    expect(stdoutEvents.every((event) => (event.message?.length ?? 0) <= 8_000)).toBe(true);
+    expect(stdoutEvents.some((event) => (event.payload as { partial?: boolean } | undefined)?.partial)).toBe(true);
   });
 
   it("uses app-server sandbox names expected by thread and turn start", async () => {

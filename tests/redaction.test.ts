@@ -35,6 +35,38 @@ describe("redaction", () => {
     expect(log).not.toContain("abcdefghijklmnopqrstuvwxyz");
   });
 
+  it("bounds repeated runner stderr and links a redacted artifact", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-bounded-log-"));
+    const logger = new JsonlLogger(repo);
+    const secret = `ghp_${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    const warning = `Plugin manifest warning Authorization: Bearer ${secret}`;
+    const repeated = Array.from({ length: 80 }, () => warning).join("\n");
+
+    await logger.write({
+      runId: "run_20260501000000_AG-1_large",
+      type: "review_codex_stderr",
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      message: repeated
+    });
+
+    const log = await readFile(join(repo, ".agent-os", "runs", "agent-os.jsonl"), "utf8");
+    const entry = JSON.parse(log.trim()) as { message: string };
+    const artifact = entry.message.match(/full redacted artifact: ([^\]]+)/)?.[1];
+
+    expect(log.trim().length).toBeLessThan(5_000);
+    expect(entry.message).toContain("repeated 80x");
+    expect(entry.message).toContain("duplicate line(s) summarized");
+    expect(entry.message).toContain("full redacted artifact");
+    expect(log).not.toContain(secret);
+    expect(artifact).toBeTruthy();
+
+    const artifactText = await readFile(join(repo, artifact!), "utf8");
+    expect(artifactText).toContain("[REDACTED]");
+    expect(artifactText).not.toContain(secret);
+    expect(artifactText.match(/Plugin manifest warning/g)).toHaveLength(80);
+  });
+
   it("redacts lifecycle comments before sending them to Linear", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-redaction-comment-"));
     const workflowPath = join(repo, "WORKFLOW.md");

@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
+import { BoundedTextAccumulator, summarizeText } from "../output-capture.js";
 import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js";
 
 interface PendingRequest {
@@ -7,6 +8,9 @@ interface PendingRequest {
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 }
+
+const RUNNER_STDOUT_FLUSH_CHARS = 8_000;
+const RUNNER_PROTOCOL_LINE_MAX_CHARS = 1_000_000;
 
 export async function verifyCodexAppServer(command = DEFAULT_CODEX_APP_SERVER_COMMAND): Promise<{ ok: boolean; details: string }> {
   const output = await captureShell(`${command} --help`, 5_000).catch((error: Error) => error.message);
@@ -32,7 +36,8 @@ export class CodexAppServerRunner implements AgentRunner {
     const pending = new Map<number, PendingRequest>();
     let id = 1;
     let stdoutBuffer = "";
-    let stderr = "";
+    let stdoutRawLine = false;
+    const stderr = new BoundedTextAccumulator();
     let threadId: string | undefined;
     let turnId: string | undefined;
     let inputTokens: number | undefined;
@@ -73,6 +78,49 @@ export class CodexAppServerRunner implements AgentRunner {
       else bufferedTurnError = bufferedTurnError ?? error;
     };
 
+    const emitStdout = (message: string, payload: Record<string, unknown> = {}) => {
+      lastEventAt = Date.now();
+      input.onEvent({
+        type: "codex_stdout",
+        issueId: input.issue.id,
+        issueIdentifier: input.issue.identifier,
+        message,
+        payload,
+        timestamp: new Date().toISOString()
+      });
+    };
+
+    const emitRawStdout = (message: string, payload: Record<string, unknown> = {}) => {
+      if (message.length <= RUNNER_STDOUT_FLUSH_CHARS) {
+        emitStdout(message, payload);
+        return;
+      }
+      let remaining = message;
+      while (remaining.length > RUNNER_STDOUT_FLUSH_CHARS) {
+        emitStdout(remaining.slice(0, RUNNER_STDOUT_FLUSH_CHARS), { ...payload, partial: true });
+        remaining = remaining.slice(RUNNER_STDOUT_FLUSH_CHARS);
+      }
+      if (remaining) emitStdout(remaining, payload);
+    };
+
+    const flushLongRawStdout = () => {
+      if (stdoutBuffer.includes("\n")) return;
+      if (!stdoutRawLine && mayBeJsonRpcLine(stdoutBuffer) && stdoutBuffer.length <= RUNNER_PROTOCOL_LINE_MAX_CHARS) return;
+      stdoutRawLine = true;
+      while (stdoutBuffer.length > RUNNER_STDOUT_FLUSH_CHARS && !stdoutBuffer.includes("\n")) {
+        const partial = stdoutBuffer.slice(0, RUNNER_STDOUT_FLUSH_CHARS);
+        stdoutBuffer = stdoutBuffer.slice(RUNNER_STDOUT_FLUSH_CHARS);
+        emitStdout(partial, { partial: true });
+      }
+    };
+
+    const flushStdoutRemainder = () => {
+      const line = stdoutBuffer.trim();
+      stdoutBuffer = "";
+      stdoutRawLine = false;
+      if (line) emitRawStdout(line, { partial: true });
+    };
+
     child.on("error", (error) => {
       failAppServer(error);
     });
@@ -80,20 +128,22 @@ export class CodexAppServerRunner implements AgentRunner {
     child.on("close", (code, signal) => {
       if (ignoreChildClose || turnFinished) return;
       const reason = signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`;
-      const details = stderr.trim() ? `: ${stderr.trim().slice(-500)}` : "";
+      const details = stderr.length > 0 ? `: ${summarizeText(stderr.tailText(500), 500).inline}` : "";
       failAppServer(new Error(`codex_app_server_closed: ${reason}${details}`));
     });
 
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      stderr.append(chunk);
     });
 
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk.toString();
+      flushLongRawStdout();
       let newline = stdoutBuffer.indexOf("\n");
       while (newline >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
         stdoutBuffer = stdoutBuffer.slice(newline + 1);
+        stdoutRawLine = false;
         newline = stdoutBuffer.indexOf("\n");
         if (!line) continue;
         try {
@@ -179,15 +229,10 @@ export class CodexAppServerRunner implements AgentRunner {
             }
           }
         } catch {
-          input.onEvent({
-            type: "codex_stdout",
-            issueId: input.issue.id,
-            issueIdentifier: input.issue.identifier,
-            message: line,
-            timestamp: new Date().toISOString()
-          });
+          emitRawStdout(line);
         }
       }
+      flushLongRawStdout();
     });
 
     const stallTimer = setInterval(() => {
@@ -249,6 +294,7 @@ export class CodexAppServerRunner implements AgentRunner {
       ignoreChildClose = true;
       child.kill("SIGTERM");
       const status = completion.params?.turn?.status;
+      const completionError = completion.params?.turn?.error?.message;
       return {
         status: status === "completed" ? "succeeded" : status === "interrupted" ? "canceled" : "failed",
         threadId,
@@ -257,7 +303,7 @@ export class CodexAppServerRunner implements AgentRunner {
         outputTokens,
         totalTokens,
         rateLimits,
-        error: completion.params?.turn?.error?.message
+        error: completionError ? summarizeText(String(completionError)).inline : undefined
       };
     } catch (error) {
       clearInterval(stallTimer);
@@ -272,19 +318,22 @@ export class CodexAppServerRunner implements AgentRunner {
         outputTokens,
         totalTokens,
         rateLimits,
-        error: error instanceof Error ? error.message : String(error)
+        error: summarizeText(error instanceof Error ? error.message : String(error)).inline
       };
     } finally {
+      flushStdoutRemainder();
       for (const request of pending.values()) {
         clearTimeout(request.timer);
         request.reject(new Error("codex_app_server_closed"));
       }
-      if (stderr.trim()) {
+      const stderrText = stderr.text().trim();
+      if (stderrText) {
         input.onEvent({
           type: "codex_stderr",
           issueId: input.issue.id,
           issueIdentifier: input.issue.identifier,
-          message: stderr.trim().slice(-2000),
+          message: stderrText,
+          payload: { capturedChars: stderr.length },
           timestamp: new Date().toISOString()
         });
       }
@@ -306,6 +355,11 @@ function runnerStatusForError(error: unknown): AgentRunResult["status"] {
   if (message.includes("codex_turn_timeout") || message.includes("codex_read_timeout")) return "timed_out";
   if (message.includes("canceled")) return "canceled";
   return "failed";
+}
+
+function mayBeJsonRpcLine(value: string): boolean {
+  const trimmed = value.trimStart();
+  return trimmed.length === 0 || trimmed.startsWith("{") || trimmed.startsWith("[");
 }
 
 function tokenMetricsFrom(message: Record<string, any>): { input?: number; output?: number; total?: number } | null {

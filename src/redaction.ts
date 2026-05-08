@@ -25,12 +25,22 @@ export function redactText(input: string, env: NodeJS.ProcessEnv = process.env, 
 }
 
 export function redactValue<T>(value: T, env: NodeJS.ProcessEnv = process.env, extraPatterns: RegExp[] = []): T {
-  if (typeof value === "string") return redactText(value, env, extraPatterns) as T;
-  if (Array.isArray(value)) return value.map((item) => redactValue(item, env, extraPatterns)) as T;
+  return redactValueInner(value, env, extraPatterns, new WeakSet<object>()) as T;
+}
+
+function redactValueInner(value: unknown, env: NodeJS.ProcessEnv, extraPatterns: RegExp[], seen: WeakSet<object>): unknown {
+  if (typeof value === "string") return redactText(value, env, extraPatterns);
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+    return value.map((item) => redactValueInner(item, env, extraPatterns, seen));
+  }
   if (!value || typeof value !== "object") return value;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    out[key] = redactValue(item, env, extraPatterns);
+    out[key] = redactValueInner(item, env, extraPatterns, seen);
   }
-  return out as T;
+  return out;
 }

@@ -136,6 +136,70 @@ rl.on("line", (line) => {
     if (process.argv.includes("--exit-before-completion")) {
       process.exit(42);
     }
+    const complete = () => {
+      write({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed" }
+        }
+      });
+    };
+    if (process.argv.includes("--large-stderr")) {
+      process.stderr.write("E".repeat(510_000));
+    }
+    if (process.argv.includes("--long-raw-stdout")) {
+      process.stdout.write("R".repeat(20_500));
+      setTimeout(() => {
+        process.stdout.write("\n");
+        complete();
+      }, 10);
+      return;
+    }
+    if (process.argv.includes("--ongoing-raw-stdout")) {
+      let writes = 0;
+      const timer = setInterval(() => {
+        writes += 1;
+        process.stdout.write("R".repeat(8_500));
+        if (writes >= 12) {
+          clearInterval(timer);
+          process.stdout.write("\n");
+          complete();
+        }
+      }, 100);
+      return;
+    }
+    if (process.argv.includes("--large-json-event-split")) {
+      const event = JSON.stringify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            command: "printf large-output",
+            status: "completed",
+            exitCode: 0,
+            output: "O".repeat(80_000)
+          }
+        }
+      });
+      process.stdout.write(event.slice(0, 70_000));
+      setTimeout(() => {
+        process.stdout.write(`${event.slice(70_000)}\n`);
+        complete();
+      }, 10);
+      return;
+    }
+    if (process.argv.includes("--oversized-json-like-stdout")) {
+      const raw = `{${"J".repeat(1_010_000)}`;
+      process.stdout.write(raw.slice(0, 1_005_000));
+      setTimeout(() => {
+        process.stdout.write(`${raw.slice(1_005_000)}\n`);
+        complete();
+      }, 10);
+      return;
+    }
     write({
       method: "thread/tokenUsage/updated",
       params: {
@@ -155,15 +219,6 @@ rl.on("line", (line) => {
         }
       }
     });
-    const complete = () => {
-      write({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "turn-1", status: "completed" }
-        }
-      });
-    };
     if (process.argv.includes("--instant")) complete();
     else setTimeout(complete, 10);
   } else if (message.method === "turn/interrupt") {

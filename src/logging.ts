@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { appendFile, readFile } from "node:fs/promises";
 import { ensureDir, exists } from "./fs-utils.js";
-import { redactValue } from "./redaction.js";
+import { boundEventForJsonl, parseAgentEventsFromJsonl, safeJsonStringify } from "./output-capture.js";
 import type { AgentEvent } from "./types.js";
 
 export interface AgentOSLogEntry extends AgentEvent {
@@ -11,7 +11,7 @@ export interface AgentOSLogEntry extends AgentEvent {
 export class JsonlLogger {
   readonly logPath: string;
 
-  constructor(repoRoot: string) {
+  constructor(private readonly repoRoot: string) {
     this.logPath = join(repoRoot, ".agent-os", "runs", "agent-os.jsonl");
   }
 
@@ -21,13 +21,16 @@ export class JsonlLogger {
       timestamp: entry.timestamp ?? new Date().toISOString(),
       ...entry
     };
-    await appendFile(this.logPath, `${JSON.stringify(redactValue(payload))}\n`, "utf8");
-    return payload;
+    const bounded = await boundEventForJsonl(payload, {
+      repoRoot: this.repoRoot,
+      runId: payload.runId
+    });
+    await appendFile(this.logPath, `${safeJsonStringify(bounded)}\n`, "utf8");
+    return bounded;
   }
 
   async tail(limit = 20): Promise<AgentOSLogEntry[]> {
     if (!(await exists(this.logPath))) return [];
-    const lines = (await readFile(this.logPath, "utf8")).trim().split("\n").filter(Boolean);
-    return lines.slice(-limit).map((line) => JSON.parse(line) as AgentOSLogEntry);
+    return parseAgentEventsFromJsonl(await readFile(this.logPath, "utf8")).slice(-limit) as AgentOSLogEntry[];
   }
 }
