@@ -374,9 +374,32 @@ describe("issue inspection", () => {
       ),
       "utf8"
     );
+    await new RuntimeStateStore(repo).upsertRetry({
+      issueId: "issue-3",
+      identifier: "AG-3",
+      issue: {
+        id: "issue-3",
+        identifier: "AG-3",
+        title: "Terminal drift",
+        description: null,
+        priority: 1,
+        state: "Done",
+        branch_name: null,
+        url: null,
+        labels: [],
+        blocked_by: [],
+        created_at: null,
+        updated_at: null
+      },
+      attempt: 3,
+      dueAt: "2026-05-05T00:30:00.000Z",
+      error: "stale retry queue",
+      scheduledAt: "2026-05-05T00:15:00.000Z"
+    });
 
     const registryOutput = await getRegistryStatus(registryPath);
     expect(registryOutput).toContain("AG-3: status warning - contradictory terminal state: terminal issue still has reviewStatus human_required");
+    expect(registryOutput).not.toContain("AG-3: retrying after stale retry queue");
 
     const inspectOutput = await inspectIssue(repo, "AG-3");
     expect(inspectOutput).toContain("Status warnings:");
@@ -390,7 +413,7 @@ describe("issue inspection", () => {
     expect(inspectOutput).not.toContain("record `AgentOS-Human-Decision: fix-findings`");
   });
 
-  it("reports completed local state contradictions even without explicit terminal metadata", async () => {
+  it("keeps completed local handoffs on the non-terminal status path without explicit terminal evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-completed-local-"));
     const repo = join(root, "alpha");
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -441,18 +464,17 @@ describe("issue inspection", () => {
     );
 
     const registryOutput = await getRegistryStatus(registryPath);
-    expect(registryOutput).toContain("AG-4: status warning - contradictory terminal state: terminal issue still has reviewStatus human_required");
+    expect(registryOutput).toContain("AG-4: waiting on Human Review - codex_stall_timeout");
+    expect(registryOutput).not.toContain("AG-4: status warning");
 
     const output = await inspectIssue(repo, "AG-4");
 
-    expect(output).toContain("Status warnings:");
-    expect(output).toContain("contradictory terminal state: terminal issue still has reviewStatus human_required");
-    expect(output).toContain("stale error metadata remains (stall) - codex_stall_timeout");
-    expect(output).toContain("stale validation/CI head SHA old-ci-sha differs from recorded head new-head-sha");
-    expect(output).toContain("terminal issue still records GitHub CI as failed");
-    expect(output).toContain("missing terminal workspace warning");
-    expect(output).toContain("Next safe action: verify the terminal PR/Linear evidence");
-    expect(output).not.toContain("record `AgentOS-Human-Decision: fix-findings`");
+    expect(output).toContain("Status warnings: none");
+    expect(output).toContain("Next safe action: record `AgentOS-Human-Decision: fix-findings`");
+    expect(output).not.toContain("contradictory terminal state");
+    expect(output).not.toContain("stale validation/CI head SHA old-ci-sha");
+    expect(output).not.toContain("terminal issue still records GitHub CI as failed");
+    expect(output).not.toContain("missing terminal workspace warning");
   });
 
   it("does not warn when clean post-merge cleanup removed the recorded workspace", async () => {

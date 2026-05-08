@@ -6,7 +6,7 @@ import { IssueStateStore, latestHumanDecision, normalizeIssueState, pullRequestU
 import { JsonlLogger } from "./logging.js";
 import { loadRegistry, RegistryStateStore, resolveRegistryProjectPaths, type RegistryProjectSummary } from "./registry.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
-import { RuntimeStateStore } from "./runtime-state.js";
+import { RuntimeStateStore, type RuntimeRetryEntry } from "./runtime-state.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
 
@@ -206,9 +206,9 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   const runtimeActive = runtime.activeRuns.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
   if (runtimeActive) return `running (${runtimeActive.phase ?? issue.phase ?? "active"})`;
   const retry = runtime.retryQueue.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
-  if (retry) return `retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`;
-  const statusDiagnostics = issueStatusDiagnostics(issue, recovery);
+  const statusDiagnostics = issueStatusDiagnostics(issue, recovery, retry ?? null);
   if (statusDiagnostics.length) return `status warning - ${statusDiagnostics[0].message}; next: ${statusDiagnostics[0].nextAction}`;
+  if (retry) return `retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`;
   if (recovery?.recoverable) return `recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`;
   const terminalStatus = cleanTerminalStatusLine(issue);
   if (terminalStatus) return terminalStatus;
@@ -283,7 +283,7 @@ const TERMINAL_LIFECYCLE_STATUSES = new Set<NonNullable<IssueState["lifecycleSta
   "terminal_missing_workspace"
 ]);
 
-function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null): IssueStatusDiagnostic[] {
+function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null, retry: RuntimeRetryEntry | null = null): IssueStatusDiagnostic[] {
   const diagnostics: IssueStatusDiagnostic[] = [];
   const terminal = isTerminalIssueState(issue);
   if (terminal && issue.reviewStatus === "human_required") {
@@ -311,9 +311,11 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
       nextAction: "verify the selected PR's latest checks before treating the terminal state as clean"
     });
   }
-  if (terminal && (issue.nextRetryAt || issue.retryAttempt != null)) {
+  if (terminal && (issue.nextRetryAt || issue.retryAttempt != null || retry)) {
+    const retryDueAt = issue.nextRetryAt ?? retry?.dueAt;
+    const retrySource = issue.nextRetryAt || issue.retryAttempt != null ? "retry metadata" : "retry queue entry";
     diagnostics.push({
-      message: `merge/retry drift: terminal issue still has retry metadata${issue.nextRetryAt ? ` for ${issue.nextRetryAt}` : ""}`,
+      message: `merge/retry drift: terminal issue still has ${retrySource}${retryDueAt ? ` for ${retryDueAt}` : ""}`,
       nextAction: terminalReconciliationAction()
     });
   }
@@ -344,7 +346,7 @@ function formatIssueStatusDiagnostic(diagnostic: IssueStatusDiagnostic): string 
 }
 
 function isTerminalIssueState(issue: IssueState): boolean {
-  return issue.phase === "completed" || isAuthoritativeTerminalIssueState(issue);
+  return isAuthoritativeTerminalIssueState(issue);
 }
 
 function isAuthoritativeTerminalIssueState(issue: IssueState): boolean {

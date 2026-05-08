@@ -274,7 +274,10 @@ describe("run artifacts", () => {
 
     const inspected = await new RunArtifactStore(repo).inspect(runId);
     expect(inspected.summary.timing).toBeUndefined();
-    expect(formatRunInspect(inspected)).toContain("Status: succeeded");
+    const output = formatRunInspect(inspected);
+    expect(output).toContain("Status: succeeded");
+    expect(output).toContain("Cycle time: no phase timing recorded");
+    expect(output).toContain("SLO diagnostics: unavailable");
     expect(await new RunArtifactStore(repo).listRuns()).toHaveLength(1);
   });
 
