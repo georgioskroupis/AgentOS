@@ -64,6 +64,10 @@ Use this as a lightweight rubric for harnessed repositories.
   blocking findings create focused fixer turns, review artifacts are persisted,
   and repeated or unresolved findings escalate with `reviewStatus:
   human_required`.
+- Implementation re-entry, automated review, fixer, and mechanical CI repair
+  turns receive targeted context packs with bounded issue text, selected PR
+  metadata, diff excerpts, current findings, validation summaries, sanitized
+  logs, and artifact references instead of historic transcripts.
 - GitHub CI exists and the merge shepherd requires at least one successful check
   before merging the selected primary target and moving `Merging` issues to
   `Done`; post-merge cleanup failures are operator-visible warnings, not

@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPreflightResult, type RepoEnvLoadResult } from "./env.js";
-import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback, summarizePullRequestForPrompt } from "./github.js";
+import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback } from "./github.js";
+import { readGitHubReviewContext } from "./github-context.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
 import {
   extractPullRequestUrls,
@@ -24,6 +25,7 @@ import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
 import { summarizeText } from "./output-capture.js";
 import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
+import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequestRefsForUrls } from "./context-pack.js";
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
@@ -1103,9 +1105,11 @@ export class Orchestrator {
       `Validation evidence path: .agent-os/validation/${issue.identifier}.json`,
       "Include this run ID and the current `git rev-parse HEAD` value in the validation evidence JSON."
     ].join("\n");
-    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
+    const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
+    const state = await stateStore.read(issue.identifier);
     const existingAudit = existingImplementationAuditContext(state);
     const linearReentry = await this.linearReentryContext(issue, state);
+    const latestState = (await stateStore.read(issue.identifier)) ?? state;
     const continuation = turnNumber > 1
       ? [
           "",
@@ -1115,13 +1119,26 @@ export class Orchestrator {
           "Continue the same issue in this workspace and write the required `.agent-os/handoff-<issue>.md` before finishing."
         ].join("\n")
       : "";
-    const existingPr = primaryPullRequestUrl(state);
-    if (!existingPr || issue.state.toLowerCase() !== "todo") return `${base}${runContext}${existingAudit}${linearReentry}${continuation}`;
+    const existingPr = primaryPullRequestUrl(latestState);
+    let feedback: string | null = null;
+    let pullRequests = existingPr ? pullRequestContextEntriesForUrls(latestState, [existingPr]) : [];
+    if (existingPr && issue.state.toLowerCase() === "todo") {
+      const githubContext = await readGitHubReviewContext(pullRequestRefsForUrls(latestState, [existingPr]), { githubCommand: this.config.github.command, repoRoot: this.options.repoRoot }).catch(() => null);
+      if (githubContext) {
+        pullRequests = githubContext.entries;
+        feedback = githubContext.feedback || null;
+      } else {
+        feedback = await this.githubFeedbackSummary(existingPr).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
+      }
+    }
+    const contextPack = buildTargetedContextPack({ kind: "implementation-reentry", issue, state: latestState, pullRequests, validation: latestState?.validation, findings: latestState?.findings, feedback, runId });
+    if (!existingPr || issue.state.toLowerCase() !== "todo") return `${base}${runContext}\n\n${contextPack}${existingAudit}${linearReentry}${continuation}`;
 
-    const feedback = await this.githubFeedbackSummary(existingPr).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
     return [
       base,
       runContext,
+      "",
+      contextPack,
       existingAudit,
       linearReentry,
       continuation,
@@ -1403,7 +1420,7 @@ export class Orchestrator {
       const reviewTargetUrls = reviewTargets.map((target) => target.url);
       const reviewTargetList = formatPullRequestTargets(reviewTargets);
       const workspaceReviewDir = await ensureReviewIterationDir(workspace.path, issue.identifier, iteration);
-      const githubContext = await this.githubReviewContext(reviewTargets).catch(async (error: Error) => {
+      const githubContext = await readGitHubReviewContext(reviewTargets, { githubCommand: this.config.github.command, repoRoot: this.options.repoRoot }).catch(async (error: Error) => {
         latestState = await this.recordIssueState(issue, {
           phase: "review",
           reviewStatus: "human_required",
@@ -1459,7 +1476,8 @@ export class Orchestrator {
           reviewer,
           artifactPath: artifactRelativePath,
           githubSummary: githubContext.summary,
-          feedbackSummary: githubContext.feedback
+          feedbackSummary: githubContext.feedback,
+          contextPack: buildTargetedContextPack({ kind: "reviewer", issue, state: latestState, pullRequests: githubContext.entries, findings: previousFindings, validation: latestState?.validation, feedback: githubContext.feedback, artifactRefs: [artifactRelativePath], runId, reviewer, iteration })
         });
         const result = await this.runner.run({
           issue,
@@ -1623,6 +1641,7 @@ export class Orchestrator {
       const fixTiming = runId ? await this.startRunPhase(runId, issue, "fixer-turn", `fixer turn ${iteration}`, { iteration, blockingFindings: blocking.length }) : null;
       let fixResult: AgentRunResult;
       try {
+        const fixContextKind = blocking.some((finding) => finding.reviewer === "checks") ? "ci-repair" : "fixer";
         fixResult = await this.runner.run({
           issue,
           prompt: fixPrompt({
@@ -1632,7 +1651,8 @@ export class Orchestrator {
             iteration,
             findings: blocking,
             handoffPath: join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
-            feedbackSummary: githubContext.feedback
+            feedbackSummary: githubContext.feedback,
+            contextPack: buildTargetedContextPack({ kind: fixContextKind, issue, state: latestState, pullRequests: githubContext.entries, findings: blocking, validation: latestState?.validation, feedback: githubContext.feedback, artifactRefs: [join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`)], runId, iteration })
           }),
           attempt,
           workspace,
@@ -1758,37 +1778,6 @@ export class Orchestrator {
       if (!reviewers.includes(reviewer)) reviewers.push(reviewer);
     }
     return reviewers;
-  }
-
-  private async githubReviewContext(targets: PullRequestRef[]): Promise<{
-    entries: Array<{
-      target: PullRequestRef;
-      status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>;
-      checkDiagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>>;
-    }>;
-    summary: string;
-    feedback: string;
-  }> {
-    const github = new GitHubClient(this.config.github.command);
-    const cwd = resolve(this.options.repoRoot);
-    const entries = [];
-    const summaries: string[] = [];
-    const feedback: string[] = [];
-    for (const target of targets) {
-      const status = await github.getPullRequest(target.url, cwd);
-      const checkDiagnostics = await github.getFailingCheckDiagnostics(status, cwd);
-      const diff = await github.getPullRequestDiff(target.url, cwd).catch((error: Error) => `Could not fetch diff: ${error.message}`);
-      const threads = await github.getPullRequestReviewThreads(target.url, cwd).catch(() => []);
-      entries.push({ target, status, checkDiagnostics });
-      summaries.push([`## PR ${target.url}`, `Role: ${target.role ?? "supporting"}`, summarizePullRequestForPrompt(status, diff, threads, checkDiagnostics)].join("\n"));
-      const targetFeedback = summarizeFeedback(status, threads);
-      if (targetFeedback) feedback.push([`## PR ${target.url}`, targetFeedback].join("\n"));
-    }
-    return {
-      entries,
-      summary: summaries.join("\n\n---\n\n"),
-      feedback: feedback.join("\n\n---\n\n")
-    };
   }
 
   private async shepherdMergeIssue(issue: Issue): Promise<void> {

@@ -23,6 +23,8 @@ layers:
   hybrid and experimental agent-owned modes.
 - `src/github.ts` shells through `gh` for PR status and squash merge.
 - `src/issue-state.ts` stores durable per-issue PR metadata.
+- `src/context-pack.ts` builds targeted prompt context packs for
+  implementation re-entry, reviewer turns, fixer turns, and CI repair turns.
 - `src/runtime-state.ts` stores durable active-run, retry-queue, claimed-issue,
   daemon freshness, and startup recovery state.
 - `src/workspace.ts` creates deterministic per-issue workspaces.
@@ -66,6 +68,7 @@ templates/profiles contains profile-specific additions for api, web, python, and
 skills contains reusable agent workflows for planning, implementation, bug fixing, PR review, CI diagnostics, QA smoke validation, docs, tests, and cleanup.
 src/linear.ts integrates with Linear GraphQL.
 src/github.ts shells through gh for PR status and squash merge workflows.
+src/context-pack.ts builds bounded implementation, review, fix, and CI-repair prompt packs from issue text, authoritative decisions, selected PR metadata, diffs, findings, validation, and sanitized logs.
 src/runtime-state.ts persists active-run, retry-queue, claimed-issue, daemon freshness, and startup recovery state.
 src/runner/app-server.ts targets Codex App Server through JSON-RPC.
 src/orchestrator.ts schedules Linear issues, runs Codex agents, reconciles state, records events, runs automated review, and shepherds merges.

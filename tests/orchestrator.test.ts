@@ -94,6 +94,7 @@ describe("orchestrator", () => {
     expect(prompt).toContain("Do AG-1");
     expect(prompt).toContain("## AgentOS Run Context");
     expect(prompt).toContain("Validation evidence path: .agent-os/validation/AG-1.json");
+    expect(prompt).toContain("Pack kind: implementation-reentry");
     const [summary] = await new RunArtifactStore(repo).listRuns();
     expect(summary.timing?.phases.map((phase) => phase.phase)).toEqual(expect.arrayContaining(["implementation", "validation"]));
     expect(summary.timing?.phases.find((phase) => phase.phase === "implementation")).toEqual(
@@ -3637,6 +3638,7 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("automated review approved");
     expect(comments.join("\n")).toContain("Review target mode: merge-eligible");
     expect(reviewPrompts[0]).toContain("https://github.com/o/r/pull/1, https://github.com/o/r/pull/2");
+    expect(reviewPrompts[0]).toContain("Pack kind: reviewer");
     expect(reviewPrompts[0]).not.toContain("https://github.com/o/r/pull/3");
     expect(reviewArtifactPrompts).toHaveLength(4);
     expect(reviewArtifactPrompts.every((path) => path.startsWith(join(".agent-os", "reviews", "AG-1", "iteration-1")))).toBe(true);
@@ -4215,6 +4217,7 @@ describe("orchestrator", () => {
 
     expect(fixRuns).toBe(1);
     expect(fixPromptText).toContain("AgentOS CI");
+    expect(fixPromptText).toContain("Pack kind: ci-repair");
     expect(fixPromptText).toContain("TS2304");
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.reviewStatus).toBe("approved");
