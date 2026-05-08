@@ -333,6 +333,12 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
       nextAction: "explain the missing workspace from run artifacts before redispatching or cleaning durable state"
     });
   }
+  if (terminal && recovery?.recoverable) {
+    diagnostics.push({
+      message: `terminal workspace drift: terminal issue still points to recoverable workspace ${recovery.workspacePath} (${recovery.reasons.join("; ")})`,
+      nextAction: terminalReconciliationAction()
+    });
+  }
   const cleanupDrift = cleanupDriftWarning(issue);
   if (cleanupDrift) {
     diagnostics.push({
@@ -349,6 +355,7 @@ function findRuntimeRetry(retryQueue: RuntimeRetryEntry[], issue: Pick<IssueStat
 
 function shouldFormatRecoveryDiagnostics(issue: IssueState | null, recovery: WorkspaceRecoveryDiagnostics | null): recovery is WorkspaceRecoveryDiagnostics {
   if (!recovery) return false;
+  if (issue && isTerminalIssueState(issue) && recovery.recoverable) return false;
   if (issue && !recovery.exists && isExpectedPostMergeWorkspaceCleanup(issue) && !hasTerminalWorkspaceWarning(issue)) return false;
   return true;
 }

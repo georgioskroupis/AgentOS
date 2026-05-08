@@ -315,6 +315,80 @@ describe("issue inspection", () => {
     expect(output).toContain(`Next safe action: resume ${workspace}`);
   });
 
+  it("reports recoverable terminal workspace drift as a read-only status warning", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-workspace-drift-"));
+    const repo = join(root, "alpha");
+    const workspace = join(repo, ".agent-os", "workspaces", "AG-8");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await run("git", ["init", "-b", "agent/AG-8"], workspace);
+    await run("git", ["config", "user.email", "agentos@example.test"], workspace);
+    await run("git", ["config", "user.name", "AgentOS Test"], workspace);
+    await writeFile(join(workspace, "README.md"), "initial\n", "utf8");
+    await run("git", ["add", "README.md"], workspace);
+    await run("git", ["commit", "-m", "initial"], workspace);
+    await writeFile(join(workspace, "README.md"), "dirty terminal drift\n", "utf8");
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-8.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-8",
+          issueIdentifier: "AG-8",
+          phase: "completed",
+          lifecycleStatus: "terminal_linear",
+          terminalState: "Done",
+          terminalAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          workspacePath: ".agent-os/workspaces/AG-8",
+          headSha: "recorded-head",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "recorded-head", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-8: status warning - terminal workspace drift:");
+    expect(registryOutput).toContain("workspace has uncommitted changes");
+    expect(registryOutput).not.toContain("AG-8: recoverable partial work");
+
+    const inspectOutput = await inspectIssue(repo, "AG-8");
+    expect(inspectOutput).toContain("Status warnings:");
+    expect(inspectOutput).toContain("terminal workspace drift: terminal issue still points to recoverable workspace");
+    expect(inspectOutput).toContain("workspace has uncommitted changes");
+    expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(inspectOutput).not.toContain(`Next safe action: resume ${workspace}`);
+    expect(inspectOutput).not.toContain("Workspace recovery: recoverable partial work");
+  });
+
   it("reports terminal-state contradictions and post-merge cleanup drift as status warnings", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-drift-"));
     const repo = join(root, "alpha");
