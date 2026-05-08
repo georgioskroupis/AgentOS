@@ -94,20 +94,21 @@ Runs one Symphony-style scheduling pass:
 
 1. read `WORKFLOW.md`
 2. fetch paginated eligible Linear issues
-3. create deterministic workspaces
-4. render strict prompts
-5. start Codex App Server runs
-6. move/comment on Linear for start, retry, failure, and review handoff
-7. persist implementation outcome and optional PR metadata from handoff notes
-8. verify referenced validation evidence before any review handoff
-9. fail/retry dead Codex App Server turns, missing handoffs, and failed
+3. emit read-only pre-dispatch scope reports for active candidates
+4. create deterministic workspaces
+5. render strict prompts
+6. start Codex App Server runs
+7. move/comment on Linear for start, retry, failure, and review handoff
+8. persist implementation outcome and optional PR metadata from handoff notes
+9. verify referenced validation evidence before any review handoff
+10. fail/retry dead Codex App Server turns, missing handoffs, and failed
    validation instead of silently parking them in review
-10. run the Ralph Wiggum review/fix loop for PR-producing issues before
+11. run the Ralph Wiggum review/fix loop for PR-producing issues before
    `Human Review`
-11. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
-12. track durable retries, stale runtime reconstruction, unchanged successful
+12. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
+13. track durable retries, stale runtime reconstruction, unchanged successful
     issues, startup cleanup, and reconciliation
-13. write `.agent-os/runs/agent-os.jsonl` and per-run artifacts
+14. write `.agent-os/runs/agent-os.jsonl` and per-run artifacts
 
 Registry-wide one-shot mode reads `agent-os.yml`, applies global and
 per-project concurrency, and fairly gives each registered project a chance to
@@ -149,6 +150,10 @@ bin/agent-os inspect VER-28 --repo <repo>
 runtime, issue state, and recent run logs. It reports project-level config,
 capacity, transient tracker/network errors, daemon freshness, retry/review/CI
 wait states, and local validation timing splits when evidence records them.
+Pre-dispatch scope reports classify candidate issues as already satisfied,
+partially satisfied, missing, or unclear; estimate touched subsystems, docs/tests
+impact, PR likelihood, review risk, and likely-large scope; and include runtime,
+run, workspace, PR, validation, and handoff evidence without blocking dispatch.
 `status` and `inspect` also report recoverable partial work such as dirty
 workspaces, unpushed branch heads, stale PR heads, and CI evidence recorded for
 a different local head, including a next safe action for the operator. Terminal

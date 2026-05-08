@@ -126,6 +126,65 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
   });
 
+  it("emits a pre-dispatch scope report without blocking broad missing work", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-scope-report-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const broadIssue: Issue = {
+      ...readyIssue,
+      title: "Add orchestration report across Linear GitHub runtime validation docs and workspaces",
+      description: [
+        "Roadmap item for broad orchestrator observability.",
+        "- Audit Linear lifecycle state.",
+        "- Inspect GitHub pull request state.",
+        "- Read runtime state and run events.",
+        "- Include validation and handoff evidence.",
+        "- Estimate docs and tests impact.",
+        "- Surface workspace recovery and branch state."
+      ].join("\n")
+    };
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [broadIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[broadIssue.id, broadIssue]]);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          runnerCalled = true;
+          await writePassingHandoff(input.workspace.path, broadIssue.identifier, input.prompt, "AgentOS-Outcome: already-satisfied");
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const reportEvent = (await logger.tail(50)).find((entry) => entry.type === "pre_dispatch_scope_report");
+    const report = reportEvent?.payload as { implementationStatus?: string; scopeSize?: string; likelyLarge?: boolean; dispatchAdvice?: { shouldBlock?: boolean } } | undefined;
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(true);
+    expect(report).toMatchObject({
+      implementationStatus: "missing",
+      scopeSize: "large",
+      likelyLarge: true,
+      dispatchAdvice: { shouldBlock: false }
+    });
+  });
+
   it("hashes original long runner stdout artifacts written through run events", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-stdout-artifact-"));
     const workflowPath = join(repo, "WORKFLOW.md");

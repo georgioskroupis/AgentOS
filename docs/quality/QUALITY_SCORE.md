@@ -39,7 +39,9 @@ Use this as a lightweight rubric for harnessed repositories.
 - `agent-os codex-doctor` reports App Server support.
 - `agent-os orchestrator once --repo <repo> --workflow WORKFLOW.md` can dispatch
   an eligible issue into a deterministic workspace, post Linear progress, and
-  move the issue to review after handoff.
+  move the issue to review after handoff. Before dispatch, it emits a read-only
+  scope report for active candidates without creating child issues or blocking
+  dispatch.
 - `scripts/agent-linear-comment.sh`, `scripts/agent-linear-move.sh`,
   `scripts/agent-linear-pr.sh`, and `scripts/agent-linear-handoff.sh` provide
   deterministic agent-owned tracker writes for configured `hybrid` or

@@ -47,6 +47,7 @@ import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
+import { logPreDispatchScopeReport } from "./scope-report.js";
 import { trustCapabilities } from "./trust.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
@@ -615,6 +616,7 @@ export class Orchestrator {
     }
     let state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
     state = await this.ingestHumanDecisions(latest, state);
+    await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, logger: this.logger });
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
       return null;
     }
