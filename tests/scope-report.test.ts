@@ -148,6 +148,27 @@ describe("pre-dispatch scope report", () => {
     expect(report.dispatchAdvice.shouldBlock).toBe(false);
   });
 
+  it("classifies repo-root handoff evidence as partial work", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-root-handoff-"));
+    const issue = fakeIssue({
+      identifier: "AG-6",
+      title: "Resume existing handoff",
+      description: "Acceptance criteria:\n- Reuse existing handoff evidence."
+    });
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    await writeFile(join(repo, ".agent-os", "handoff-AG-6.md"), "AgentOS-Outcome: implemented\n", "utf8");
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue });
+
+    expect(report.implementationStatus).toBe("partially_satisfied");
+    expect(report.evidence.handoff).toMatchObject({
+      present: true,
+      repoPath: join(".agent-os", "handoff-AG-6.md"),
+      workspacePath: null,
+      runArtifactPath: null
+    });
+  });
+
   it("surfaces broad missing work as likely large without blocking dispatch", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-large-"));
     const issue = fakeIssue({

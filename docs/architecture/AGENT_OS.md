@@ -41,8 +41,9 @@ It keeps orchestration logic narrow:
   active candidate. The report classifies existing implementation evidence as
   already satisfied, partially satisfied, missing, or unclear; estimates touched
   subsystems, docs/tests impact, PR likelihood, review risk, and likely-large
-  scope; and records run/runtime/workspace/PR/validation/handoff signals without
-  creating child issues or blocking dispatch.
+  scope; and records Linear comment, trusted human-decision,
+  run/runtime/workspace/PR/validation/handoff signals without creating child
+  issues or blocking dispatch.
 - Every agent run starts with an implementation audit. Already-satisfied issues
   are reported as `AgentOS-Outcome: already-satisfied`, persisted as issue
   state, and moved to review without requiring a PR.

@@ -26,8 +26,8 @@ layers:
 - `src/context-pack.ts` builds targeted prompt context packs for
   implementation re-entry, reviewer turns, fixer turns, and CI repair turns.
 - `src/scope-report.ts` builds read-only pre-dispatch reports from issue state,
-  run artifacts, runtime state, PR metadata, validation/handoff evidence, and
-  workspace recovery diagnostics.
+  recent Linear comments, trusted human decisions, run artifacts, runtime state,
+  PR metadata, validation/handoff evidence, and workspace recovery diagnostics.
 - `src/runtime-state.ts` stores durable active-run, retry-queue, claimed-issue,
   daemon freshness, and startup recovery state.
 - `src/workspace.ts` creates deterministic per-issue workspaces.

@@ -153,7 +153,8 @@ wait states, and local validation timing splits when evidence records them.
 Pre-dispatch scope reports classify candidate issues as already satisfied,
 partially satisfied, missing, or unclear; estimate touched subsystems, docs/tests
 impact, PR likelihood, review risk, and likely-large scope; and include runtime,
-run, workspace, PR, validation, and handoff evidence without blocking dispatch.
+run, workspace, PR, validation, repo-root/workspace/run handoff, Linear comment,
+and trusted human-decision evidence without blocking dispatch.
 `status` and `inspect` also report recoverable partial work such as dirty
 workspaces, unpushed branch heads, stale PR heads, and CI evidence recorded for
 a different local head, including a next safe action for the operator. Terminal

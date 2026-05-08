@@ -2,10 +2,11 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { exists } from "./fs-utils.js";
 import { pullRequestUrls } from "./issue-state.js";
 import { inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
+import { buildHumanDecisionEvidence, buildLinearCommentEvidence } from "./scope-report-comments.js";
 import { RunArtifactStore, type RunSummary } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry, type RuntimeState } from "./runtime-state.js";
 import { workspaceKey } from "./workspace.js";
-import type { AgentEvent, Issue, IssueState, PullRequestRole, ValidationState } from "./types.js";
+import type { AgentEvent, HumanDecisionState, Issue, IssueComment, IssueState, PullRequestRole, ValidationState } from "./types.js";
 
 export type ScopeImplementationStatus = "already_satisfied" | "partially_satisfied" | "missing" | "unclear";
 export type ScopeImpact = "none" | "low" | "medium" | "high" | "unclear";
@@ -73,8 +74,42 @@ export interface ScopeEvidence {
   };
   handoff: {
     present: boolean;
+    repoPath: string | null;
     workspacePath: string | null;
     runArtifactPath: string | null;
+  };
+  linearComments: {
+    fetched: boolean;
+    present: boolean;
+    count: number;
+    latestCommentId: string | null;
+    latestCommentAuthor: string | null;
+    latestCommentAt: string | null;
+    recent: Array<{
+      id: string;
+      author: string | null;
+      createdAt: string | null;
+      updatedAt: string | null;
+      bodyPreview: string;
+      hasStructuredHumanDecision: boolean;
+    }>;
+  };
+  humanDecisions: {
+    present: boolean;
+    count: number;
+    latest: {
+      type: HumanDecisionState["type"];
+      source: HumanDecisionState["source"];
+      actor: string | null;
+      decidedAt: string;
+      commentId: string | null;
+      prHeadSha: string | null;
+      validationEvidence: string | null;
+      ciState: HumanDecisionState["ciState"] | null;
+      findings: HumanDecisionState["findings"] | null;
+      summary: string | null;
+      bodyPreview: string | null;
+    } | null;
   };
   runtime: {
     activeRunPresent: boolean;
@@ -120,6 +155,7 @@ interface BuildScopeReportInput {
   state?: IssueState | null;
   runtime?: RuntimeState;
   workspaceRoot?: string;
+  linearComments?: IssueComment[] | null;
   now?: string;
 }
 
@@ -158,7 +194,7 @@ export async function buildPreDispatchScopeReport(input: BuildScopeReportInput):
     : null;
   const lastRun = await readLastRunEvidence(repoRoot, input.issue, input.state ?? null, activeRun, retry);
   const handoff = await readHandoffEvidence(repoRoot, input.issue, workspacePath, lastRun.runId);
-  const evidence = buildEvidence(repoRoot, input.issue, input.state ?? null, recovery, handoff, activeRun, retry, lastRun);
+  const evidence = buildEvidence(repoRoot, input.issue, input.state ?? null, input.linearComments ?? null, recovery, handoff, activeRun, retry, lastRun);
   const implementation = classifyImplementationStatus(input.issue, input.state ?? null, evidence);
   const likelyTouchedSubsystems = estimateTouchedSubsystems(input.issue, input.state ?? null, evidence);
   const scope = estimateScope(input.issue, implementation.status, likelyTouchedSubsystems, evidence);
@@ -216,6 +252,7 @@ function buildEvidence(
   repoRoot: string,
   issue: Issue,
   state: IssueState | null,
+  linearComments: IssueComment[] | null,
   recovery: WorkspaceRecoveryDiagnostics | null,
   handoff: ScopeEvidence["handoff"],
   activeRun: RuntimeActiveRun | null,
@@ -264,6 +301,8 @@ function buildEvidence(
       latestCommandFinishedAt: validationCommand?.finishedAt ?? null
     },
     handoff,
+    linearComments: buildLinearCommentEvidence(linearComments),
+    humanDecisions: buildHumanDecisionEvidence(state),
     runtime: {
       activeRunPresent: Boolean(activeRun),
       retryPresent: Boolean(retry),
@@ -334,12 +373,15 @@ async function readLastRunEvidence(
 }
 
 async function readHandoffEvidence(repoRoot: string, issue: Issue, workspacePath: string | null, runId: string | null): Promise<ScopeEvidence["handoff"]> {
+  const repoHandoff = join(repoRoot, ".agent-os", `handoff-${issue.identifier}.md`);
   const workspaceHandoff = workspacePath ? resolve(repoRoot, workspacePath, ".agent-os", `handoff-${issue.identifier}.md`) : null;
   const runHandoff = runId ? join(repoRoot, ".agent-os", "runs", runId, "handoff.md") : null;
+  const repoPresent = await exists(repoHandoff);
   const workspacePresent = workspaceHandoff ? await exists(workspaceHandoff) : false;
   const runPresent = runHandoff ? await exists(runHandoff) : false;
   return {
-    present: workspacePresent || runPresent,
+    present: repoPresent || workspacePresent || runPresent,
+    repoPath: repoPresent ? relativeToRepo(repoRoot, repoHandoff) : null,
     workspacePath: workspacePresent && workspaceHandoff ? relativeToRepo(repoRoot, workspaceHandoff) : null,
     runArtifactPath: runPresent && runHandoff ? relativeToRepo(repoRoot, runHandoff) : null
   };
