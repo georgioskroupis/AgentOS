@@ -3,6 +3,7 @@ import { appendFile, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { formatRunCycleDiagnostics } from "./cycle-time.js";
 import { ensureDir, exists, writeTextAtomicEnsuringDir, writeTextEnsuringDir } from "./fs-utils.js";
+import { boundEventForJsonl, parseAgentEventsFromJsonl, safeJsonStringify, summarizeText } from "./output-capture.js";
 import { redactText, redactValue } from "./redaction.js";
 import type { AgentEvent, AgentRunResult, Issue, Workspace } from "./types.js";
 
@@ -122,7 +123,8 @@ export class RunArtifactStore {
 
   async writeEvent(runId: string, event: AgentEvent & { runId?: string }): Promise<void> {
     await ensureDir(this.runDir(runId));
-    await appendFile(this.pathFor(runId, "events.jsonl"), `${JSON.stringify(redactValue({ ...event, runId }))}\n`, "utf8");
+    const bounded = await boundEventForJsonl({ ...event, runId }, { repoRoot: this.repoRoot, runId });
+    await appendFile(this.pathFor(runId, "events.jsonl"), `${safeJsonStringify(bounded)}\n`, "utf8");
     await this.touchEvent(runId, event.timestamp);
   }
 
@@ -257,8 +259,8 @@ export class RunArtifactStore {
         ...current,
         status: result.status,
         finishedAt,
-        stopReason: result.error ?? (result.status === "succeeded" ? undefined : result.status),
-        error: result.error,
+        stopReason: summarizeOptional(result.error ?? (result.status === "succeeded" ? undefined : result.status)),
+        error: summarizeOptional(result.error),
         metrics: {
           tokens: {
             input: result.inputTokens,
@@ -321,11 +323,7 @@ export class RunArtifactStore {
   async replay(runId: string): Promise<AgentEvent[]> {
     const path = this.pathFor(runId, "events.jsonl");
     if (!(await exists(path))) return [];
-    return (await readFile(path, "utf8"))
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as AgentEvent);
+    return parseAgentEventsFromJsonl(await readFile(path, "utf8"));
   }
 
   async refreshArtifactHashes(runId: string, artifactNames?: RunArtifactName[]): Promise<RunSummary> {
@@ -606,6 +604,10 @@ function tokenLine(summary: RunSummary): string {
 function rateLimitLine(summary: RunSummary): string {
   const count = summary.metrics.rateLimits.length;
   return count > 0 ? `Rate limits: ${count} snapshot${count === 1 ? "" : "s"} recorded` : "Rate limits: none recorded";
+}
+
+function summarizeOptional(value: string | undefined): string | undefined {
+  return value ? summarizeText(value).inline : undefined;
 }
 
 function createRunId(identifier: string, timestamp: string): string {

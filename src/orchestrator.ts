@@ -22,6 +22,7 @@ import {
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
+import { summarizeText } from "./output-capture.js";
 import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
@@ -1166,7 +1167,6 @@ export class Orchestrator {
       .filter((line): line is string => line !== null)
       .join("\n");
   }
-
   private async ingestHumanDecisions(issue: Issue, currentState: IssueState | null, comments?: IssueComment[]): Promise<IssueState | null> {
     if (!this.tracker.fetchIssueComments && !comments) return currentState;
     const fetchedComments = comments ?? (await this.tracker.fetchIssueComments!(issue.identifier, 20).catch(() => []));
@@ -1210,7 +1210,6 @@ export class Orchestrator {
     }
     return state;
   }
-
   private async githubFeedbackSummary(prUrl: string): Promise<string> {
     const github = new GitHubClient(this.config.github.command);
     const status = await github.getPullRequest(prUrl, resolve(this.options.repoRoot));
@@ -2095,47 +2094,48 @@ export class Orchestrator {
   }
 
   private async handleFailedRun(issue: Issue, workspace: Workspace, previousAttempt: number | null, error: string, runId: string): Promise<void> {
+    const safeError = summarizeText(error).inline;
     if (isHumanInputStop(error)) {
       this.completedMarkers.set(issue.id, completionMarker(issue));
       await this.writeRunEvent(runId, {
         type: "run_needs_human_input",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
-        message: error,
+        message: safeError,
         payload: { errorCategory: "human-input" }
       });
       await this.recordIssueState(issue, {
         phase: "needs-input",
-        lastError: error,
+        lastError: safeError,
         errorCategory: "human-input",
-        stopReason: error,
+        stopReason: safeError,
         nextRetryAt: undefined,
         retryAttempt: undefined
       });
-      await this.markLinearNeedsInput(issue, workspace, previousAttempt, error);
+      await this.markLinearNeedsInput(issue, workspace, previousAttempt, safeError);
       return;
     }
     const nextAttempt = previousAttempt == null ? 1 : previousAttempt + 1;
     if (nextAttempt > this.config.agent.maxRetryAttempts) {
       await this.recordIssueState(issue, {
         phase: "needs-input",
-        lastError: error,
+        lastError: safeError,
         errorCategory: categorizeRunError(error),
         lifecycleStatus: "implementation_failure",
-        stopReason: error,
+        stopReason: safeError,
         workspacePath: workspace.path,
         workspaceKey: workspace.workspaceKey,
         nextRetryAt: undefined
       });
-      await this.markLinearFailed(issue, workspace, previousAttempt, error);
+      await this.markLinearFailed(issue, workspace, previousAttempt, safeError);
       return;
     }
-    const retry = await this.scheduleRetry(issue, previousAttempt, error, undefined, runId, workspace);
+    const retry = await this.scheduleRetry(issue, previousAttempt, safeError, undefined, runId, workspace);
     await this.recordIssueState(issue, {
-      lastError: error,
+      lastError: safeError,
       errorCategory: categorizeRunError(error),
       lifecycleStatus: "implementation_failure",
-      stopReason: error,
+      stopReason: safeError,
       retryAttempt: retry.attempt,
       nextRetryAt: new Date(retry.dueAtMs).toISOString()
     });

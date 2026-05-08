@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -340,6 +340,114 @@ describe("run artifacts", () => {
     const replay = formatRunReplay(summary.runId, await store.replay(summary.runId));
     expect(replay).toContain("simulation_started - local simulation");
     expect(replay).toContain("run_succeeded - simulation complete");
+  });
+
+  it("bounds large event payloads with redacted artifact links", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-large-event-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+    const secret = `lin_${"abcdefghijklmnopqrstuvwxyz123456"}`;
+
+    await store.writeEvent(summary.runId, {
+      type: "codex_stdout",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: "large command output",
+      payload: {
+        stdout: "line from command\n".repeat(800),
+        token: secret
+      },
+      timestamp: "2026-05-01T00:00:00.000Z"
+    });
+
+    const logPath = join(repo, ".agent-os", "runs", summary.runId, "events.jsonl");
+    const log = await readFile(logPath, "utf8");
+    const entry = JSON.parse(log.trim()) as { payload: { agentOsCapture: { artifact?: string; kind: string } } };
+
+    expect(log.trim().length).toBeLessThan(12_000);
+    expect(entry.payload.agentOsCapture.kind).toBe("payload");
+    expect(entry.payload.agentOsCapture.artifact).toBeTruthy();
+    expect(log).not.toContain(secret);
+
+    const artifactText = await readFile(join(repo, entry.payload.agentOsCapture.artifact!), "utf8");
+    expect(artifactText).toContain("line from command");
+    expect(artifactText).toContain("[REDACTED]");
+    expect(artifactText).not.toContain(secret);
+  });
+
+  it("keeps binary-like event output valid and concise", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-binary-event-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    await store.writeEvent(summary.runId, {
+      type: "codex_stdout",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: `bad chunk\u0000${"x".repeat(4_000)}`,
+      timestamp: "2026-05-01T00:00:00.000Z"
+    });
+
+    const events = await store.replay(summary.runId);
+    expect(events[0].message).toContain("binary-like output omitted");
+    expect(formatRunReplay(summary.runId, events)).toContain("codex_stdout - [binary-like output omitted");
+  });
+
+  it("keeps malformed object payloads valid JSONL", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-circular-event-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+    const circular: Record<string, unknown> = { output: "unterminated object shape" };
+    circular.self = circular;
+
+    await store.writeEvent(summary.runId, {
+      type: "codex_stdout",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      payload: circular,
+      timestamp: "2026-05-01T00:00:00.000Z"
+    });
+
+    const events = await store.replay(summary.runId);
+    expect(events[0].payload).toMatchObject({ self: "[Circular]" });
+  });
+
+  it("continues reading legacy event logs with malformed trailing lines", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-legacy-events-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+    await appendFile(
+      join(repo, ".agent-os", "runs", summary.runId, "events.jsonl"),
+      `${JSON.stringify({
+        type: "legacy_unbounded_event",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: "legacy event without capture metadata",
+        timestamp: "2026-05-01T00:00:00.000Z",
+        payload: { output: "old shape" }
+      })}\nnot json\n`,
+      "utf8"
+    );
+
+    const events = await store.replay(summary.runId);
+    expect(events.some((event) => event.type === "legacy_unbounded_event")).toBe(true);
+    expect(events.some((event) => event.type === "event_log_parse_warning")).toBe(true);
   });
 
   it("keeps terminal summaries terminal when event touches race with completion", async () => {
