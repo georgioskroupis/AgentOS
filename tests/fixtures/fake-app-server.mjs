@@ -180,22 +180,22 @@ rl.on("line", (line) => {
             command: "printf large-output",
             status: "completed",
             exitCode: 0,
-            output: "O".repeat(12_000)
+            output: "O".repeat(80_000)
           }
         }
       });
-      process.stdout.write(event.slice(0, 9_000));
+      process.stdout.write(event.slice(0, 70_000));
       setTimeout(() => {
-        process.stdout.write(`${event.slice(9_000)}\n`);
+        process.stdout.write(`${event.slice(70_000)}\n`);
         complete();
       }, 10);
       return;
     }
     if (process.argv.includes("--oversized-json-like-stdout")) {
-      const raw = `{${"J".repeat(70_000)}`;
-      process.stdout.write(raw.slice(0, 65_000));
+      const raw = `{${"J".repeat(1_010_000)}`;
+      process.stdout.write(raw.slice(0, 1_005_000));
       setTimeout(() => {
-        process.stdout.write(`${raw.slice(65_000)}\n`);
+        process.stdout.write(`${raw.slice(1_005_000)}\n`);
         complete();
       }, 10);
       return;

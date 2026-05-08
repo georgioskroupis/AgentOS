@@ -10,7 +10,7 @@ interface PendingRequest {
 }
 
 const RUNNER_STDOUT_FLUSH_CHARS = 8_000;
-const RUNNER_PROTOCOL_LINE_FLUSH_CHARS = 64_000;
+const RUNNER_PROTOCOL_LINE_MAX_CHARS = 1_000_000;
 
 export async function verifyCodexAppServer(command = DEFAULT_CODEX_APP_SERVER_COMMAND): Promise<{ ok: boolean; details: string }> {
   const output = await captureShell(`${command} --help`, 5_000).catch((error: Error) => error.message);
@@ -105,7 +105,7 @@ export class CodexAppServerRunner implements AgentRunner {
 
     const flushLongRawStdout = () => {
       if (stdoutBuffer.includes("\n")) return;
-      if (!stdoutRawLine && mayBeJsonRpcLine(stdoutBuffer) && stdoutBuffer.length <= RUNNER_PROTOCOL_LINE_FLUSH_CHARS) return;
+      if (!stdoutRawLine && mayBeJsonRpcLine(stdoutBuffer) && stdoutBuffer.length <= RUNNER_PROTOCOL_LINE_MAX_CHARS) return;
       stdoutRawLine = true;
       while (stdoutBuffer.length > RUNNER_STDOUT_FLUSH_CHARS && !stdoutBuffer.includes("\n")) {
         const partial = stdoutBuffer.slice(0, RUNNER_STDOUT_FLUSH_CHARS);

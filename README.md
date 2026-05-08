@@ -173,8 +173,10 @@ bin/agent-os daemon launch-command --repo . --workflow WORKFLOW.md
 
 `runs list` shows durable run summaries. `runs inspect <run-id>` prints run
 status, session/token metrics, and warns if recorded artifact hashes no longer
-match the persisted artifacts. It also prints phase-level cycle-time
-breakdowns from `.agent-os/runs/<run-id>/summary.json`, flags unhealthy
+match the persisted artifacts. Large redacted event messages and payloads can
+spill into `.agent-os/runs/<run-id>/artifacts`; `events.jsonl` links those
+sidecars and `runs inspect` includes them in the run integrity check. It also
+prints phase-level cycle-time breakdowns from `.agent-os/runs/<run-id>/summary.json`, flags unhealthy
 stall/retry, review, human-wait, and merge/retry patterns, and includes next
 actions for operators. The built-in SLO diagnostics warn when stall/retry time
 reaches 10 minutes or 25% of cycle time, review/fix time reaches 30 minutes (or

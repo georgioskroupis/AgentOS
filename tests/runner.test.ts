@@ -231,7 +231,7 @@ describe("CodexAppServerRunner", () => {
 
     const commandEvent = events.find((event) => event.type === "item/completed");
     const payload = commandEvent?.payload as { params?: { item?: { output?: string } } } | undefined;
-    expect(payload?.params?.item?.output).toHaveLength(12_000);
+    expect(payload?.params?.item?.output).toHaveLength(80_000);
     expect(events.some((event) => event.type === "codex_stdout")).toBe(false);
   });
 

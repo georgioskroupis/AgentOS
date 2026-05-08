@@ -7,6 +7,7 @@ import type { AgentEvent } from "./types.js";
 const INLINE_TEXT_LIMIT = 2_000;
 const INLINE_PAYLOAD_JSON_LIMIT = 8_000;
 const INLINE_EVENT_JSON_LIMIT = 12_000;
+const INLINE_METADATA_TEXT_LIMIT = 500;
 const ARTIFACT_TEXT_LIMIT = 500_000;
 const INLINE_ARRAY_LIMIT = 50;
 const INLINE_OBJECT_KEY_LIMIT = 50;
@@ -107,11 +108,11 @@ export async function boundEventForJsonl<T extends AgentEvent & { runId?: string
   const eventJson = safeJsonStringify(redacted, 2);
   const artifact = await writeArtifactIfSafe(context.repoRoot, runId, event, "event", "json", eventJson);
   const bounded: AgentEvent & { runId?: string } = {
-    type: event.type,
-    issueId: event.issueId,
-    issueIdentifier: event.issueIdentifier,
-    timestamp: event.timestamp,
-    runId: event.runId,
+    type: inlineMetadata(event.type) ?? "event",
+    issueId: inlineMetadata(event.issueId),
+    issueIdentifier: inlineMetadata(event.issueIdentifier),
+    timestamp: inlineMetadata(event.timestamp) ?? new Date().toISOString(),
+    runId: inlineMetadata(event.runId),
     message: event.message ? summarizeText(event.message).inline : "large event captured outside JSONL",
     payload: {
       agentOsCapture: {
@@ -224,7 +225,10 @@ async function writeArtifactIfSafe(
 function normalizeInlineValue(value: unknown, depth: number, seen = new WeakSet<object>()): unknown {
   if (depth > INLINE_DEPTH_LIMIT) return "[Max inline depth reached]";
   if (value == null) return value;
-  if (typeof value === "string") return summarizeText(value).inline;
+  if (typeof value === "string") {
+    const redacted = redactText(value);
+    return isBinaryLike(redacted) ? summarizeText(redacted).inline : redacted;
+  }
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "bigint") return `${value.toString()}n`;
   if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
@@ -254,6 +258,11 @@ function normalizeInlineValue(value: unknown, depth: number, seen = new WeakSet<
     return out;
   }
   return String(value);
+}
+
+function inlineMetadata(value: string | undefined): string | undefined {
+  if (value == null) return undefined;
+  return summarizeText(value, INLINE_METADATA_TEXT_LIMIT).inline;
 }
 
 function dedupeRepeatedLines(value: string): { text: string; duplicateLines: number } {

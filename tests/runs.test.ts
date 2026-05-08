@@ -380,6 +380,56 @@ describe("run artifacts", () => {
     expect(artifactText).not.toContain(secret);
   });
 
+  it("preserves safe inline payload strings within the payload cap", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-inline-payload-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+    const stdout = "S".repeat(4_000);
+
+    await store.writeEvent(summary.runId, {
+      type: "item/completed",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      payload: { stdout },
+      timestamp: "2026-05-01T00:00:00.000Z"
+    });
+
+    const log = await readFile(join(repo, ".agent-os", "runs", summary.runId, "events.jsonl"), "utf8");
+    const entry = JSON.parse(log.trim()) as { payload: { stdout?: string; agentOsCapture?: unknown } };
+
+    expect(entry.payload.stdout).toBe(stdout);
+    expect(entry.payload.agentOsCapture).toBeUndefined();
+  });
+
+  it("bounds large-event metadata in JSONL fallback entries", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-large-metadata-"));
+    const store = new RunArtifactStore(repo);
+    const summary = await store.startRun({
+      issue,
+      attempt: 1,
+      workspace: { path: join(repo, "workspace"), workspaceKey: "AG-1", createdNow: true }
+    });
+
+    await store.writeEvent(summary.runId, {
+      type: `codex_${"x".repeat(20_000)}`,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: "large metadata event",
+      timestamp: "2026-05-01T00:00:00.000Z"
+    });
+
+    const log = await readFile(join(repo, ".agent-os", "runs", summary.runId, "events.jsonl"), "utf8");
+    const entry = JSON.parse(log.trim()) as { type: string };
+
+    expect(log.trim().length).toBeLessThan(12_000);
+    expect(entry.type.length).toBeLessThan(700);
+    expect(entry.type).toContain("output truncated");
+  });
+
   it("hashes event capture sidecars and detects tampering or deletion", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-sidecar-hash-"));
     const store = new RunArtifactStore(repo);
