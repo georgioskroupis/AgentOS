@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatRunInspect, formatRunReplay, RunArtifactStore } from "../src/runs.js";
+import type { RunPhaseTiming, RunSummary } from "../src/runs.js";
 import type { Issue } from "../src/types.js";
 
 const issue: Issue = {
@@ -106,6 +107,128 @@ describe("run artifacts", () => {
     ]);
   });
 
+  it("summarizes healthy run cycle time", () => {
+    const output = formatRunInspect({
+      summary: runSummaryWithTiming("succeeded", "2026-05-01T00:08:00.000Z", [
+        phase("implementation", "completed", "2026-05-01T00:00:00.000Z", "2026-05-01T00:05:00.000Z"),
+        phase("validation", "completed", "2026-05-01T00:05:00.000Z", "2026-05-01T00:06:00.000Z"),
+        phase("automated-review", "completed", "2026-05-01T00:06:00.000Z", "2026-05-01T00:08:00.000Z")
+      ]),
+      warnings: []
+    });
+
+    expect(output).toContain("Cycle time:");
+    expect(output).toContain("- implementation: 5m (1 completed)");
+    expect(output).toContain("- validation: 1m (1 completed)");
+    expect(output).toContain("SLO diagnostics: healthy");
+  });
+
+  it("flags review-heavy run cycle time", () => {
+    const output = formatRunInspect({
+      summary: runSummaryWithTiming("succeeded", "2026-05-01T01:00:00.000Z", [
+        phase("implementation", "completed", "2026-05-01T00:00:00.000Z", "2026-05-01T00:10:00.000Z"),
+        phase("automated-review", "completed", "2026-05-01T00:10:00.000Z", "2026-05-01T00:30:00.000Z"),
+        phase("fixer-turn", "completed", "2026-05-01T00:30:00.000Z", "2026-05-01T00:50:00.000Z"),
+        phase("automated-review", "completed", "2026-05-01T00:50:00.000Z", "2026-05-01T01:00:00.000Z")
+      ]),
+      warnings: []
+    });
+
+    expect(output).toContain("long serial review time: 50m across 3 review/fix spans");
+    expect(output).toContain("Next action: inspect review artifacts");
+  });
+
+  it("flags stall-heavy run cycle time", () => {
+    const output = formatRunInspect({
+      summary: runSummaryWithTiming("failed", "2026-05-01T00:40:00.000Z", [
+        phase("implementation", "failed", "2026-05-01T00:00:00.000Z", "2026-05-01T00:05:00.000Z"),
+        phase("stall-cancel", "stalled", "2026-05-01T00:05:00.000Z", "2026-05-01T00:25:00.000Z"),
+        phase("retry-backoff", "completed", "2026-05-01T00:25:00.000Z", "2026-05-01T00:35:00.000Z")
+      ]),
+      warnings: []
+    });
+
+    expect(output).toContain("excessive stall/retry overhead: 30m");
+    expect(output).toContain("Next action: inspect stall timeout");
+  });
+
+  it("keeps retry-backoff-only cycle time on the stall/retry path", () => {
+    const output = formatRunInspect({
+      summary: runSummaryWithTiming("failed", "2026-05-01T00:40:00.000Z", [
+        phase("implementation", "failed", "2026-05-01T00:00:00.000Z", "2026-05-01T00:05:00.000Z"),
+        phase("retry-backoff", "completed", "2026-05-01T00:05:00.000Z", "2026-05-01T00:40:00.000Z")
+      ]),
+      warnings: []
+    });
+
+    expect(output).toContain("- retry-backoff: 35m (1 completed)");
+    expect(output).toContain("excessive stall/retry overhead: 35m");
+    expect(output).toContain("Next action: inspect stall timeout");
+    expect(output).not.toContain("merge/retry drift");
+    expect(output).not.toContain("inspect selected PR checks");
+  });
+
+  it("flags human-wait run cycle time", () => {
+    const output = formatRunInspect(
+      {
+        summary: runSummaryWithTiming("succeeded", "2026-05-01T00:02:00.000Z", [
+          phase("implementation", "completed", "2026-05-01T00:00:00.000Z", "2026-05-01T00:02:00.000Z"),
+          phase("human-wait", "waiting", "2026-05-01T00:02:00.000Z")
+        ]),
+        warnings: []
+      },
+      { now: "2026-05-01T05:02:00.000Z" }
+    );
+
+    expect(output).toContain("- human-wait: 5h (1 waiting, 1 open)");
+    expect(output).toContain("long human-wait: 5h with an open wait");
+    expect(output).toContain("Next action: check decision comments");
+  });
+
+  it("does not count closed human-wait time toward the open-wait SLO", () => {
+    const output = formatRunInspect(
+      {
+        summary: runSummaryWithTiming("succeeded", undefined, [
+          phase("human-wait", "completed", "2026-05-01T00:00:00.000Z", "2026-05-01T01:10:00.000Z"),
+          phase("human-wait", "waiting", "2026-05-01T01:10:00.000Z")
+        ]),
+        warnings: []
+      },
+      { now: "2026-05-01T01:15:00.000Z" }
+    );
+
+    expect(output).toContain("- human-wait: 1h 15m (1 completed, 1 waiting, 1 open)");
+    expect(output).toContain("SLO diagnostics: healthy");
+    expect(output).not.toContain("long human-wait");
+  });
+
+  it("flags open human-wait when the open wait crosses its SLO", () => {
+    const output = formatRunInspect(
+      {
+        summary: runSummaryWithTiming("succeeded", undefined, [phase("human-wait", "waiting", "2026-05-01T00:00:00.000Z")]),
+        warnings: []
+      },
+      { now: "2026-05-01T01:05:00.000Z" }
+    );
+
+    expect(output).toContain("- human-wait: 1h 5m (1 waiting, 1 open)");
+    expect(output).toContain("long human-wait: 1h 5m with an open wait");
+  });
+
+  it("flags merge and CI wait drift in run cycle time", () => {
+    const output = formatRunInspect({
+      summary: runSummaryWithTiming("failed", "2026-05-01T00:50:00.000Z", [
+        phase("implementation", "completed", "2026-05-01T00:00:00.000Z", "2026-05-01T00:10:00.000Z"),
+        phase("ci-wait", "failed", "2026-05-01T00:10:00.000Z", "2026-05-01T00:45:00.000Z")
+      ]),
+      warnings: []
+    });
+
+    expect(output).toContain("- ci-wait: 35m (1 failed)");
+    expect(output).toContain("merge/retry drift: 35m spent in merge, CI wait, or retry backoff");
+    expect(output).toContain("Next action: inspect selected PR checks and durable merge/retry state");
+  });
+
   it("emits run events for synthetic stall and cancel timing", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-stall-events-"));
     const store = new RunArtifactStore(repo);
@@ -197,7 +320,10 @@ describe("run artifacts", () => {
 
     const inspected = await new RunArtifactStore(repo).inspect(runId);
     expect(inspected.summary.timing).toBeUndefined();
-    expect(formatRunInspect(inspected)).toContain("Status: succeeded");
+    const output = formatRunInspect(inspected);
+    expect(output).toContain("Status: succeeded");
+    expect(output).toContain("Cycle time: no phase timing recorded");
+    expect(output).toContain("SLO diagnostics: unavailable");
     expect(await new RunArtifactStore(repo).listRuns()).toHaveLength(1);
   });
 
@@ -242,3 +368,32 @@ describe("run artifacts", () => {
     expect(inspected.summary.finishedAt).toBeTruthy();
   });
 });
+
+function runSummaryWithTiming(status: RunSummary["status"], finishedAt: string | undefined, phases: RunPhaseTiming[]): RunSummary {
+  return {
+    schemaVersion: 1,
+    runId: "run_20260501000000_AG-1_test",
+    issueId: issue.id,
+    issueIdentifier: issue.identifier,
+    attempt: 1,
+    status,
+    startedAt: "2026-05-01T00:00:00.000Z",
+    ...(finishedAt ? { finishedAt } : {}),
+    metrics: { tokens: {}, sessions: {}, rateLimits: [] },
+    timing: {
+      updatedAt: finishedAt ?? "2026-05-01T00:00:00.000Z",
+      phases
+    },
+    artifactHashes: {}
+  };
+}
+
+function phase(phaseName: RunPhaseTiming["phase"], status: RunPhaseTiming["status"], startedAt: string, finishedAt?: string): RunPhaseTiming {
+  return {
+    id: `${phaseName}-test-${startedAt}`,
+    phase: phaseName,
+    status,
+    startedAt,
+    ...(finishedAt ? { finishedAt, durationMs: Date.parse(finishedAt) - Date.parse(startedAt) } : {})
+  };
+}

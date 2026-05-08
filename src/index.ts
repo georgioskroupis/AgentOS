@@ -17,4 +17,5 @@ export * from "./lifecycle.js";
 export * from "./agent-lifecycle.js";
 export * from "./defaults.js";
 export * from "./runs.js";
+export * from "./cycle-time.js";
 export * from "./runtime-state.js";

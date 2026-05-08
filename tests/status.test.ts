@@ -177,9 +177,37 @@ describe("issue inspection", () => {
           schemaVersion: 1,
           issueId: "issue-2",
           issueIdentifier: "AG-2",
-          phase: "completed",
+          phase: "merge",
           reviewStatus: "approved",
+          workspacePath: ".agent-os/workspaces/AG-2",
+          headSha: "abc123",
           prs: [{ url: "https://github.com/o/r/pull/2", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:08:00.000Z",
+            githubCi: { status: "pending", headSha: "abc123", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:08:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-3.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-3",
+          issueIdentifier: "AG-3",
+          phase: "completed",
+          headSha: "def456",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:08:00.000Z",
+            githubCi: { status: "passed", headSha: "def456", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
           updatedAt: "2026-05-05T00:08:00.000Z"
         },
         null,
@@ -203,6 +231,9 @@ describe("issue inspection", () => {
     expect(output).toContain("Daemon preflight: missing_credentials - tracker.api_key is required after environment resolution");
     expect(output).toContain("Repo env: missing");
     expect(output).toContain("AG-2: waiting on CI - 1 GitHub check(s) still pending");
+    expect(output).toContain("AG-3: completed locally");
+    expect(output).not.toContain("AG-2: status warning");
+    expect(output).not.toContain("AG-3: status warning");
     expect(output).toContain("AG-1: local full-suite validation timing failure recorded separately; focused test passed; GitHub CI passed at abc123");
   });
 
@@ -282,6 +313,460 @@ describe("issue inspection", () => {
     expect(output).toContain("differs from recorded PR head recorded-pr-head");
     expect(output).toContain("differs from recorded CI head ci-head");
     expect(output).toContain(`Next safe action: resume ${workspace}`);
+  });
+
+  it("reports recoverable terminal workspace drift as a read-only status warning", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-workspace-drift-"));
+    const repo = join(root, "alpha");
+    const workspace = join(repo, ".agent-os", "workspaces", "AG-8");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await run("git", ["init", "-b", "agent/AG-8"], workspace);
+    await run("git", ["config", "user.email", "agentos@example.test"], workspace);
+    await run("git", ["config", "user.name", "AgentOS Test"], workspace);
+    await writeFile(join(workspace, "README.md"), "initial\n", "utf8");
+    await run("git", ["add", "README.md"], workspace);
+    await run("git", ["commit", "-m", "initial"], workspace);
+    await writeFile(join(workspace, "README.md"), "dirty terminal drift\n", "utf8");
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-8.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-8",
+          issueIdentifier: "AG-8",
+          phase: "completed",
+          lifecycleStatus: "terminal_linear",
+          terminalState: "Done",
+          terminalAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          workspacePath: ".agent-os/workspaces/AG-8",
+          headSha: "recorded-head",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "recorded-head", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-8: status warning - terminal workspace drift:");
+    expect(registryOutput).toContain("workspace has uncommitted changes");
+    expect(registryOutput).not.toContain("AG-8: recoverable partial work");
+
+    const inspectOutput = await inspectIssue(repo, "AG-8");
+    expect(inspectOutput).toContain("Status warnings:");
+    expect(inspectOutput).toContain("terminal workspace drift: terminal issue still points to recoverable workspace");
+    expect(inspectOutput).toContain("workspace has uncommitted changes");
+    expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(inspectOutput).not.toContain(`Next safe action: resume ${workspace}`);
+    expect(inspectOutput).not.toContain("Workspace recovery: recoverable partial work");
+  });
+
+  it("reports terminal-state contradictions and post-merge cleanup drift as status warnings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-drift-"));
+    const repo = join(root, "alpha");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-3.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-3",
+          issueIdentifier: "AG-3",
+          phase: "completed",
+          lifecycleStatus: "post_merge_cleanup_warning",
+          terminalState: "Done",
+          terminalAt: "2026-05-05T00:10:00.000Z",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "human_required",
+          lastError: "codex_stall_timeout",
+          errorCategory: "stall",
+          retryAttempt: 2,
+          nextRetryAt: "2026-05-05T00:20:00.000Z",
+          workspacePath: ".agent-os/workspaces/AG-3",
+          headSha: "new-head-sha",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "failed", headSha: "old-ci-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          mergeCleanupWarnings: [
+            "Local branch cleanup failed for agent/AG-3: branch is checked out at /tmp/worktree",
+            "Remote branch cleanup failed for agent/AG-3: remote rejected delete"
+          ],
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await new RuntimeStateStore(repo).upsertRetry({
+      issueId: "issue-3",
+      identifier: "AG-3",
+      issue: {
+        id: "issue-3",
+        identifier: "AG-3",
+        title: "Terminal drift",
+        description: null,
+        priority: 1,
+        state: "Done",
+        branch_name: null,
+        url: null,
+        labels: [],
+        blocked_by: [],
+        created_at: null,
+        updated_at: null
+      },
+      attempt: 3,
+      dueAt: "2026-05-05T00:30:00.000Z",
+      error: "stale retry queue",
+      scheduledAt: "2026-05-05T00:15:00.000Z"
+    });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-7.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-7",
+          issueIdentifier: "AG-7",
+          phase: "completed",
+          lifecycleStatus: "merge_success",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          headSha: "merged-head-sha",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "merged-head-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await new RuntimeStateStore(repo).upsertRetry({
+      issueId: "issue-7",
+      identifier: "AG-7",
+      issue: {
+        id: "issue-7",
+        identifier: "AG-7",
+        title: "Clean terminal retry drift",
+        description: null,
+        priority: 1,
+        state: "Done",
+        branch_name: null,
+        url: null,
+        labels: [],
+        blocked_by: [],
+        created_at: null,
+        updated_at: null
+      },
+      attempt: 1,
+      dueAt: "2026-05-05T00:40:00.000Z",
+      error: "stale clean retry queue",
+      scheduledAt: "2026-05-05T00:25:00.000Z"
+    });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-9.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-9",
+          issueIdentifier: "AG-9",
+          phase: "completed",
+          lifecycleStatus: "merge_success",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          headSha: "merged-head-sha",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "merged-head-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await new RuntimeStateStore(repo).upsertActiveRun({
+      issueId: "issue-9",
+      identifier: "AG-9",
+      issue: {
+        id: "issue-9",
+        identifier: "AG-9",
+        title: "Clean terminal active-run drift",
+        description: null,
+        priority: 1,
+        state: "Done",
+        branch_name: null,
+        url: null,
+        labels: [],
+        blocked_by: [],
+        created_at: null,
+        updated_at: null
+      },
+      attempt: 1,
+      runId: "run_20260505000000_AG-9_stale",
+      startedAt: "2026-05-05T00:00:00.000Z",
+      lastEventAt: "2026-05-05T00:01:00.000Z",
+      phase: "streaming-turn"
+    });
+
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-3: status warning - contradictory terminal state: terminal issue still has reviewStatus human_required");
+    expect(registryOutput).not.toContain("AG-3: retrying after stale retry queue");
+    expect(registryOutput).toContain("AG-7: status warning - merge/retry drift: terminal issue still has retry queue entry for 2026-05-05T00:40:00.000Z");
+    expect(registryOutput).not.toContain("AG-7: retrying after stale clean retry queue");
+    expect(registryOutput).toContain("AG-9: status warning - active-run drift: terminal issue still has active runtime state for run_20260505000000_AG-9_stale (streaming-turn)");
+    expect(registryOutput).not.toContain("AG-9: running");
+
+    const inspectOutput = await inspectIssue(repo, "AG-3");
+    expect(inspectOutput).toContain("Status warnings:");
+    expect(inspectOutput).toContain("contradictory terminal state: terminal issue still has reviewStatus human_required");
+    expect(inspectOutput).toContain("stale error metadata remains (stall) - codex_stall_timeout");
+    expect(inspectOutput).toContain("stale validation/CI head SHA old-ci-sha differs from recorded head new-head-sha");
+    expect(inspectOutput).toContain("terminal issue still records GitHub CI as failed");
+    expect(inspectOutput).toContain("merge/retry drift: terminal issue still has retry metadata for 2026-05-05T00:20:00.000Z");
+    expect(inspectOutput).toContain("post-merge cleanup drift: selected PR is merged but AgentOS branch cleanup warning remains");
+    expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(inspectOutput).not.toContain("record `AgentOS-Human-Decision: fix-findings`");
+
+    const inspectRetryOnlyOutput = await inspectIssue(repo, "AG-7");
+    expect(inspectRetryOnlyOutput).toContain("Status warnings:");
+    expect(inspectRetryOnlyOutput).toContain("merge/retry drift: terminal issue still has retry queue entry for 2026-05-05T00:40:00.000Z");
+    expect(inspectRetryOnlyOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(inspectRetryOnlyOutput).not.toContain("Status warnings: none");
+    expect(inspectRetryOnlyOutput).not.toContain("retrying after stale clean retry queue");
+
+    const inspectActiveOnlyOutput = await inspectIssue(repo, "AG-9");
+    expect(inspectActiveOnlyOutput).toContain("Status warnings:");
+    expect(inspectActiveOnlyOutput).toContain("active-run drift: terminal issue still has active runtime state for run_20260505000000_AG-9_stale (streaming-turn)");
+    expect(inspectActiveOnlyOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(inspectActiveOnlyOutput).not.toContain("Status warnings: none");
+  });
+
+  it("keeps completed local handoffs on the non-terminal status path without explicit terminal evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-completed-local-"));
+    const repo = join(root, "alpha");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-4.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-4",
+          issueIdentifier: "AG-4",
+          phase: "completed",
+          reviewStatus: "human_required",
+          lastError: "codex_stall_timeout",
+          errorCategory: "stall",
+          workspacePath: ".agent-os/workspaces/AG-4",
+          headSha: "new-head-sha",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "failed", headSha: "old-ci-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-4: waiting on Human Review - codex_stall_timeout");
+    expect(registryOutput).not.toContain("AG-4: status warning");
+
+    const output = await inspectIssue(repo, "AG-4");
+
+    expect(output).toContain("Status warnings: none");
+    expect(output).toContain("Next safe action: record `AgentOS-Human-Decision: fix-findings`");
+    expect(output).not.toContain("contradictory terminal state");
+    expect(output).not.toContain("stale validation/CI head SHA old-ci-sha");
+    expect(output).not.toContain("terminal issue still records GitHub CI as failed");
+    expect(output).not.toContain("missing terminal workspace warning");
+  });
+
+  it("does not warn when clean post-merge cleanup removed the recorded workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-clean-merge-"));
+    const repo = join(root, "alpha");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-5.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-5",
+          issueIdentifier: "AG-5",
+          phase: "completed",
+          lifecycleStatus: "merge_success",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          workspacePath: ".agent-os/workspaces/AG-5",
+          headSha: "merged-head-sha",
+          prs: [{ url: "https://github.com/o/r/pull/5", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          mergeTargetUrl: "https://github.com/o/r/pull/5",
+          mergeTargetRole: "primary",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "merged-head-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-6.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-6",
+          issueIdentifier: "AG-6",
+          phase: "completed",
+          lifecycleStatus: "already_merged_pr",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          workspacePath: ".agent-os/workspaces/AG-6",
+          headSha: "merged-head-sha",
+          prs: [{ url: "https://github.com/o/r/pull/6", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          mergeTargetUrl: "https://github.com/o/r/pull/6",
+          mergeTargetRole: "primary",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "merged-head-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-5: merged");
+    expect(registryOutput).toContain("AG-6: already merged");
+    expect(registryOutput).not.toContain("AG-5: waiting on merge");
+    expect(registryOutput).not.toContain("AG-6: waiting on merge");
+    expect(registryOutput).not.toContain("AG-5: status warning");
+    expect(registryOutput).not.toContain("AG-6: status warning");
+
+    const inspectOutput = await inspectIssue(repo, "AG-5");
+    expect(inspectOutput).toContain("Status warnings: none");
+    expect(inspectOutput).toContain("Next safe action: no operator action required; selected PR is merged and terminal state is recorded");
+    expect(inspectOutput).not.toContain("move the issue to Merging");
+    expect(inspectOutput).not.toContain("missing terminal workspace warning");
+    expect(inspectOutput).not.toContain("Workspace recovery: workspace missing");
+    expect(inspectOutput).not.toContain("Recovery reasons: workspace is missing");
+    expect(inspectOutput).not.toContain("inspect runtime state and recover from the last handoff or run artifact");
+
+    const alreadyMergedOutput = await inspectIssue(repo, "AG-6");
+    expect(alreadyMergedOutput).toContain("Status warnings: none");
+    expect(alreadyMergedOutput).toContain("Next safe action: no operator action required; selected PR is already merged and terminal state is recorded");
+    expect(alreadyMergedOutput).not.toContain("move the issue to Merging");
+    expect(alreadyMergedOutput).not.toContain("missing terminal workspace warning");
+    expect(alreadyMergedOutput).not.toContain("Workspace recovery: workspace missing");
+    expect(alreadyMergedOutput).not.toContain("Recovery reasons: workspace is missing");
+    expect(alreadyMergedOutput).not.toContain("inspect runtime state and recover from the last handoff or run artifact");
   });
 });
 

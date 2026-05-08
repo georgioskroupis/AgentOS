@@ -6,7 +6,7 @@ import { IssueStateStore, latestHumanDecision, normalizeIssueState, pullRequestU
 import { JsonlLogger } from "./logging.js";
 import { loadRegistry, RegistryStateStore, resolveRegistryProjectPaths, type RegistryProjectSummary } from "./registry.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
-import { RuntimeStateStore } from "./runtime-state.js";
+import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
 
@@ -91,6 +91,10 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     .slice(-limit);
   const state = (await exists(statePath)) ? normalizeIssueState(JSON.parse(await readText(statePath))) : null;
   const recovery = await inspectWorkspaceRecovery(root, state).catch(() => null);
+  const runtime = await new RuntimeStateStore(root).read();
+  const active = state ? findRuntimeActive(runtime.activeRuns, state) : null;
+  const retry = state ? findRuntimeRetry(runtime.retryQueue, state) : null;
+  const statusDiagnostics = state ? issueStatusDiagnostics(state, recovery, retry, active) : [];
   const prs = state?.prs ?? [];
   const reviewRoot = join(root, ".agent-os", "reviews", safeFileName(identifier));
   const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot) : [];
@@ -103,10 +107,11 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
     humanDecisionDetails(state),
     appProofDetails(state),
-    recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null,
-    state ? `Next safe action: ${nextSafeAction(state, recovery)}` : null,
+    shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
+    state ? `Next safe action: ${statusDiagnostics[0]?.nextAction ?? nextSafeAction(state, recovery)}` : null,
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
     state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
+    statusDiagnostics.length ? `Status warnings:\n${statusDiagnostics.map(formatIssueStatusDiagnostic).join("\n")}` : "Status warnings: none",
     validationDetails(state?.validation),
     state?.lastError ? `Last error: ${state.lastError}` : null,
     state?.stopReason ? `Stop reason: ${state.stopReason}` : null,
@@ -201,11 +206,15 @@ function fallbackProjectSummary(name: string, repoRoot: string, workflowPath: st
 }
 
 function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeStateStore["read"]>>, logs: Awaited<ReturnType<JsonlLogger["tail"]>>, recovery: WorkspaceRecoveryDiagnostics | null): string {
-  const runtimeActive = runtime.activeRuns.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
+  const runtimeActive = findRuntimeActive(runtime.activeRuns, issue);
+  const retry = findRuntimeRetry(runtime.retryQueue, issue);
+  const statusDiagnostics = issueStatusDiagnostics(issue, recovery, retry, runtimeActive);
+  if (statusDiagnostics.length) return `status warning - ${statusDiagnostics[0].message}; next: ${statusDiagnostics[0].nextAction}`;
   if (runtimeActive) return `running (${runtimeActive.phase ?? issue.phase ?? "active"})`;
-  const retry = runtime.retryQueue.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier);
   if (retry) return `retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`;
   if (recovery?.recoverable) return `recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`;
+  const terminalStatus = cleanTerminalStatusLine(issue);
+  if (terminalStatus) return terminalStatus;
   const mergeWaiting = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_waiting");
   if (mergeWaiting) return `waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`;
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
@@ -228,6 +237,8 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
 
 function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null = null): string {
   if (recovery?.recoverable) return recovery.nextSafeAction;
+  const terminalAction = cleanTerminalNextSafeAction(issue);
+  if (terminalAction) return terminalAction;
   const decision = issue.lastHumanDecision ?? latestHumanDecision(issue.humanDecisions);
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
@@ -260,4 +271,170 @@ function validationStatusPhrase(validation: ValidationState): string | null {
   }
   if (validation.status === "failed") return `validation failed${validation.errors?.length ? ` - ${validation.errors.join("; ")}` : ""}`;
   return null;
+}
+
+interface IssueStatusDiagnostic {
+  message: string;
+  nextAction: string;
+}
+
+const TERMINAL_LIFECYCLE_STATUSES = new Set<NonNullable<IssueState["lifecycleStatus"]>>([
+  "merge_success",
+  "post_merge_cleanup_warning",
+  "terminal_linear",
+  "already_merged_pr",
+  "terminal_missing_workspace"
+]);
+
+function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null, retry: RuntimeRetryEntry | null = null, active: RuntimeActiveRun | null = null): IssueStatusDiagnostic[] {
+  const diagnostics: IssueStatusDiagnostic[] = [];
+  const terminal = isTerminalIssueState(issue);
+  if (terminal && active) {
+    diagnostics.push({
+      message: `active-run drift: terminal issue still has active runtime state${active.runId ? ` for ${active.runId}` : ""}${active.phase ? ` (${active.phase})` : ""}`,
+      nextAction: terminalReconciliationAction()
+    });
+  }
+  if (terminal && issue.reviewStatus === "human_required") {
+    diagnostics.push({
+      message: "contradictory terminal state: terminal issue still has reviewStatus human_required",
+      nextAction: terminalReconciliationAction()
+    });
+  }
+  if (terminal && (issue.lastError || issue.errorCategory)) {
+    diagnostics.push({
+      message: `contradictory terminal state: stale error metadata remains${issue.errorCategory ? ` (${issue.errorCategory})` : ""}${issue.lastError ? ` - ${issue.lastError}` : ""}`,
+      nextAction: terminalReconciliationAction()
+    });
+  }
+  const ciHeadSha = issue.validation?.githubCi?.headSha ?? null;
+  if (terminal && issue.headSha && ciHeadSha && issue.headSha !== ciHeadSha) {
+    diagnostics.push({
+      message: `contradictory terminal state: stale validation/CI head SHA ${shortSha(ciHeadSha)} differs from recorded head ${shortSha(issue.headSha)}`,
+      nextAction: "rerun or verify validation/CI against the selected terminal head before relying on the stale evidence"
+    });
+  }
+  if (terminal && issue.validation?.githubCi?.status && issue.validation.githubCi.status !== "passed") {
+    diagnostics.push({
+      message: `contradictory terminal state: terminal issue still records GitHub CI as ${issue.validation.githubCi.status}`,
+      nextAction: "verify the selected PR's latest checks before treating the terminal state as clean"
+    });
+  }
+  if (terminal && (issue.nextRetryAt || issue.retryAttempt != null || retry)) {
+    const retryDueAt = issue.nextRetryAt ?? retry?.dueAt;
+    const retrySource = issue.nextRetryAt || issue.retryAttempt != null ? "retry metadata" : "retry queue entry";
+    diagnostics.push({
+      message: `merge/retry drift: terminal issue still has ${retrySource}${retryDueAt ? ` for ${retryDueAt}` : ""}`,
+      nextAction: terminalReconciliationAction()
+    });
+  }
+  if (terminal && hasTerminalWorkspaceWarning(issue)) {
+    diagnostics.push({
+      message: `terminal workspace warning: workspace was missing during terminal reconciliation${issue.workspaceMissingAt ? ` at ${issue.workspaceMissingAt}` : ""}`,
+      nextAction: "inspect the last handoff and run artifacts; do not start duplicate work solely to recreate the workspace"
+    });
+  }
+  if (terminal && recovery && !recovery.exists && shouldReportMissingTerminalWorkspace(issue)) {
+    diagnostics.push({
+      message: `missing terminal workspace warning: workspacePath points to missing workspace ${recovery.workspacePath} but no terminal missing marker was recorded`,
+      nextAction: "explain the missing workspace from run artifacts before redispatching or cleaning durable state"
+    });
+  }
+  if (terminal && recovery?.recoverable) {
+    diagnostics.push({
+      message: `terminal workspace drift: terminal issue still points to recoverable workspace ${recovery.workspacePath} (${recovery.reasons.join("; ")})`,
+      nextAction: terminalReconciliationAction()
+    });
+  }
+  const cleanupDrift = cleanupDriftWarning(issue);
+  if (cleanupDrift) {
+    diagnostics.push({
+      message: cleanupDrift,
+      nextAction: "verify local and remote AgentOS branch cleanup manually or through the merge cleanup path; do not rerun implementation for cleanup drift"
+    });
+  }
+  return diagnostics;
+}
+
+function findRuntimeActive(activeRuns: RuntimeActiveRun[], issue: Pick<IssueState, "issueId" | "issueIdentifier">): RuntimeActiveRun | null {
+  return activeRuns.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier) ?? null;
+}
+
+function findRuntimeRetry(retryQueue: RuntimeRetryEntry[], issue: Pick<IssueState, "issueId" | "issueIdentifier">): RuntimeRetryEntry | null {
+  return retryQueue.find((entry) => entry.issueId === issue.issueId || entry.identifier === issue.issueIdentifier) ?? null;
+}
+
+function shouldFormatRecoveryDiagnostics(issue: IssueState | null, recovery: WorkspaceRecoveryDiagnostics | null): recovery is WorkspaceRecoveryDiagnostics {
+  if (!recovery) return false;
+  if (issue && isTerminalIssueState(issue) && recovery.recoverable) return false;
+  if (issue && !recovery.exists && isExpectedPostMergeWorkspaceCleanup(issue) && !hasTerminalWorkspaceWarning(issue)) return false;
+  return true;
+}
+
+function formatIssueStatusDiagnostic(diagnostic: IssueStatusDiagnostic): string {
+  return `- ${diagnostic.message}\n  Next safe action: ${diagnostic.nextAction}`;
+}
+
+function isTerminalIssueState(issue: IssueState): boolean {
+  return isAuthoritativeTerminalIssueState(issue);
+}
+
+function isAuthoritativeTerminalIssueState(issue: IssueState): boolean {
+  return Boolean(
+    issue.terminalState ||
+      issue.mergedAt ||
+      (issue.lifecycleStatus && TERMINAL_LIFECYCLE_STATUSES.has(issue.lifecycleStatus))
+  );
+}
+
+function cleanTerminalStatusLine(issue: IssueState): string | null {
+  if (!isAuthoritativeTerminalIssueState(issue)) return null;
+  if (issue.lifecycleStatus === "already_merged_pr") return "already merged";
+  if (issue.mergedAt || issue.lifecycleStatus === "merge_success" || issue.lifecycleStatus === "post_merge_cleanup_warning") return "merged";
+  if (issue.terminalState) return `terminal (${issue.terminalState})`;
+  return "terminal";
+}
+
+function cleanTerminalNextSafeAction(issue: IssueState): string | null {
+  if (!isAuthoritativeTerminalIssueState(issue)) return null;
+  if (issue.lifecycleStatus === "already_merged_pr") return "no operator action required; selected PR is already merged and terminal state is recorded";
+  if (issue.mergedAt || issue.lifecycleStatus === "merge_success" || issue.lifecycleStatus === "post_merge_cleanup_warning") {
+    return "no operator action required; selected PR is merged and terminal state is recorded";
+  }
+  if (issue.terminalState) return `no operator action required; issue is already in terminal state ${issue.terminalState}`;
+  return "no operator action required; terminal state is recorded";
+}
+
+function hasTerminalWorkspaceWarning(issue: IssueState): boolean {
+  return Boolean(issue.workspaceMissingAt || issue.lifecycleStatus === "terminal_missing_workspace");
+}
+
+function shouldReportMissingTerminalWorkspace(issue: IssueState): boolean {
+  if (hasTerminalWorkspaceWarning(issue)) return false;
+  return !isExpectedPostMergeWorkspaceCleanup(issue);
+}
+
+function isExpectedPostMergeWorkspaceCleanup(issue: IssueState): boolean {
+  return Boolean(
+    issue.mergedAt ||
+      issue.lifecycleStatus === "merge_success" ||
+      issue.lifecycleStatus === "post_merge_cleanup_warning" ||
+      issue.lifecycleStatus === "already_merged_pr"
+  );
+}
+
+function cleanupDriftWarning(issue: IssueState): string | null {
+  if (!issue.mergedAt && issue.lifecycleStatus !== "post_merge_cleanup_warning" && issue.lifecycleStatus !== "already_merged_pr") return null;
+  const warnings = issue.mergeCleanupWarnings ?? [];
+  if (warnings.length === 0) return null;
+  const branchWarning = warnings.find((warning) => /(?:local|remote) branch cleanup|branch still exists|delete.*branch/i.test(warning)) ?? warnings[0];
+  return `post-merge cleanup drift: selected PR is merged but AgentOS branch cleanup warning remains (${branchWarning})`;
+}
+
+function terminalReconciliationAction(): string {
+  return "verify the terminal PR/Linear evidence, then use the reconciliation path to clear stale durable fields without redispatching Codex";
+}
+
+function shortSha(sha: string): string {
+  return sha.length > 12 ? sha.slice(0, 12) : sha;
 }
