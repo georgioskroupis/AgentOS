@@ -176,7 +176,11 @@ status, session/token metrics, and warns if recorded artifact hashes no longer
 match the persisted artifacts. It also prints phase-level cycle-time
 breakdowns from `.agent-os/runs/<run-id>/summary.json`, flags unhealthy
 stall/retry, review, human-wait, and merge/retry patterns, and includes next
-actions for operators. `runs simulate` and `runs replay` are local-only: they
+actions for operators. The built-in SLO diagnostics warn when stall/retry time
+reaches 10 minutes or 25% of cycle time, review/fix time reaches 30 minutes (or
+15 minutes across repeated spans and at least 40% of cycle time), human wait
+reaches 4 hours (or an open wait reaches 1 hour), or merge/CI/retry drift
+reaches 30 minutes. `runs simulate` and `runs replay` are local-only: they
 read/write run artifacts without constructing Linear, GitHub, or Codex clients.
 
 ```bash

@@ -516,12 +516,61 @@ describe("issue inspection", () => {
       error: "stale clean retry queue",
       scheduledAt: "2026-05-05T00:25:00.000Z"
     });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-9.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-9",
+          issueIdentifier: "AG-9",
+          phase: "completed",
+          lifecycleStatus: "merge_success",
+          mergedAt: "2026-05-05T00:10:00.000Z",
+          reviewStatus: "approved",
+          headSha: "merged-head-sha",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            githubCi: { status: "passed", headSha: "merged-head-sha", checkedAt: "2026-05-05T00:09:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await new RuntimeStateStore(repo).upsertActiveRun({
+      issueId: "issue-9",
+      identifier: "AG-9",
+      issue: {
+        id: "issue-9",
+        identifier: "AG-9",
+        title: "Clean terminal active-run drift",
+        description: null,
+        priority: 1,
+        state: "Done",
+        branch_name: null,
+        url: null,
+        labels: [],
+        blocked_by: [],
+        created_at: null,
+        updated_at: null
+      },
+      attempt: 1,
+      runId: "run_20260505000000_AG-9_stale",
+      startedAt: "2026-05-05T00:00:00.000Z",
+      lastEventAt: "2026-05-05T00:01:00.000Z",
+      phase: "streaming-turn"
+    });
 
     const registryOutput = await getRegistryStatus(registryPath);
     expect(registryOutput).toContain("AG-3: status warning - contradictory terminal state: terminal issue still has reviewStatus human_required");
     expect(registryOutput).not.toContain("AG-3: retrying after stale retry queue");
     expect(registryOutput).toContain("AG-7: status warning - merge/retry drift: terminal issue still has retry queue entry for 2026-05-05T00:40:00.000Z");
     expect(registryOutput).not.toContain("AG-7: retrying after stale clean retry queue");
+    expect(registryOutput).toContain("AG-9: status warning - active-run drift: terminal issue still has active runtime state for run_20260505000000_AG-9_stale (streaming-turn)");
+    expect(registryOutput).not.toContain("AG-9: running");
 
     const inspectOutput = await inspectIssue(repo, "AG-3");
     expect(inspectOutput).toContain("Status warnings:");
@@ -540,6 +589,12 @@ describe("issue inspection", () => {
     expect(inspectRetryOnlyOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
     expect(inspectRetryOnlyOutput).not.toContain("Status warnings: none");
     expect(inspectRetryOnlyOutput).not.toContain("retrying after stale clean retry queue");
+
+    const inspectActiveOnlyOutput = await inspectIssue(repo, "AG-9");
+    expect(inspectActiveOnlyOutput).toContain("Status warnings:");
+    expect(inspectActiveOnlyOutput).toContain("active-run drift: terminal issue still has active runtime state for run_20260505000000_AG-9_stale (streaming-turn)");
+    expect(inspectActiveOnlyOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
+    expect(inspectActiveOnlyOutput).not.toContain("Status warnings: none");
   });
 
   it("keeps completed local handoffs on the non-terminal status path without explicit terminal evidence", async () => {
