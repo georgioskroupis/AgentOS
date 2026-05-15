@@ -1499,6 +1499,7 @@ describe("orchestrator", () => {
       lifecycleStatus: "human_continuation",
       updatedAt: "2026-05-10T00:01:00.000Z"
     });
+    const fakeLinearToken = `lin_${"1".repeat(20)}`;
     const tracker: IssueTracker = {
       async fetchCandidates() {
         return [issue];
@@ -1507,7 +1508,7 @@ describe("orchestrator", () => {
         return new Map([[issue.id, issue]]);
       },
       async fetchIssueComments() {
-        throw new Error("Linear comments unavailable");
+        throw new Error(`Linear comments unavailable: Authorization: Bearer ${fakeLinearToken}`);
       }
     };
     let runnerCalled = false;
@@ -1532,6 +1533,8 @@ describe("orchestrator", () => {
     expect(runnerCalled).toBe(false);
     const state = await new IssueStateStore(repo).read("AG-1");
     expect(state?.stopReason).toContain("could not read latest Linear comments before dispatch guardrails");
+    expect(JSON.stringify(state)).not.toContain(fakeLinearToken);
+    expect(state?.stopReason).toContain("[REDACTED]");
     expect(state?.lastHumanDecision?.type).toBe("fix_findings");
     const logs = await logger.tail(20);
     expect(logs.some((entry) => entry.type === "linear_comment_read_failed")).toBe(true);

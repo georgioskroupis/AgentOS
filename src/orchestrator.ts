@@ -819,7 +819,8 @@ export class Orchestrator {
   }
 
   private async recordCommentReadDispatchStop(issue: Issue, error: Error): Promise<IssueState> {
-    const message = `could not read latest Linear comments before dispatch guardrails: ${error.message}`;
+    const safeError = summarizeText(error.message).inline;
+    const message = `could not read latest Linear comments before dispatch guardrails: ${safeError}`;
     return this.recordDispatchGuardrailStop(issue, message, {
       phase: "needs-input",
       stopReason: message

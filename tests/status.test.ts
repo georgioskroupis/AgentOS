@@ -219,6 +219,36 @@ describe("issue inspection", () => {
       ),
       "utf8"
     );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-4.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-4",
+          issueIdentifier: "AG-4",
+          phase: "completed",
+          lifecycleStatus: "human_continuation",
+          reviewStatus: "approved",
+          prs: [{ url: "https://github.com/o/r/pull/4", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          lastHumanDecision: {
+            type: "fix_findings",
+            source: "linear-comment",
+            trusted: true,
+            commentId: "comment-old-fix-findings",
+            decidedAt: "2026-05-05T00:01:00.000Z"
+          },
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:08:00.000Z",
+            githubCi: { status: "passed", headSha: "ghi789", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:08:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
     await new JsonlLogger(repo).write({
       type: "merge_waiting",
       issueId: "issue-2",
@@ -236,9 +266,52 @@ describe("issue inspection", () => {
     expect(output).toContain("Repo env: missing");
     expect(output).toContain("AG-2: waiting on CI - 1 GitHub check(s) still pending");
     expect(output).toContain("AG-3: completed locally");
+    expect(output).toContain("AG-4: waiting on merge");
+    expect(output).not.toContain("AG-4: human_continuation");
     expect(output).not.toContain("AG-2: status warning");
     expect(output).not.toContain("AG-3: status warning");
     expect(output).toContain("AG-1: local full-suite validation timing failure recorded separately; focused test passed; GitHub CI passed at abc123");
+  });
+
+  it("does not recommend redispatch after old fix-findings once a PR is approved", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-approved-pr-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "completed",
+          lifecycleStatus: "human_continuation",
+          reviewStatus: "approved",
+          prs: [{ url: "https://github.com/o/r/pull/1", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          lastHumanDecision: {
+            type: "fix_findings",
+            source: "linear-comment",
+            trusted: true,
+            commentId: "comment-old-fix-findings",
+            decidedAt: "2026-05-05T00:01:00.000Z"
+          },
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:08:00.000Z",
+            githubCi: { status: "passed", headSha: "abc123", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:08:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-1");
+
+    expect(output).toContain("Review: approved");
+    expect(output).toContain("Next safe action: mark the PR ready only after fresh validation and green CI, then move the issue to Merging for the shepherd");
+    expect(output).not.toContain("Next safe action: redispatch from Todo/In Progress");
   });
 
   it("reports daemon liveness states and status next safe actions", async () => {

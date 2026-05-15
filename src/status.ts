@@ -224,13 +224,13 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (issue.lifecycleStatus === "planning_required") {
     return `planning required - ${nextSafeAction(issue, recovery)}`;
   }
+  if (hasApprovedPullRequest(issue) && issue.phase === "completed") return "waiting on merge";
   if (issue.lifecycleStatus === "human_continuation" || issue.lifecycleStatus === "supervisor_continuation" || issue.lifecycleStatus === "externally_fixed") {
     return `${issue.lifecycleStatus} - ${nextSafeAction(issue, recovery)}`;
   }
   if (issue.reviewStatus === "pending" || issue.phase === "review") return `waiting on review (${issue.reviewStatus ?? "pending"})`;
   if (issue.reviewStatus === "human_required" || issue.phase === "human-required") return `waiting on Human Review${issue.lastError ? ` - ${issue.lastError}` : ""}`;
   if (issue.phase === "merge") return "waiting on merge";
-  if (pullRequestUrls(issue).length > 0 && issue.reviewStatus === "approved" && issue.phase === "completed") return "waiting on merge";
   if (issue.nextRetryAt) return `retrying after ${issue.lastError ?? "unknown error"}; next retry ${issue.nextRetryAt}`;
   if (issue.validation) {
     const validation = validationStatusPhrase(issue.validation);
@@ -254,6 +254,9 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
   }
+  if (hasApprovedPullRequest(issue)) {
+    return "mark the PR ready only after fresh validation and green CI, then move the issue to Merging for the shepherd";
+  }
   if (decision?.type === "fix_findings") {
     return "redispatch from Todo/In Progress with recent Linear comments, PR feedback, and review context included in the next prompt";
   }
@@ -263,9 +266,6 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (issue.reviewStatus === "human_required" || issue.phase === "human-required") {
     return "record `AgentOS-Human-Decision: fix-findings`, `approve-as-is`, `accept-risk`, `split-follow-up`, or `proceed-to-merge-after-supervisor-fix` in Linear before re-entry";
   }
-  if (issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0) {
-    return "mark the PR ready only after fresh validation and green CI, then move the issue to Merging for the shepherd";
-  }
   if (issue.phase === "merge") return "wait for merge shepherding or inspect GitHub checks if progress stalls";
   if (issue.validation?.status === "failed" || issue.validation?.status === "missing") return "repair or rerun validation evidence before Human Review handoff";
   if (issue.phase === "completed" && pullRequestUrls(issue).length === 0) return "review the no-PR handoff and move to Merging only if the outcome is accepted";
@@ -273,6 +273,10 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
 }
 
 export { daemonLaunchCommand, inspectDaemonHealth };
+
+function hasApprovedPullRequest(issue: IssueState): boolean {
+  return issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0;
+}
 
 function validationStatusPhrase(validation: ValidationState): string | null {
   const failedFullSuite = validation.failedHistoricalAttempts?.find((command) => command.name === "npm run agent-check");
