@@ -36,7 +36,7 @@ export class IssueStateStore {
     return states.sort((a, b) => a.issueIdentifier.localeCompare(b.issueIdentifier));
   }
 
-  async merge(identifier: string, patch: Partial<IssueState> & Pick<IssueState, "issueId" | "issueIdentifier">): Promise<IssueState> {
+  async merge(identifier: string, patch: Partial<IssueState> & Pick<IssueState, "issueId" | "issueIdentifier">, options: { replaceHumanDecisions?: boolean } = {}): Promise<IssueState> {
     const current = await this.read(identifier);
     const patchState = normalizeIssueState({
       ...patch,
@@ -44,11 +44,14 @@ export class IssueStateStore {
       issueIdentifier: patch.issueIdentifier,
       updatedAt: patch.updatedAt ?? new Date().toISOString()
     });
+    const humanDecisions = options.replaceHumanDecisions
+      ? patchState.humanDecisions
+      : mergeHumanDecisions(current?.humanDecisions ?? [], patchState.humanDecisions ?? []);
     const next = normalizeIssueState({
       ...(current ?? { schemaVersion: ISSUE_STATE_SCHEMA_VERSION, issueId: patch.issueId, issueIdentifier: patch.issueIdentifier, updatedAt: new Date().toISOString() }),
       ...patchState,
       prs: mergePullRequestRefs(current?.prs ?? [], patchState.prs ?? []),
-      humanDecisions: mergeHumanDecisions(current?.humanDecisions ?? [], patchState.humanDecisions ?? []),
+      humanDecisions,
       appProof: mergeAppProof(current?.appProof, patchState.appProof),
       updatedAt: new Date().toISOString()
     });
@@ -304,7 +307,6 @@ export function latestHumanDecision(decisions: HumanDecisionState[] | undefined)
 
 export function isAuthoritativeHumanDecision(decision: HumanDecisionState | null | undefined): decision is HumanDecisionState {
   if (!decision) return false;
-  if (decision.source === "manual") return true;
   return decision.source === "linear-comment" && decision.trusted === true;
 }
 
@@ -328,6 +330,17 @@ export function mergeHumanDecisions(existing: HumanDecisionState[], incoming: Hu
   }
   const merged = [...byKey.values()].sort((a, b) => a.decidedAt.localeCompare(b.decidedAt));
   return merged.length ? merged : undefined;
+}
+
+export function reconcileHumanDecisionsForFetchedComments(existing: HumanDecisionState[], incoming: HumanDecisionState[], comments: IssueComment[]): HumanDecisionState[] {
+  const fetchedCommentIds = new Set(comments.map((comment) => comment.id).filter(Boolean));
+  const incomingCommentIds = new Set(incoming.map((decision) => decision.commentId).filter((commentId): commentId is string => Boolean(commentId)));
+  const retained = existing.filter((decision) => {
+    if (decision.source !== "linear-comment" || !decision.commentId) return true;
+    if (!fetchedCommentIds.has(decision.commentId)) return true;
+    return incomingCommentIds.has(decision.commentId);
+  });
+  return mergeHumanDecisions(retained, incoming) ?? [];
 }
 
 function humanDecisionKey(decision: HumanDecisionState): string {

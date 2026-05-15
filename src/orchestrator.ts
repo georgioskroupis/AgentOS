@@ -13,6 +13,7 @@ import {
   IssueStateStore,
   latestHumanDecision,
   mergeHumanDecisions,
+  reconcileHumanDecisionsForFetchedComments,
   mergeEligiblePullRequests,
   mergeTargetAmbiguityReason,
   mergeTargetPullRequest,
@@ -1372,25 +1373,30 @@ export class Orchestrator {
       issueAssigneeId: issue.assigneeId,
       issueAssigneeEmail: issue.assigneeEmail
     });
-    if (decisions.length === 0) return currentState;
-    const previousDecisions = [...(currentState?.humanDecisions ?? []), ...(currentState?.lastHumanDecision ? [currentState.lastHumanDecision] : [])];
-    const newDecisions = decisions.filter((decision) => !hasHumanDecision(previousDecisions, decision));
-    if (newDecisions.length === 0) return currentState;
-    const mergedDecisions = mergeHumanDecisions(previousDecisions, decisions) ?? [];
-    const latestDecision = latestAuthoritativeHumanDecision(mergedDecisions) ?? latestHumanDecision(mergedDecisions);
+    const previousDecisions = mergeHumanDecisions([...(currentState?.humanDecisions ?? []), ...(currentState?.lastHumanDecision ? [currentState.lastHumanDecision] : [])], []) ?? [];
+    const mergedDecisions = reconcileHumanDecisionsForFetchedComments(previousDecisions, decisions, fetchedComments);
+    const newDecisions = mergedDecisions.filter((decision) => !hasHumanDecision(previousDecisions, decision));
+    const removedDecisions = previousDecisions.filter((decision) => !hasHumanDecision(mergedDecisions, decision));
+    const latestAuthoritativeDecision = latestAuthoritativeHumanDecision(mergedDecisions);
+    const latestDecision = latestAuthoritativeDecision ?? latestHumanDecision(mergedDecisions);
+    const nextLifecycleStatus = latestAuthoritativeDecision ? lifecycleStatusForHumanDecision(latestAuthoritativeDecision) : undefined;
+    const currentLastDecision = currentState?.lastHumanDecision ?? null;
+    const lastDecisionChanged = Boolean(currentLastDecision) !== Boolean(latestDecision) || Boolean(currentLastDecision && latestDecision && !hasHumanDecision([currentLastDecision], latestDecision));
+    const lifecycleStatusChanged = currentState?.lifecycleStatus !== nextLifecycleStatus;
+    if (newDecisions.length === 0 && removedDecisions.length === 0 && !lastDecisionChanged && !lifecycleStatusChanged) return currentState;
     const previousLastRunId = currentState?.lastRunId ?? null;
     const state = await this.recordIssueState(issue, {
       humanDecisions: mergedDecisions,
       lastHumanDecision: latestDecision,
-      lastHumanFeedbackAt: latestDecision?.decidedAt ?? new Date().toISOString(),
-      lifecycleStatus: latestDecision ? lifecycleStatusForHumanDecision(latestDecision) : currentState?.lifecycleStatus
-    });
+      lastHumanFeedbackAt: latestDecision?.decidedAt ?? null,
+      lifecycleStatus: nextLifecycleStatus
+    }, { replaceHumanDecisions: true });
     await this.logger.write({
       type: "human_decision_recorded",
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       message: latestDecision?.type ?? "unknown",
-      payload: { decisions: mergedDecisions, newDecisions }
+      payload: { decisions: mergedDecisions, newDecisions, removedDecisions }
     });
     if (latestDecision) {
       await this.writePhaseTimingEvent(issue, {
@@ -2610,12 +2616,12 @@ export class Orchestrator {
     });
   }
 
-  private async recordIssueState(issue: Issue, patch: Partial<IssueState>): Promise<IssueState> {
+  private async recordIssueState(issue: Issue, patch: Partial<IssueState>, options: { replaceHumanDecisions?: boolean } = {}): Promise<IssueState> {
     const state = await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       ...patch
-    });
+    }, options);
     const activePatch: Partial<RuntimeActiveRun> = {};
     if (patch.phase) activePatch.phase = patch.phase;
     if (patch.stopReason !== undefined) activePatch.stopReason = patch.stopReason;
@@ -2684,6 +2690,7 @@ function isSupervisorContinuationPaused(state: IssueState | null): boolean {
   if (!state?.lifecycleStatus) return false;
   if (!["human_continuation", "supervisor_continuation", "externally_fixed"].includes(state.lifecycleStatus)) return false;
   const decision = latestAuthoritativeDecision(state);
+  if (!decision) return false;
   return decision?.type !== "fix_findings";
 }
 

@@ -1074,7 +1074,7 @@ describe("orchestrator", () => {
     expect(state?.stopReason).toContain("supervisor continuation or external fix is active");
   });
 
-  it("preserves newer local supervisor decisions when older trusted comments are ingested", async () => {
+  it("preserves newer stored trusted supervisor decisions when older trusted comments are ingested", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-preserve-local-supervisor-decision-"));
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
@@ -1085,9 +1085,13 @@ describe("orchestrator", () => {
     const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
     const supervisorFixedDecision = {
       type: "proceed_to_merge_after_supervisor_fix" as const,
-      source: "manual" as const,
+      source: "linear-comment" as const,
+      trusted: true,
       decidedAt: "2026-05-10T00:03:00.000Z",
-      actor: "local-supervisor",
+      actor: "Supervisor",
+      actorId: "user-supervisor",
+      actorEmail: "supervisor@example.com",
+      commentId: "comment-newer-supervisor-fixed",
       body: "AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix",
       prHeadSha: "fixed-head"
     };
@@ -1140,11 +1144,172 @@ describe("orchestrator", () => {
     const state = await new IssueStateStore(repo).read("AG-1");
     expect(state?.lastHumanDecision).toMatchObject({
       type: "proceed_to_merge_after_supervisor_fix",
-      source: "manual",
+      source: "linear-comment",
+      commentId: "comment-newer-supervisor-fixed",
       prHeadSha: "fixed-head"
     });
     expect(state?.humanDecisions?.map((decision) => decision.type)).toEqual(["fix_findings", "proceed_to_merge_after_supervisor_fix"]);
     expect(state?.lifecycleStatus).toBe("externally_fixed");
+  });
+
+  it("keeps unproven manual supervisor decisions context-only before dispatch", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-manual-decision-context-only-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "human-required",
+      reviewStatus: "human_required",
+      humanDecisions: [
+        {
+          type: "proceed_to_merge_after_supervisor_fix",
+          source: "manual",
+          decidedAt: "2026-05-10T00:03:00.000Z",
+          actor: "local-supervisor",
+          body: "AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix",
+          prHeadSha: "fixed-head"
+        }
+      ],
+      lastHumanDecision: {
+        type: "proceed_to_merge_after_supervisor_fix",
+        source: "manual",
+        decidedAt: "2026-05-10T00:03:00.000Z",
+        actor: "local-supervisor",
+        body: "AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix",
+        prHeadSha: "fixed-head"
+      },
+      lifecycleStatus: "externally_fixed",
+      updatedAt: "2026-05-10T00:03:00.000Z"
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [];
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lastHumanDecision).toMatchObject({
+      type: "proceed_to_merge_after_supervisor_fix",
+      source: "manual"
+    });
+    expect(state?.lifecycleStatus).toBeUndefined();
+    expect(state?.stopReason).toBe("human-required issue needs a trusted structured decision before redispatch");
+  });
+
+  it("retracts stored Linear decisions when fetched trusted comments no longer contain structured decisions", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-retract-human-decision-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "human-required",
+      reviewStatus: "human_required",
+      humanDecisions: [
+        {
+          type: "fix_findings",
+          source: "linear-comment",
+          trusted: true,
+          actor: "Supervisor",
+          actorId: "user-supervisor",
+          actorEmail: "supervisor@example.com",
+          decidedAt: "2026-05-10T00:01:00.000Z",
+          commentId: "comment-retracted",
+          body: "AgentOS-Human-Decision: fix-findings"
+        }
+      ],
+      lastHumanDecision: {
+        type: "fix_findings",
+        source: "linear-comment",
+        trusted: true,
+        actor: "Supervisor",
+        actorId: "user-supervisor",
+        actorEmail: "supervisor@example.com",
+        decidedAt: "2026-05-10T00:01:00.000Z",
+        commentId: "comment-retracted",
+        body: "AgentOS-Human-Decision: fix-findings"
+      },
+      lifecycleStatus: "human_continuation",
+      updatedAt: "2026-05-10T00:01:00.000Z"
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-retracted",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-10T00:01:00.000Z",
+            updatedAt: "2026-05-10T00:04:00.000Z",
+            body: "Retracting the prior decision until I can review it again."
+          }
+        ];
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.humanDecisions ?? []).toEqual([]);
+    expect(state?.lastHumanDecision).toBeNull();
+    expect(state?.lifecycleStatus).toBeUndefined();
+    expect(state?.stopReason).toBe("human-required issue needs a trusted structured decision before redispatch");
   });
 
   it("fails closed when Linear comments cannot be read before dispatch guardrails", async () => {

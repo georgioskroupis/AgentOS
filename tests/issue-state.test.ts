@@ -7,6 +7,7 @@ import {
   extractHumanDecision,
   extractHumanDecisionsFromComments,
   extractPullRequestUrls,
+  isAuthoritativeHumanDecision,
   isTrustedHumanDecisionActor,
   issueStateFromHandoff,
   IssueStateStore,
@@ -165,6 +166,13 @@ describe("issue state handoff parsing", () => {
           { trustedActors: ["trusted@example.com"] }
         )
       ).toEqual([]);
+      expect(
+        isAuthoritativeHumanDecision({
+          type: "fix_findings",
+          source: "manual",
+          decidedAt: "2026-05-05T00:03:00.000Z"
+        })
+      ).toBe(false);
     });
 
   it("treats implemented handoff-only outcomes as valid no-PR issue state", () => {
