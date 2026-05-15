@@ -158,9 +158,12 @@ or posted.
 
 When a Human Review issue is returned to `Todo` or `In Progress`, recent Linear
 comments are included in the next prompt as re-entry context. A structured
-decision is authoritative only when the comment author matches the issue
-assignee or an entry in `lifecycle.trusted_decision_actors`; other comments stay
-visible as non-authoritative context and do not change lifecycle state.
+decision is authoritative only when the comment author's stable Linear user ID
+or verified email matches the issue assignee or an entry in
+`lifecycle.trusted_decision_actors`; other comments stay visible as
+non-authoritative context and do not change lifecycle state. Agent-authored
+handoff files can record structured decisions as context, but they do not
+control redispatch, merge, or supervisor-continuation guardrails.
 
 Structured decision format:
 

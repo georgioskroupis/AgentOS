@@ -35,6 +35,8 @@ const mergingIssue: Issue = {
 };
 
 const fakeGh = resolve("tests/fixtures/fake-gh.mjs");
+const supervisorAssignee = { assignee: "Supervisor", assigneeId: "user-supervisor", assigneeEmail: "supervisor@example.com" };
+const supervisorCommentAuthor = { author: "Supervisor", authorId: "user-supervisor", authorEmail: "supervisor@example.com" };
 
 class WarningWriteFailingLogger extends JsonlLogger {
   warningAttempts = 0;
@@ -268,7 +270,7 @@ describe("orchestrator", () => {
       `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
-    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor", updated_at: "2026-05-08T00:00:00.000Z" };
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee, updated_at: "2026-05-08T00:00:00.000Z" };
     const tracker: IssueTracker = {
       async fetchCandidates() {
         return [issue];
@@ -286,7 +288,7 @@ describe("orchestrator", () => {
           },
           {
             id: "comment-decision",
-            author: "Supervisor",
+            ...supervisorCommentAuthor,
             createdAt: "2026-05-08T00:02:00.000Z",
             body: [
               "AgentOS-Human-Decision: fix-findings",
@@ -496,7 +498,7 @@ describe("orchestrator", () => {
       `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghStatePath)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
-    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor", updated_at: "2026-01-02T00:00:00.000Z" };
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee, updated_at: "2026-01-02T00:00:00.000Z" };
     await new IssueStateStore(repo).write({
       schemaVersion: 1,
       issueId: issue.id,
@@ -518,7 +520,7 @@ describe("orchestrator", () => {
         return [
           {
             id: "comment-1",
-            author: "Supervisor",
+            ...supervisorCommentAuthor,
             createdAt: "2026-01-02T00:01:00.000Z",
             body: [
               "AgentOS-Human-Decision: fix-findings",
@@ -566,7 +568,7 @@ describe("orchestrator", () => {
       `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
-    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor", updated_at: "2026-01-03T00:00:00.000Z" };
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee, updated_at: "2026-01-03T00:00:00.000Z" };
     const runStore = new RunArtifactStore(repo);
     const priorRun = await runStore.startRun({ issue, attempt: null });
     await runStore.startPhase(priorRun.runId, {
@@ -581,15 +583,18 @@ describe("orchestrator", () => {
       decidedAt: "2026-01-02T00:00:00.000Z",
       source: "linear-comment" as const,
       actor: "Supervisor",
+      actorId: "user-supervisor",
+      actorEmail: "supervisor@example.com",
+      trusted: true,
       commentId: "comment-1",
       body: "AgentOS-Human-Decision: fix-findings"
     };
-    await new IssueStateStore(repo).write({
-      schemaVersion: 1,
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      phase: "review",
-      lifecycleStatus: "human_continuation",
+      await new IssueStateStore(repo).write({
+        schemaVersion: 1,
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        phase: "review",
+        lifecycleStatus: "human_continuation",
       lastRunId: priorRun.runId,
       humanDecisions: [originalDecision],
       lastHumanDecision: originalDecision,
@@ -607,7 +612,7 @@ describe("orchestrator", () => {
         return [
           {
             id: "comment-1",
-            author: "Supervisor",
+            ...supervisorCommentAuthor,
             createdAt: "2026-01-02T00:00:00.000Z",
             updatedAt: "2026-01-03T00:01:00.000Z",
             body: ["AgentOS-Human-Decision: approve-as-is", "Decision-Summary: approved after reviewer recheck"].join("\n")
@@ -655,7 +660,7 @@ describe("orchestrator", () => {
       `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
-    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor", updated_at: "2026-01-02T00:00:00.000Z" };
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee, updated_at: "2026-01-02T00:00:00.000Z" };
     const runStore = new RunArtifactStore(repo);
     const priorRun = await runStore.startRun({ issue, attempt: null });
     await runStore.startPhase(priorRun.runId, {
@@ -685,7 +690,7 @@ describe("orchestrator", () => {
         return [
           {
             id: "comment-1",
-            author: "Supervisor",
+            ...supervisorCommentAuthor,
             createdAt: "2026-01-02T00:01:00.000Z",
             body: "AgentOS-Human-Decision: fix-findings"
           }
@@ -731,7 +736,7 @@ describe("orchestrator", () => {
       `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
-    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor", updated_at: "2026-01-02T00:00:00.000Z" };
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee, updated_at: "2026-01-02T00:00:00.000Z" };
     const runStore = new RunArtifactStore(repo);
     const priorRun = await runStore.startRun({ issue, attempt: null });
     await runStore.startPhase(priorRun.runId, {
@@ -762,7 +767,7 @@ describe("orchestrator", () => {
         return [
           {
             id: "comment-1",
-            author: "Supervisor",
+            ...supervisorCommentAuthor,
             createdAt: "2026-01-02T00:01:00.000Z",
             body: "AgentOS-Human-Decision: fix-findings"
           }
@@ -803,7 +808,7 @@ describe("orchestrator", () => {
       `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
-    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor" };
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
     const tracker: IssueTracker = {
       async fetchCandidates() {
         return [issue];
@@ -816,6 +821,8 @@ describe("orchestrator", () => {
           {
             id: "comment-1",
             author: "Random User",
+            authorId: "user-random",
+            authorEmail: "random@example.com",
             createdAt: "2026-01-02T00:01:00.000Z",
             body: "AgentOS-Human-Decision: approve-as-is"
           }
@@ -849,20 +856,26 @@ describe("orchestrator", () => {
     expect(state?.lifecycleStatus).toBeUndefined();
   });
 
-  it("lets newer supervisor-fix decisions override older fix-findings comments before dispatch guardrails", async () => {
-    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-supervisor-overrides-fix-"));
+  it("uses configured trusted decision actors by stable identity while keeping unlisted comments non-authoritative", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-trusted-config-human-reentry-"));
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nlifecycle:\n  trusted_decision_actors:\n    - trusted@example.com\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
-    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor" };
+    const issue = {
+      ...readyIssue,
+      state: "Todo",
+      assignee: "Issue Owner",
+      assigneeId: "user-owner",
+      assigneeEmail: "owner@example.com"
+    };
     await new IssueStateStore(repo).write({
       schemaVersion: 1,
       issueId: issue.id,
       issueIdentifier: issue.identifier,
-      phase: "review",
+      phase: "human-required",
       reviewStatus: "human_required",
       updatedAt: "2026-05-10T00:00:00.000Z"
     });
@@ -876,14 +889,150 @@ describe("orchestrator", () => {
       async fetchIssueComments() {
         return [
           {
+            id: "comment-trusted",
+            author: "Release Manager",
+            authorId: "user-release-manager",
+            authorEmail: "trusted@example.com",
+            createdAt: "2026-05-10T00:01:00.000Z",
+            body: "AgentOS-Human-Decision: fix-findings"
+          },
+          {
+            id: "comment-unlisted",
+            author: "Random User",
+            authorId: "user-random",
+            authorEmail: "random@example.com",
+            createdAt: "2026-05-10T00:02:00.000Z",
+            body: "AgentOS-Human-Decision: approve-as-is"
+          }
+        ];
+      }
+    };
+    let prompt = "";
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          prompt = input.prompt;
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented");
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(1);
+    expect(prompt).toContain("Structured human decision:");
+    expect(prompt).toContain("Type: fix_findings");
+    expect(prompt).toContain("AgentOS-Human-Decision: approve-as-is");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lastHumanDecision).toMatchObject({
+      type: "fix_findings",
+      actor: "Release Manager",
+      actorEmail: "trusted@example.com",
+      trusted: true
+    });
+    expect(state?.humanDecisions?.map((decision) => decision.commentId)).toEqual(["comment-trusted"]);
+  });
+
+  it("does not let handoff-sourced human decisions bypass human-required dispatch guardrails", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-handoff-decision-untrusted-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo" };
+    const handoffDecision = {
+      type: "fix_findings" as const,
+      source: "handoff" as const,
+      decidedAt: "2026-05-10T00:00:00.000Z",
+      body: "AgentOS-Human-Decision: fix-findings"
+    };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "human-required",
+      reviewStatus: "human_required",
+      humanDecisions: [handoffDecision],
+      lastHumanDecision: handoffDecision,
+      updatedAt: "2026-05-10T00:00:00.000Z"
+    });
+    const moves: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.stopReason).toBe("human-required issue needs a trusted structured decision before redispatch");
+  });
+
+  it("lets newer supervisor-fix decisions override older fix-findings comments before dispatch guardrails", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-supervisor-overrides-fix-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
+      await new IssueStateStore(repo).write({
+        schemaVersion: 1,
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        phase: "review",
+        reviewStatus: "human_required",
+      updatedAt: "2026-05-10T00:00:00.000Z"
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
             id: "comment-fix",
-            author: "Supervisor",
+            ...supervisorCommentAuthor,
             createdAt: "2026-05-10T00:01:00.000Z",
             body: "AgentOS-Human-Decision: fix-findings"
           },
           {
             id: "comment-supervisor-fixed",
-            author: "Supervisor",
+            ...supervisorCommentAuthor,
             createdAt: "2026-05-10T00:02:00.000Z",
             body: [
               "AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix",
@@ -951,6 +1100,10 @@ describe("orchestrator", () => {
       lastHumanDecision: {
         type: "proceed_to_merge_after_supervisor_fix",
         source: "linear-comment",
+        actor: "Supervisor",
+        actorId: "user-supervisor",
+        actorEmail: "supervisor@example.com",
+        trusted: true,
         decidedAt: "2026-05-05T00:01:00.000Z",
         commentId: "comment-1"
       },
@@ -1403,6 +1556,62 @@ describe("orchestrator", () => {
     const runtime = await new RuntimeStateStore(repo).read();
     expect(runtime.activeRuns).toEqual([]);
     expect(runtime.retryQueue).toEqual([]);
+  });
+
+  it("resolves terminal workspace existence under the target repo before cleanup", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-terminal-workspace-root-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  terminal_states: [Done]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const workspacePath = join(repo, ".agent-os", "workspaces", "AG-1");
+    await mkdir(workspacePath, { recursive: true });
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "streaming-turn",
+      workspacePath: ".agent-os/workspaces/AG-1",
+      workspaceMissingAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+    const doneIssue = { ...readyIssue, state: "Done", updated_at: "2026-01-03T00:00:00.000Z" };
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, doneIssue]]);
+      },
+      async fetchTerminalIssues() {
+        return [doneIssue];
+      },
+      async comment() {},
+      async move() {}
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for terminal issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      lifecycleStatus: "terminal_linear",
+      terminalState: "Done"
+    });
+    expect(state?.workspaceMissingAt).toBeUndefined();
+    await expect(access(workspacePath)).rejects.toThrow();
   });
 
   it("closes stored wait phases when a recorded issue becomes terminal", async () => {
@@ -3144,41 +3353,57 @@ describe("orchestrator", () => {
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
-    await writeFile(
-      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
-      JSON.stringify({
-        issueId: "issue-1",
-        issueIdentifier: "AG-1",
-        prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: new Date().toISOString() }],
-        reviewStatus: "approved",
-        updatedAt: new Date().toISOString()
-      }),
-      "utf8"
-    );
-    await writeFile(
-      ghState,
-      JSON.stringify({
-        view: {
-          url: "https://github.com/o/r/pull/1",
-          state: "MERGED",
-          isDraft: false,
-          mergeable: null,
-          mergedAt: "2026-05-05T08:00:00Z",
-          headRefName: "agent/AG-1",
-          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
-        }
-      }),
+    const staleMergeState = {
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      phase: "merge",
+      prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff" as const, role: "primary" as const, discoveredAt: new Date().toISOString() }],
+      reviewStatus: "human_required" as const,
+      lastError: "stale reviewer failure",
+      errorCategory: "review" as const,
+      retryAttempt: 2,
+      nextRetryAt: "2026-05-05T00:30:00.000Z",
+      workspaceMissingAt: "2026-05-05T00:00:00.000Z",
+      headSha: "stale-head",
+      lastReviewedSha: "stale-reviewed",
+      lastFixedSha: "stale-fixed",
+      validation: {
+        status: "passed" as const,
+        checkedAt: "2026-05-05T00:00:00.000Z",
+        githubCi: { status: "failed" as const, headSha: "stale-ci", checkedAt: "2026-05-05T00:00:00.000Z" }
+      },
+      updatedAt: new Date().toISOString()
+    };
+      await writeFile(
+        ghState,
+        JSON.stringify({
+          view: {
+            url: "https://github.com/o/r/pull/1",
+            state: "MERGED",
+            isDraft: false,
+            mergeable: null,
+            mergedAt: "2026-05-05T08:00:00Z",
+            headRefOid: "merged-head-sha",
+            headRefName: "agent/AG-1",
+            statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
+          }
+        }),
       "utf8"
     );
 
     const moves: string[] = [];
     const comments: string[] = [];
+    let staleMergeStateWritten = false;
     const tracker: IssueTracker = {
       async fetchCandidates(states) {
+        if (states.includes("Merging") && !staleMergeStateWritten) {
+          staleMergeStateWritten = true;
+          await writeFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), JSON.stringify(staleMergeState), "utf8");
+        }
         return states.includes("Merging") ? [mergingIssue] : [];
       },
       async fetchIssueStates() {
-        return new Map([[mergingIssue.id, { ...mergingIssue, state: "Done" }]]);
+        return new Map([[mergingIssue.id, mergingIssue]]);
       },
       async move(issue, state) {
         moves.push(`${issue} -> ${state}`);
@@ -3204,6 +3429,23 @@ describe("orchestrator", () => {
 
     expect(moves).toEqual(["AG-1 -> Done"]);
     expect(comments.join("\n")).toContain("already merged");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      phase: "completed",
+      lifecycleStatus: "already_merged_pr",
+      headSha: "merged-head-sha",
+      lastReviewedSha: "merged-head-sha",
+      lastFixedSha: "merged-head-sha",
+      validation: expect.objectContaining({
+        githubCi: expect.objectContaining({ status: "passed", headSha: "merged-head-sha" })
+      })
+    });
+    expect(state?.reviewStatus).toBeUndefined();
+    expect(state?.lastError).toBeUndefined();
+    expect(state?.errorCategory).toBeUndefined();
+    expect(state?.retryAttempt).toBeUndefined();
+    expect(state?.nextRetryAt).toBeUndefined();
+    expect(state?.workspaceMissingAt).toBeUndefined();
   });
 
   it("records cleanup warnings instead of retrying when local branch deletion is blocked by an AgentOS worktree", async () => {
@@ -5120,7 +5362,7 @@ describe("orchestrator", () => {
         schemaVersion: 1,
         issueId: readyIssue.id,
         issueIdentifier: readyIssue.identifier,
-        phase: "review",
+        phase: "completed",
         reviewStatus: "approved",
         prs: [{ url: "https://github.com/o/r/pull/1", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
         updatedAt: "2026-05-05T00:00:00.000Z"

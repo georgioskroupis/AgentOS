@@ -23,6 +23,7 @@ interface LinearCommentNode {
   createdAt?: string | null;
   updatedAt?: string | null;
   user?: {
+    id?: string | null;
     name?: string | null;
     displayName?: string | null;
     email?: string | null;
@@ -51,7 +52,7 @@ const issueNodeSelection = `
   url
   createdAt
   updatedAt
-  assignee { name displayName email }
+  assignee { id name displayName email }
   state { name }
   labels { nodes { name } }
   relations { nodes { type relatedIssue { id identifier createdAt updatedAt state { name } } } }
@@ -137,6 +138,8 @@ export class LinearClient implements IssueTracker {
         id: comment.id,
         body: comment.body,
         author: comment.user?.displayName ?? comment.user?.name ?? comment.user?.email ?? null,
+        authorId: comment.user?.id ?? null,
+        authorEmail: comment.user?.email ?? null,
         createdAt: comment.createdAt ?? null,
         updatedAt: comment.updatedAt ?? null
       }));
@@ -334,7 +337,7 @@ export class LinearClient implements IssueTracker {
       const data: IssueCommentsConnection = await this.request<IssueCommentsConnection>(
         `query AgentOSIssueComments($id: String!, $after: String) {
         issue(id: $id) {
-          comments(first: 50, after: $after) { nodes { id body createdAt updatedAt user { name displayName email } } pageInfo { hasNextPage endCursor } }
+          comments(first: 50, after: $after) { nodes { id body createdAt updatedAt user { id name displayName email } } pageInfo { hasNextPage endCursor } }
         }
       }`,
         { id: issueId, after }
@@ -449,6 +452,8 @@ function normalizeLinearIssue(node: unknown): Issue {
     branch_name: typeof raw.branchName === "string" ? raw.branchName : null,
     url: typeof raw.url === "string" ? raw.url : null,
     assignee: raw.assignee?.displayName ?? raw.assignee?.name ?? raw.assignee?.email ?? null,
+    assigneeId: raw.assignee?.id ?? null,
+    assigneeEmail: raw.assignee?.email ?? null,
     labels,
     blocked_by: blockedBy,
     created_at: raw.createdAt ?? null,

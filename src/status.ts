@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { daemonLaunchCommand, inspectDaemonHealth } from "./daemon-health.js";
-import { IssueStateStore, latestHumanDecision, normalizeIssueState, pullRequestUrls } from "./issue-state.js";
+import { IssueStateStore, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestHumanDecision, normalizeIssueState, pullRequestUrls } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
 import { loadRegistry, RegistryStateStore, resolveRegistryProjectPaths, type RegistryProjectSummary } from "./registry.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
@@ -162,6 +162,8 @@ function humanDecisionDetails(state: IssueState | null): string | null {
   if (!decision) return "Human decision: none recorded";
   const lines = [
     `Human decision: ${decision.type}`,
+    `Decision source: ${decision.source}`,
+    `Decision authority: ${isAuthoritativeHumanDecision(decision) ? "authoritative" : "context-only"}`,
     decision.actor ? `Decision actor: ${decision.actor}` : null,
     `Decision time: ${decision.decidedAt}`,
     decision.prHeadSha ? `Decision PR head SHA: ${decision.prHeadSha}` : null,
@@ -242,7 +244,10 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (recovery?.recoverable) return recovery.nextSafeAction;
   const terminalAction = cleanTerminalNextSafeAction(issue);
   if (terminalAction) return terminalAction;
-  const decision = issue.lastHumanDecision ?? latestHumanDecision(issue.humanDecisions);
+  const decision = latestAuthoritativeHumanDecision([
+    ...(issue.humanDecisions ?? []),
+    ...(issue.lastHumanDecision ? [issue.lastHumanDecision] : [])
+  ]);
   if (issue.lifecycleStatus === "planning_required" || /planning|decomposition|likely-large/i.test(issue.stopReason ?? "")) {
     return "create or attach a planning/decomposition artifact, or split follow-up issues, before returning the issue to implementation";
   }
@@ -423,10 +428,11 @@ function shouldReportMissingTerminalWorkspace(issue: IssueState): boolean {
 function isExpectedPostMergeWorkspaceCleanup(issue: IssueState): boolean {
   return Boolean(
     issue.mergedAt ||
-      issue.lifecycleStatus === "merge_success" ||
-      issue.lifecycleStatus === "post_merge_cleanup_warning" ||
-      issue.lifecycleStatus === "already_merged_pr"
-  );
+	      issue.lifecycleStatus === "merge_success" ||
+	      issue.lifecycleStatus === "post_merge_cleanup_warning" ||
+	      issue.lifecycleStatus === "already_merged_pr" ||
+	      issue.lifecycleStatus === "terminal_linear"
+	  );
 }
 
 function cleanupDriftWarning(issue: IssueState): string | null {

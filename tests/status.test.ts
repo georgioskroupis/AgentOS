@@ -30,6 +30,9 @@ describe("issue inspection", () => {
             type: "fix_findings",
             source: "linear-comment",
             actor: "Supervisor",
+            actorId: "user-supervisor",
+            actorEmail: "supervisor@example.com",
+            trusted: true,
             decidedAt: "2026-05-01T00:02:45.000Z",
             prHeadSha: "abc123",
             ciState: "pending",
@@ -661,6 +664,52 @@ describe("issue inspection", () => {
     expect(output).not.toContain("missing terminal workspace warning");
   });
 
+  it("names the planning/decomposition next safe action for planning-required issues", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-planning-required-"));
+    const repo = join(root, "alpha");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-10.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-10",
+          issueIdentifier: "AG-10",
+          phase: "needs-input",
+          lifecycleStatus: "planning_required",
+          stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-10: planning required - create or attach a planning/decomposition artifact");
+
+    const inspectOutput = await inspectIssue(repo, "AG-10");
+    expect(inspectOutput).toContain("Next safe action: create or attach a planning/decomposition artifact");
+  });
+
   it("does not warn when clean post-merge cleanup removed the recorded workspace", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-clean-merge-"));
     const repo = join(root, "alpha");
@@ -741,14 +790,35 @@ describe("issue inspection", () => {
       ),
       "utf8"
     );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-11.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-11",
+          issueIdentifier: "AG-11",
+          phase: "completed",
+          lifecycleStatus: "terminal_linear",
+          terminalState: "Done",
+          terminalAt: "2026-05-05T00:10:00.000Z",
+          workspacePath: ".agent-os/workspaces/AG-11",
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
 
     const registryOutput = await getRegistryStatus(registryPath);
     expect(registryOutput).toContain("AG-5: merged");
     expect(registryOutput).toContain("AG-6: already merged");
+    expect(registryOutput).toContain("AG-11: terminal (Done)");
     expect(registryOutput).not.toContain("AG-5: waiting on merge");
     expect(registryOutput).not.toContain("AG-6: waiting on merge");
     expect(registryOutput).not.toContain("AG-5: status warning");
     expect(registryOutput).not.toContain("AG-6: status warning");
+    expect(registryOutput).not.toContain("AG-11: status warning");
 
     const inspectOutput = await inspectIssue(repo, "AG-5");
     expect(inspectOutput).toContain("Status warnings: none");
@@ -767,6 +837,12 @@ describe("issue inspection", () => {
     expect(alreadyMergedOutput).not.toContain("Workspace recovery: workspace missing");
     expect(alreadyMergedOutput).not.toContain("Recovery reasons: workspace is missing");
     expect(alreadyMergedOutput).not.toContain("inspect runtime state and recover from the last handoff or run artifact");
+
+    const terminalLinearOutput = await inspectIssue(repo, "AG-11");
+    expect(terminalLinearOutput).toContain("Status warnings: none");
+    expect(terminalLinearOutput).toContain("Next safe action: no operator action required; issue is already in terminal state Done");
+    expect(terminalLinearOutput).not.toContain("missing terminal workspace warning");
+    expect(terminalLinearOutput).not.toContain("Workspace recovery: workspace missing");
   });
 });
 

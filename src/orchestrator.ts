@@ -8,6 +8,7 @@ import {
   extractPullRequestUrls,
   extractHumanDecisionsFromComments,
   hasHumanDecision,
+  latestAuthoritativeHumanDecision,
   issueStateFromHandoff,
   IssueStateStore,
   latestHumanDecision,
@@ -38,7 +39,7 @@ import {
   reviewTargetSelectionError
 } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
-import { terminalWaitPhaseFinishes } from "./orchestrator-terminal.js";
+import { alreadyMergedIssuePatch, terminalHeadPatch, terminalWaitPhaseFinishes } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import {
   blockingFindings,
@@ -659,34 +660,11 @@ export class Orchestrator {
   }
 
   private async dispatchGuardrail(issue: Issue, state: IssueState | null, scopeReport: PreDispatchScopeReport | null): Promise<boolean> {
-    const decision = state?.lastHumanDecision ?? latestHumanDecision(state?.humanDecisions);
+    const decision = latestAuthoritativeDecision(state);
     const allowImplementationContinuation = decision?.type === "fix_findings";
 
-    if (state && !allowImplementationContinuation && isLocallyCompletedState(state)) {
-      const message = completedDispatchStopReason(state);
-      await this.recordDispatchGuardrailStop(issue, message, {
-        phase: "completed",
-        stopReason: message,
-        lastError: undefined,
-        errorCategory: undefined
-      });
-      await this.moveIssue(issue, this.config.tracker.reviewState);
-      return true;
-    }
-
-    if (state && !allowImplementationContinuation && (state.reviewStatus === "human_required" || state.phase === "human-required")) {
-      const message = "human-required issue needs a trusted structured decision before redispatch";
-      await this.recordDispatchGuardrailStop(issue, message, {
-        phase: "human-required",
-        reviewStatus: "human_required",
-        stopReason: message
-      });
-      await this.moveIssue(issue, this.config.tracker.needsInputState);
-      return true;
-    }
-
     const mergeTarget = mergeTargetPullRequest(state);
-    if (state?.reviewStatus === "approved" && mergeTarget?.url) {
+    if (state?.reviewStatus === "approved" && mergeTarget?.url && !allowImplementationContinuation) {
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
       const github = new GitHubClient(this.config.github.command);
@@ -723,6 +701,29 @@ export class Orchestrator {
         payload: { prUrl: mergeTarget.url, readiness }
       });
       if (readiness?.ready) await this.moveIssue(issue, this.config.tracker.mergeState);
+      return true;
+    }
+
+    if (state && !allowImplementationContinuation && isLocallyCompletedState(state)) {
+      const message = completedDispatchStopReason(state);
+      await this.recordDispatchGuardrailStop(issue, message, {
+        phase: "completed",
+        stopReason: message,
+        lastError: undefined,
+        errorCategory: undefined
+      });
+      await this.moveIssue(issue, this.config.tracker.reviewState);
+      return true;
+    }
+
+    if (state && !allowImplementationContinuation && (state.reviewStatus === "human_required" || state.phase === "human-required")) {
+      const message = "human-required issue needs a trusted structured decision before redispatch";
+      await this.recordDispatchGuardrailStop(issue, message, {
+        phase: "human-required",
+        reviewStatus: "human_required",
+        stopReason: message
+      });
+      await this.moveIssue(issue, this.config.tracker.needsInputState);
       return true;
     }
 
@@ -861,7 +862,7 @@ export class Orchestrator {
     for (const wait of terminalWaitPhaseFinishes(issue, storedState, reason)) await this.finishOpenRunPhase(wait.runId, issue, wait.phase, terminalTimingStatus, terminalAt, wait.metadata);
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     const workspacePath = join(this.config.workspace.root, issue.identifier.replace(/[^A-Za-z0-9._-]/g, "_"));
-    const missingWorkspace = !(await exists(workspacePath));
+    const missingWorkspace = !(await exists(resolve(this.options.repoRoot, workspacePath)));
     await workspaceManager.remove(issue.identifier).catch((error: Error) =>
       this.logger.write({
         type: "startup_recovery_warning",
@@ -914,23 +915,7 @@ export class Orchestrator {
         message: `already-merged workspace cleanup failed: ${error.message}`
       })
     );
-    await this.recordIssueState(issue, {
-      phase: "completed",
-      lifecycleStatus: "already_merged_pr",
-      mergedAt: terminalAt,
-      terminalReason: reason,
-      terminalAt,
-      reviewStatus: undefined,
-      lastError: undefined,
-      errorCategory: undefined,
-      activeRunId: undefined,
-      nextRetryAt: undefined,
-      retryAttempt: undefined,
-      workspaceMissingAt: undefined,
-      mergeCleanupWarnings: undefined,
-      ...terminalHeadPatch(state, pr, terminalAt),
-      stopReason: reason
-    });
+    await this.recordIssueState(issue, alreadyMergedIssuePatch(state, pr, terminalAt, reason));
     await this.runtimeState.clearIssue(issue.id);
     this.retries.delete(issue.id);
     this.completedMarkers.set(issue.id, completionMarker(issue));
@@ -1368,7 +1353,9 @@ export class Orchestrator {
     const fetchedComments = comments ?? (await this.tracker.fetchIssueComments!(issue.identifier, 20).catch(() => []));
     const decisions = extractHumanDecisionsFromComments(fetchedComments, {
       trustedActors: this.config.lifecycle.trustedDecisionActors,
-      issueAssignee: issue.assignee
+      issueAssignee: issue.assignee,
+      issueAssigneeId: issue.assigneeId,
+      issueAssigneeEmail: issue.assigneeEmail
     });
     if (decisions.length === 0) return currentState;
     const latestDecision = latestHumanDecision(decisions);
@@ -2038,15 +2025,9 @@ export class Orchestrator {
           await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, result: "already merged" });
           const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
           timingMetadata = { prUrl: mergePr, result: "already merged", cleanupWarnings };
-          await this.recordIssueState(issue, {
-            phase: "completed",
-            lifecycleStatus: "already_merged_pr",
-            mergedAt: new Date().toISOString(),
-            nextRetryAt: undefined,
-            retryAttempt: undefined,
-            stopReason: undefined
-          });
+          await this.recordIssueState(issue, alreadyMergedIssuePatch(state, pr, new Date().toISOString(), "merge shepherd: pull request is already merged", cleanupWarnings));
           await this.runtimeState.clearIssue(issue.id);
+          this.retries.delete(issue.id);
           await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged. Treating that as authoritative and completing the issue.\n\n- PR: ${mergePr}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
           await this.moveIssue(issue, this.config.github.doneState);
           return;
@@ -2683,39 +2664,18 @@ function completedDispatchStopReason(state: IssueState): string {
   return "work is already completed locally and should not be redispatched";
 }
 
-function terminalHeadPatch(state: IssueState | null, pr: PullRequestStatus | null, checkedAt: string): Partial<IssueState> {
-  const headSha = pr?.headSha ?? state?.headSha ?? state?.validation?.githubCi?.headSha ?? null;
-  if (!headSha) return {};
-  return {
-    headSha,
-    lastReviewedSha: headSha,
-    lastFixedSha: headSha,
-    ...(state?.validation ? { validation: refreshValidationHead(state.validation, pr, headSha, checkedAt) } : {})
-  };
-}
-
-function refreshValidationHead(validation: NonNullable<IssueState["validation"]>, pr: PullRequestStatus | null, headSha: string, checkedAt: string): NonNullable<IssueState["validation"]> {
-  const existingCi = validation.githubCi;
-  const prChecksPassed = pr ? pr.checkSummary.total > 0 && pr.checkSummary.failing === 0 && pr.checkSummary.pending === 0 && pr.checkSummary.successful > 0 : false;
-  return {
-    ...validation,
-    githubCi:
-      existingCi || pr
-        ? {
-            status: prChecksPassed ? "passed" : existingCi?.status ?? "pending",
-            source: existingCi?.source ?? "github-pr",
-            checkedAt,
-            headSha
-          }
-        : validation.githubCi
-  };
-}
-
 function isSupervisorContinuationPaused(state: IssueState | null): boolean {
   if (!state?.lifecycleStatus) return false;
   if (!["human_continuation", "supervisor_continuation", "externally_fixed"].includes(state.lifecycleStatus)) return false;
-  const decision = state.lastHumanDecision ?? latestHumanDecision(state.humanDecisions);
+  const decision = latestAuthoritativeDecision(state);
   return decision?.type !== "fix_findings";
+}
+
+function latestAuthoritativeDecision(state: IssueState | null | undefined): HumanDecisionState | null {
+  return latestAuthoritativeHumanDecision([
+    ...(state?.humanDecisions ?? []),
+    ...(state?.lastHumanDecision ? [state.lastHumanDecision] : [])
+  ]);
 }
 
 function lifecycleStatusForHumanDecision(decision: HumanDecisionState): LifecycleStatus {

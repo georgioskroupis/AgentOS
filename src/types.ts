@@ -62,6 +62,8 @@ export interface Issue {
   branch_name: string | null;
   url: string | null;
   assignee?: string | null;
+  assigneeId?: string | null;
+  assigneeEmail?: string | null;
   labels: string[];
   blocked_by: IssueRef[];
   created_at: string | null;
@@ -208,6 +210,8 @@ export interface IssueComment {
   id: string;
   body: string;
   author?: string | null;
+  authorId?: string | null;
+  authorEmail?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -283,6 +287,9 @@ export interface HumanDecisionState {
   decidedAt: string;
   source: "linear-comment" | "handoff" | "manual";
   actor?: string | null;
+  actorId?: string | null;
+  actorEmail?: string | null;
+  trusted?: boolean;
   commentId?: string;
   body?: string;
   prHeadSha?: string | null;
