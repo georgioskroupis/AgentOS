@@ -33,6 +33,7 @@ import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
+import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import {
   formatPullRequestTargets,
   formatRecordedPullRequests,
@@ -819,11 +820,10 @@ export class Orchestrator {
   }
 
   private async recordCommentReadDispatchStop(issue: Issue, error: Error): Promise<IssueState> {
-    const safeError = summarizeText(error.message).inline;
+    const safeError = safeGuardrailErrorMessage(error);
     const message = `could not read latest Linear comments before dispatch guardrails: ${safeError}`;
     return this.recordDispatchGuardrailStop(issue, message, {
-      phase: "needs-input",
-      stopReason: message
+      phase: "needs-input", lifecycleStatus: undefined, lastError: message, errorCategory: "prompt", stopReason: message
     });
   }
 
@@ -832,7 +832,7 @@ export class Orchestrator {
       await assertPullRequestUrlMatchesRepo(resolve(this.options.repoRoot), prUrl);
       return true;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = safeGuardrailErrorMessage(error);
       await this.recordDispatchGuardrailStop(issue, message, {
         phase: "human-required",
         reviewStatus: "human_required",
@@ -986,7 +986,7 @@ export class Orchestrator {
       const targetMatchesRepo = await assertPullRequestUrlMatchesRepo(repoRoot, url).then(
         () => true,
         async (error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = safeGuardrailErrorMessage(error);
           await this.logger.write({
             type: "github_status_warning",
             message: `skipping off-repository PR merge-state read for ${url}: ${message}`
@@ -996,9 +996,10 @@ export class Orchestrator {
       );
       if (!targetMatchesRepo) continue;
       const status = await github.getPullRequest(url, repoRoot).catch(async (error: Error) => {
+        const message = safeGuardrailErrorMessage(error);
         await this.logger.write({
           type: "github_status_warning",
-          message: `could not read PR merge state for ${url}: ${error.message}`
+          message: `could not read PR merge state for ${url}: ${message}`
         });
         return null;
       });

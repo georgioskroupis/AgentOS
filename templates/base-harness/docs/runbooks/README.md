@@ -26,8 +26,8 @@ credentials are unavailable.
 ## Human Review Re-Entry
 
 When returning a Human Review issue to an active state, use a trusted Linear
-comment from the issue assignee or a configured
-`lifecycle.trusted_decision_actors` entry:
+comment from a stable Linear user ID or verified email that matches the issue
+assignee or a configured `lifecycle.trusted_decision_actors` entry:
 
 ```text
 AgentOS-Human-Decision: fix-findings
@@ -40,5 +40,6 @@ Decision-Summary: address the reviewer findings on the existing PR
 
 Allowed values are `fix-findings`, `approve-as-is`, `accept-risk`,
 `split-follow-up`, and `proceed-to-merge-after-supervisor-fix`. Untrusted
-comments remain visible to the next agent as context but do not pause,
-redispatch, or advance the issue lifecycle.
+comments, agent-authored handoff decisions, and local/manual records remain
+visible to the next agent as context but do not pause, redispatch, or advance
+the issue lifecycle.

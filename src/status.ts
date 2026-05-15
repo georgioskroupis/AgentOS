@@ -221,6 +221,7 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (mergeWaiting) return `waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`;
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
   if (mergeFailed && issue.phase !== "completed") return `tracker/local disagreement or merge review needed - ${mergeFailed.message ?? "merge failed"}`;
+  if (isCommentReadDispatchStop(issue)) return `dispatch guardrail paused - ${nextSafeAction(issue, recovery)}`;
   if (issue.lifecycleStatus === "planning_required") {
     return `planning required - ${nextSafeAction(issue, recovery)}`;
   }
@@ -251,6 +252,9 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (issue.lifecycleStatus === "planning_required" || /planning|decomposition|likely-large/i.test(issue.stopReason ?? "")) {
     return "create or attach a planning/decomposition artifact, or split follow-up issues, before returning the issue to implementation";
   }
+  if (isCommentReadDispatchStop(issue)) {
+    return "restore Linear comment access, then rerun dispatch so latest structured decisions are reconciled before any implementation turn";
+  }
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
   }
@@ -276,6 +280,10 @@ export { daemonLaunchCommand, inspectDaemonHealth };
 
 function hasApprovedPullRequest(issue: IssueState): boolean {
   return issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0;
+}
+
+function isCommentReadDispatchStop(issue: IssueState): boolean {
+  return /could not read latest Linear comments before dispatch guardrails/i.test(issue.stopReason ?? "");
 }
 
 function validationStatusPhrase(validation: ValidationState): string | null {
