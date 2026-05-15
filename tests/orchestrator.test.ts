@@ -11,6 +11,7 @@ import { RuntimeStateStore } from "../src/runtime-state.js";
 import { IssueStateStore } from "../src/issue-state.js";
 import { writeReviewArtifact } from "../src/review.js";
 import { writeValidationEvidence } from "../src/validation.js";
+import { inspectIssue } from "../src/status.js";
 
 const readyIssue: Issue = {
   id: "issue-1",
@@ -2075,6 +2076,30 @@ describe("orchestrator", () => {
     });
     expect(state?.workspaceMissingAt).toBeUndefined();
     await expect(access(workspacePath)).rejects.toThrow();
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for terminal issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const secondPassState = await new IssueStateStore(repo).read("AG-1");
+    expect(secondPassState).toMatchObject({
+      lifecycleStatus: "terminal_linear",
+      terminalState: "Done"
+    });
+    expect(secondPassState?.workspaceMissingAt).toBeUndefined();
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+    expect(inspectOutput).toContain("Status warnings: none");
+    expect(inspectOutput).not.toContain("missing terminal workspace warning");
+    expect(inspectOutput).not.toContain("Workspace recovery: workspace missing");
   });
 
   it("refreshes terminal Linear heads from newer CI metadata when no PR status is available", async () => {
@@ -5897,6 +5922,30 @@ describe("orchestrator", () => {
         phase: "completed",
         reviewStatus: "approved",
         prs: [{ url: "https://github.com/o/r/pull/1", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+        humanDecisions: [
+          {
+            type: "fix_findings",
+            source: "linear-comment",
+            trusted: true,
+            actor: "Supervisor",
+            actorId: "user-supervisor",
+            actorEmail: "supervisor@example.com",
+            decidedAt: "2026-05-04T00:00:00.000Z",
+            commentId: "comment-stale-fix",
+            body: "AgentOS-Human-Decision: fix-findings"
+          }
+        ],
+        lastHumanDecision: {
+          type: "fix_findings",
+          source: "linear-comment",
+          trusted: true,
+          actor: "Supervisor",
+          actorId: "user-supervisor",
+          actorEmail: "supervisor@example.com",
+          decidedAt: "2026-05-04T00:00:00.000Z",
+          commentId: "comment-stale-fix",
+          body: "AgentOS-Human-Decision: fix-findings"
+        },
         updatedAt: "2026-05-05T00:00:00.000Z"
       }),
       "utf8"

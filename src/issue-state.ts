@@ -307,7 +307,7 @@ export function latestHumanDecision(decisions: HumanDecisionState[] | undefined)
 
 export function isAuthoritativeHumanDecision(decision: HumanDecisionState | null | undefined): decision is HumanDecisionState {
   if (!decision) return false;
-  return decision.source === "linear-comment" && decision.trusted === true;
+  return decision.source === "linear-comment" && decision.trusted === true && Boolean(decision.commentId);
 }
 
 export function latestAuthoritativeHumanDecision(decisions: HumanDecisionState[] | undefined): HumanDecisionState | null {
@@ -341,7 +341,8 @@ export function reconcileHumanDecisionsForFetchedComments(
   const fetchedCommentIds = new Set(comments.map((comment) => comment.id).filter(Boolean));
   const incomingCommentIds = new Set(incoming.map((decision) => decision.commentId).filter((commentId): commentId is string => Boolean(commentId)));
   const retained = existing.filter((decision) => {
-    if (decision.source !== "linear-comment" || !decision.commentId) return true;
+    if (decision.source !== "linear-comment") return true;
+    if (!decision.commentId) return !options.authoritativeCommentSet;
     if (!fetchedCommentIds.has(decision.commentId)) return !options.authoritativeCommentSet;
     return incomingCommentIds.has(decision.commentId);
   });

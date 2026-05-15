@@ -20,6 +20,10 @@ export function terminalWaitPhaseFinishes(issue: Issue, state: IssueState | null
   }));
 }
 
+export function terminalWorkspaceWarning(issue: Issue, state: IssueState | null, missingWorkspace: boolean): boolean {
+  return Boolean(missingWorkspace && !(state?.lifecycleStatus === "terminal_linear" && state.terminalState === issue.state && !state.workspaceMissingAt));
+}
+
 export function alreadyMergedIssuePatch(
   state: IssueState | null,
   pr: PullRequestStatus,

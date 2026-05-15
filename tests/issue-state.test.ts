@@ -174,6 +174,23 @@ describe("issue state handoff parsing", () => {
           decidedAt: "2026-05-05T00:03:00.000Z"
         })
       ).toBe(false);
+      expect(
+        isAuthoritativeHumanDecision({
+          type: "fix_findings",
+          source: "linear-comment",
+          trusted: true,
+          decidedAt: "2026-05-05T00:04:00.000Z"
+        })
+      ).toBe(false);
+      expect(
+        isAuthoritativeHumanDecision({
+          type: "fix_findings",
+          source: "linear-comment",
+          trusted: true,
+          commentId: "comment-verified",
+          decidedAt: "2026-05-05T00:05:00.000Z"
+        })
+      ).toBe(true);
     });
 
   it("removes stored Linear decisions missing from a full fetched comment set", () => {
@@ -192,6 +209,19 @@ describe("issue state handoff parsing", () => {
       })
     ).toEqual([]);
     expect(reconcileHumanDecisionsForFetchedComments([storedDecision], [], [])).toEqual([storedDecision]);
+
+    const unverifiedStoredDecision = {
+      type: "fix_findings" as const,
+      source: "linear-comment" as const,
+      trusted: true,
+      decidedAt: "2026-05-05T00:01:00.000Z",
+      body: "AgentOS-Human-Decision: fix-findings"
+    };
+    expect(
+      reconcileHumanDecisionsForFetchedComments([unverifiedStoredDecision], [], [], {
+        authoritativeCommentSet: true
+      })
+    ).toEqual([]);
   });
 
   it("treats implemented handoff-only outcomes as valid no-PR issue state", () => {

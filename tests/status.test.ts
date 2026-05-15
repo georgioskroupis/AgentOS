@@ -33,6 +33,7 @@ describe("issue inspection", () => {
             actorId: "user-supervisor",
             actorEmail: "supervisor@example.com",
             trusted: true,
+            commentId: "comment-supervisor-fix",
             decidedAt: "2026-05-01T00:02:45.000Z",
             prHeadSha: "abc123",
             ciState: "pending",

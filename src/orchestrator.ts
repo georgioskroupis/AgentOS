@@ -43,8 +43,8 @@ import {
   reviewTargetSelectionError
 } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
-import { formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
-import { alreadyMergedIssuePatch, terminalHeadPatch, terminalWaitPhaseFinishes } from "./orchestrator-terminal.js";
+import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
+import { alreadyMergedIssuePatch, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import {
   blockingFindings,
@@ -671,7 +671,7 @@ export class Orchestrator {
 
   private async dispatchGuardrail(issue: Issue, state: IssueState | null, scopeReport: PreDispatchScopeReport | null): Promise<boolean> {
     const decision = latestAuthoritativeDecision(state);
-    const allowImplementationContinuation = decision?.type === "fix_findings";
+    const allowImplementationContinuation = allowsImplementationContinuation(state, decision);
 
     const mergeTarget = mergeTargetPullRequest(state);
     if (state?.reviewStatus === "approved" && mergeTarget?.url && !allowImplementationContinuation) {
@@ -902,6 +902,7 @@ export class Orchestrator {
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
     const workspacePath = join(this.config.workspace.root, issue.identifier.replace(/[^A-Za-z0-9._-]/g, "_"));
     const missingWorkspace = !(await exists(resolve(this.options.repoRoot, workspacePath)));
+    const missingWorkspaceWarning = terminalWorkspaceWarning(issue, storedState, missingWorkspace);
     await workspaceManager.remove(issue.identifier).catch((error: Error) =>
       this.logger.write({
         type: "startup_recovery_warning",
@@ -912,7 +913,7 @@ export class Orchestrator {
     );
     await this.recordIssueState(issue, {
       phase,
-      lifecycleStatus: missingWorkspace ? "terminal_missing_workspace" : "terminal_linear",
+      lifecycleStatus: missingWorkspaceWarning ? "terminal_missing_workspace" : "terminal_linear",
       terminalState: issue.state,
       terminalReason: reason,
       terminalAt,
@@ -925,7 +926,7 @@ export class Orchestrator {
       mergeCleanupWarnings: undefined,
       ...terminalHeadPatch(storedState, null, terminalAt),
       stopReason: reason,
-      ...(missingWorkspace ? { workspaceMissingAt: terminalAt } : { workspaceMissingAt: undefined })
+      ...(missingWorkspaceWarning ? { workspaceMissingAt: terminalAt } : { workspaceMissingAt: undefined })
     });
     await this.runtimeState.clearIssue(issue.id);
     this.retries.delete(issue.id);
@@ -935,7 +936,7 @@ export class Orchestrator {
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       message: reason,
-      payload: { state: issue.state, phase, missingWorkspace }
+      payload: { state: issue.state, phase, missingWorkspace, terminalWorkspaceWarning: missingWorkspaceWarning }
     });
   }
   private async classifyAlreadyMergedIssue(issue: Issue, state: IssueState | null, reason: string): Promise<boolean> {

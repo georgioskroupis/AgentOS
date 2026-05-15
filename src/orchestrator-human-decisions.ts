@@ -1,8 +1,20 @@
 import { isAuthoritativeHumanDecision } from "./issue-state.js";
-import type { HumanDecisionState } from "./types.js";
+import type { HumanDecisionState, IssueState } from "./types.js";
 
 export const RECENT_LINEAR_COMMENT_LIMIT = 20;
 export const GUARDRAIL_LINEAR_COMMENT_LIMIT = Number.MAX_SAFE_INTEGER;
+
+export function allowsImplementationContinuation(state: IssueState | null, decision: HumanDecisionState | null): boolean {
+  if (decision?.type !== "fix_findings") return false;
+  if (!state) return false;
+  if (state.reviewStatus === "approved" || state.phase === "completed") return false;
+  return (
+    state.reviewStatus === "human_required" ||
+    state.reviewStatus === "changes_requested" ||
+    state.phase === "human-required" ||
+    state.phase === "review"
+  );
+}
 
 export function formatHumanDecision(decision: HumanDecisionState, label = "Structured human decision"): string {
   return [
