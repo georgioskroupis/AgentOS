@@ -131,6 +131,40 @@ describe("pre-dispatch scope report", () => {
     expect(report.dispatchAdvice.notes.join("\n")).toContain("dirty workspace with no upstream is recoverable partial work");
   });
 
+  it("does not classify a clean no-upstream branch at origin/main as recoverable partial work", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-clean-no-upstream-"));
+    const issue = fakeIssue({
+      identifier: "AG-7",
+      title: "Retry clean initialization timeout",
+      description: "Previous app-server initialization timed out before implementation started."
+    });
+    const workspacePath = join(".agent-os", "workspaces", "AG-7");
+    const absoluteWorkspace = join(repo, workspacePath);
+    await mkdir(absoluteWorkspace, { recursive: true });
+    await initGitRepoWithOriginMain(absoluteWorkspace);
+    await run("git", ["checkout", "-b", "agent/AG-7"], absoluteWorkspace);
+    const state = await writeIssueState(repo, {
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lastError: "codex_read_timeout: initialize",
+      workspacePath
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue, state });
+
+    expect(report.evidence.workspace).toMatchObject({
+      present: true,
+      upstreamMissing: true,
+      dirty: false,
+      aheadCount: 0,
+      recoverable: false,
+      reasons: []
+    });
+    expect(report.implementationStatus).toBe("missing");
+    expect(report.dispatchAdvice.shouldBlock).toBe(false);
+  });
+
   it("classifies narrow missing work as small", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-small-"));
     const issue = fakeIssue({
@@ -169,7 +203,7 @@ describe("pre-dispatch scope report", () => {
     });
   });
 
-  it("surfaces broad missing work as likely large without blocking dispatch", async () => {
+  it("surfaces broad missing work as likely large and recommends planning before dispatch", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-large-"));
     const issue = fakeIssue({
       identifier: "AG-4",
@@ -192,8 +226,11 @@ describe("pre-dispatch scope report", () => {
     expect(report.scopeSize).toBe("large");
     expect(report.likelyLarge).toBe(true);
     expect(report.reviewRisk).toBe("high");
-    expect(report.dispatchAdvice.shouldBlock).toBe(false);
-    expect(report.dispatchAdvice.notes.join("\n")).toContain("likely-large scope is surfaced for operator visibility only");
+    expect(report.dispatchAdvice).toMatchObject({
+      shouldBlock: true,
+      reason: "likely-large scope needs planning or decomposition before implementation dispatch"
+    });
+    expect(report.dispatchAdvice.notes.join("\n")).toContain("likely-large scope should be planned or decomposed before implementation");
   });
 
   it("classifies vague candidates as unclear", async () => {
@@ -249,6 +286,19 @@ async function initGitRepo(cwd: string): Promise<void> {
   await writeFile(join(cwd, "README.md"), "initial\n", "utf8");
   await run("git", ["add", "README.md"], cwd);
   await run("git", ["commit", "-m", "Initial commit"], cwd);
+}
+
+async function initGitRepoWithOriginMain(cwd: string): Promise<void> {
+  const remote = `${cwd}-remote.git`;
+  await run("git", ["init", "--bare", remote], cwd);
+  await run("git", ["init", "-b", "main"], cwd);
+  await run("git", ["config", "user.email", "agentos@example.com"], cwd);
+  await run("git", ["config", "user.name", "AgentOS"], cwd);
+  await writeFile(join(cwd, "README.md"), "initial\n", "utf8");
+  await run("git", ["add", "README.md"], cwd);
+  await run("git", ["commit", "-m", "Initial commit"], cwd);
+  await run("git", ["remote", "add", "origin", remote], cwd);
+  await run("git", ["push", "-u", "origin", "main"], cwd);
 }
 
 async function run(command: string, args: string[], cwd: string): Promise<void> {

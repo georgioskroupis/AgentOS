@@ -94,7 +94,7 @@ Runs one Symphony-style scheduling pass:
 
 1. read `WORKFLOW.md`
 2. fetch paginated eligible Linear issues
-3. emit read-only pre-dispatch scope reports for active candidates
+3. emit pre-dispatch scope reports and apply duplicate/scope guardrails for active candidates
 4. create deterministic workspaces
 5. render strict prompts
 6. start Codex App Server runs
@@ -154,7 +154,9 @@ Pre-dispatch scope reports classify candidate issues as already satisfied,
 partially satisfied, missing, or unclear; estimate touched subsystems, docs/tests
 impact, PR likelihood, review risk, and likely-large scope; and include runtime,
 run, workspace, PR, validation, repo-root/workspace/run handoff, Linear comment,
-and trusted human-decision evidence without blocking dispatch.
+and trusted human-decision evidence. Dispatch guardrails use that report to stop
+already-completed or recoverably partial work from being reimplemented and to
+pause likely-large missing work for planning/decomposition before implementation.
 `status` and `inspect` also report recoverable partial work such as dirty
 workspaces, unpushed branch heads, stale PR heads, and CI evidence recorded for
 a different local head, including a next safe action for the operator. Terminal

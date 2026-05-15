@@ -126,7 +126,7 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
   });
 
-  it("emits a pre-dispatch scope report without blocking broad missing work", async () => {
+  it("blocks broad missing work with a planning recommendation before dispatch", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-scope-report-"));
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
@@ -153,9 +153,17 @@ describe("orchestrator", () => {
       },
       async fetchIssueStates() {
         return new Map([[broadIssue.id, broadIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
       }
     };
     let runnerCalled = false;
+    const moves: string[] = [];
+    const comments: string[] = [];
     const logger = new JsonlLogger(repo);
 
     const result = await new Orchestrator({
@@ -175,14 +183,81 @@ describe("orchestrator", () => {
 
     const reportEvent = (await logger.tail(50)).find((entry) => entry.type === "pre_dispatch_scope_report");
     const report = reportEvent?.payload as { implementationStatus?: string; scopeSize?: string; likelyLarge?: boolean; dispatchAdvice?: { shouldBlock?: boolean } } | undefined;
-    expect(result.dispatched).toBe(1);
-    expect(runnerCalled).toBe(true);
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("planning recommended");
+    expect(comments.join("\n")).toContain("Next safe action");
     expect(report).toMatchObject({
       implementationStatus: "missing",
       scopeSize: "large",
       likelyLarge: true,
-      dispatchAdvice: { shouldBlock: false }
+      dispatchAdvice: { shouldBlock: true }
     });
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch"
+    });
+  });
+
+  it("refuses active redispatch when prior handoff already satisfied the issue", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-already-done-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo" };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      outcome: "already_satisfied",
+      phase: "completed",
+      validation: {
+        status: "passed",
+        finalStatus: "passed",
+        checkedAt: "2026-05-08T00:00:00.000Z"
+      },
+      updatedAt: "2026-05-08T00:00:00.000Z"
+    });
+    const moves: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      },
+      async comment() {}
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.stopReason).toBe("work is already satisfied by prior AgentOS handoff");
   });
 
   it("includes fetched Linear comments and trusted human decisions in the pre-dispatch scope report", async () => {
@@ -774,6 +849,82 @@ describe("orchestrator", () => {
     expect(state?.lifecycleStatus).toBeUndefined();
   });
 
+  it("lets newer supervisor-fix decisions override older fix-findings comments before dispatch guardrails", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-supervisor-overrides-fix-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", assignee: "Supervisor" };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "review",
+      reviewStatus: "human_required",
+      updatedAt: "2026-05-10T00:00:00.000Z"
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-fix",
+            author: "Supervisor",
+            createdAt: "2026-05-10T00:01:00.000Z",
+            body: "AgentOS-Human-Decision: fix-findings"
+          },
+          {
+            id: "comment-supervisor-fixed",
+            author: "Supervisor",
+            createdAt: "2026-05-10T00:02:00.000Z",
+            body: [
+              "AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix",
+              "PR-Head-SHA: abc123",
+              "Validation-JSON: .agent-os/validation/AG-1.json",
+              "CI-State: passed",
+              "Findings: resolved",
+              "Decision-Summary: supervisor repaired the branch outside Codex"
+            ].join("\n")
+          }
+        ];
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lastHumanDecision).toMatchObject({
+      type: "proceed_to_merge_after_supervisor_fix",
+      commentId: "comment-supervisor-fixed",
+      prHeadSha: "abc123"
+    });
+    expect(state?.lifecycleStatus).toBe("externally_fixed");
+    expect(state?.stopReason).toContain("supervisor continuation or external fix is active");
+  });
+
   it("suppresses stale active runs and redispatch during supervisor continuation", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-supervisor-paused-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -835,7 +986,7 @@ describe("orchestrator", () => {
     expect(runtime.activeRuns).toHaveLength(0);
     expect(runtime.retryQueue).toHaveLength(0);
     const state = await new IssueStateStore(repo).read("AG-1");
-    expect(state?.stopReason).toContain("supervisor continuation is active");
+    expect(state?.stopReason).toContain("supervisor continuation or external fix is active");
   });
 
   it("records missing credential preflight and refuses dispatch before tracker reads", async () => {
@@ -1195,6 +1346,11 @@ describe("orchestrator", () => {
         issueId: "issue-1",
         issueIdentifier: "AG-1",
         phase: "streaming-turn",
+        reviewStatus: "human_required",
+        lastError: "stale review failure",
+        errorCategory: "review",
+        retryAttempt: 2,
+        nextRetryAt: "2026-01-03T00:10:00.000Z",
         lastRunId: running.runId,
         workspacePath,
         updatedAt: new Date().toISOString()
@@ -1239,6 +1395,11 @@ describe("orchestrator", () => {
       lifecycleStatus: "terminal_missing_workspace",
       terminalState: "Done"
     });
+    expect(state.reviewStatus).toBeUndefined();
+    expect(state.lastError).toBeUndefined();
+    expect(state.errorCategory).toBeUndefined();
+    expect(state.retryAttempt).toBeUndefined();
+    expect(state.nextRetryAt).toBeUndefined();
     const runtime = await new RuntimeStateStore(repo).read();
     expect(runtime.activeRuns).toEqual([]);
     expect(runtime.retryQueue).toEqual([]);
@@ -1375,8 +1536,21 @@ describe("orchestrator", () => {
         issueIdentifier: "AG-1",
         phase: "streaming-turn",
         lastRunId: waitRun.runId,
+        reviewStatus: "human_required",
+        lastError: "stale reviewer failure",
+        errorCategory: "review",
+        retryAttempt: 2,
+        headSha: "stale-head",
+        lastReviewedSha: "stale-reviewed",
+        lastFixedSha: "stale-fixed",
         prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: new Date().toISOString() }],
         nextRetryAt: "2026-01-01T00:00:00.000Z",
+        validation: {
+          status: "passed",
+          checkedAt: "2026-01-01T00:00:00.000Z",
+          githubCi: { status: "failed", headSha: "stale-ci", checkedAt: "2026-01-01T00:00:00.000Z" }
+        },
+        workspaceMissingAt: "2026-01-01T00:00:00.000Z",
         updatedAt: new Date().toISOString()
       }),
       "utf8"
@@ -1388,6 +1562,7 @@ describe("orchestrator", () => {
           url: "https://github.com/o/r/pull/1",
           state: "MERGED",
           mergedAt: "2026-05-05T08:00:00Z",
+          headRefOid: "merged-head-sha",
           headRefName: "agent/AG-1",
           statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
         }
@@ -1447,8 +1622,19 @@ describe("orchestrator", () => {
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state).toMatchObject({
       phase: "completed",
-      lifecycleStatus: "already_merged_pr"
+      lifecycleStatus: "already_merged_pr",
+      headSha: "merged-head-sha",
+      lastReviewedSha: "merged-head-sha",
+      lastFixedSha: "merged-head-sha",
+      validation: expect.objectContaining({
+        githubCi: expect.objectContaining({ status: "passed", headSha: "merged-head-sha" })
+      })
     });
+    expect(state.reviewStatus).toBeUndefined();
+    expect(state.lastError).toBeUndefined();
+    expect(state.errorCategory).toBeUndefined();
+    expect(state.retryAttempt).toBeUndefined();
+    expect(state.workspaceMissingAt).toBeUndefined();
     expect(state.nextRetryAt).toBeUndefined();
     const runtime = await new RuntimeStateStore(repo).read();
     expect(runtime.retryQueue).toEqual([]);
@@ -5158,6 +5344,63 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain(`resume ${workspacePath}`);
   });
 
+  it("does not treat a clean no-upstream branch at the base commit as recoverable partial work", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-no-upstream-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const workspacePath = join(repo, ".agent-os", "workspaces", "AG-1");
+    await mkdir(workspacePath, { recursive: true });
+    await initCleanWorkspaceAtOriginMain(workspacePath);
+    await run("git", ["checkout", "-b", "agent/AG-1"], workspacePath);
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "implementation_failure",
+      lastError: "codex_read_timeout: initialize",
+      workspacePath,
+      updatedAt: "2026-05-15T06:33:41.000Z"
+    });
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      },
+      async move() {}
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          runnerCalled = true;
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(true);
+    expect(comments.join("\n")).not.toContain("recoverable partial work");
+  });
+
   it("injects existing implementation audit context for partially satisfied scope", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-partial-audit-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -5270,6 +5513,19 @@ async function initGitRemote(repo: string, remote = "https://github.com/o/r.git"
   await run("git", ["remote", "add", "origin", remote], repo).catch(async () => {
     await run("git", ["remote", "set-url", "origin", remote], repo);
   });
+}
+
+async function initCleanWorkspaceAtOriginMain(workspacePath: string): Promise<void> {
+  const remote = `${workspacePath}-remote.git`;
+  await run("git", ["init", "--bare", remote], workspacePath);
+  await run("git", ["init", "-b", "main"], workspacePath);
+  await run("git", ["config", "user.email", "agentos@example.test"], workspacePath);
+  await run("git", ["config", "user.name", "AgentOS Test"], workspacePath);
+  await writeFile(join(workspacePath, "README.md"), "initial\n", "utf8");
+  await run("git", ["add", "README.md"], workspacePath);
+  await run("git", ["commit", "-m", "initial"], workspacePath);
+  await run("git", ["remote", "add", "origin", remote], workspacePath);
+  await run("git", ["push", "-u", "origin", "main"], workspacePath);
 }
 
 function sleep(ms: number): Promise<void> {

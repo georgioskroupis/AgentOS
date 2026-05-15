@@ -334,6 +334,7 @@ export type RunPhase =
 
 export type LifecycleStatus =
   | "implementation_failure"
+  | "planning_required"
   | "review_escalation"
   | "human_continuation"
   | "supervisor_continuation"

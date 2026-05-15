@@ -1,8 +1,7 @@
-import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { exists } from "./fs-utils.js";
 import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPreflightResult, type RepoEnvLoadResult } from "./env.js";
-import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback } from "./github.js";
+import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, type PullRequestStatus } from "./github.js";
 import { readGitHubReviewContext } from "./github-context.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
 import {
@@ -29,6 +28,15 @@ import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
+import {
+  formatPullRequestTargets,
+  formatRecordedPullRequests,
+  handoffPullRequestValidationFinding,
+  joinedHeadShas,
+  readOnlyReviewConfig,
+  reviewCheckFindings,
+  reviewTargetSelectionError
+} from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { terminalWaitPhaseFinishes } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
@@ -48,12 +56,11 @@ import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
-import { logPreDispatchScopeReport } from "./scope-report.js";
-import { trustCapabilities } from "./trust.js";
+import { logPreDispatchScopeReport, type PreDispatchScopeReport } from "./scope-report.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, PullRequestRef, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 export interface OrchestratorOptions {
   repoRoot: string;
@@ -622,11 +629,19 @@ export class Orchestrator {
     let state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
     const linearComments = await this.fetchRecentIssueComments(latest, 20);
     state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined);
-    await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments, logger: this.logger });
+    const scopeReport = await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments, logger: this.logger });
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
       return null;
     }
     if (isSupervisorContinuationPaused(state)) {
+      await this.recordIssueState(latest, {
+        phase: "human-required",
+        activeRunId: undefined,
+        nextRetryAt: undefined,
+        retryAttempt: undefined,
+        stopReason: "supervisor continuation or external fix is active",
+        lifecycleStatus: state?.lifecycleStatus
+      });
       await this.runtimeState.clearIssue(latest.id);
       this.retries.delete(latest.id);
       await this.logger.write({
@@ -637,19 +652,41 @@ export class Orchestrator {
       });
       return null;
     }
-    if (await this.dispatchGuardrail(latest, state)) {
+    if (await this.dispatchGuardrail(latest, state, scopeReport)) {
       return null;
     }
     return latest;
   }
 
-  private async dispatchGuardrail(issue: Issue, state: IssueState | null): Promise<boolean> {
-    if (!state) return false;
-    const decision = state.lastHumanDecision ?? latestHumanDecision(state.humanDecisions);
-    if (decision?.type === "fix_findings") return false;
+  private async dispatchGuardrail(issue: Issue, state: IssueState | null, scopeReport: PreDispatchScopeReport | null): Promise<boolean> {
+    const decision = state?.lastHumanDecision ?? latestHumanDecision(state?.humanDecisions);
+    const allowImplementationContinuation = decision?.type === "fix_findings";
+
+    if (state && !allowImplementationContinuation && isLocallyCompletedState(state)) {
+      const message = completedDispatchStopReason(state);
+      await this.recordDispatchGuardrailStop(issue, message, {
+        phase: "completed",
+        stopReason: message,
+        lastError: undefined,
+        errorCategory: undefined
+      });
+      await this.moveIssue(issue, this.config.tracker.reviewState);
+      return true;
+    }
+
+    if (state && !allowImplementationContinuation && (state.reviewStatus === "human_required" || state.phase === "human-required")) {
+      const message = "human-required issue needs a trusted structured decision before redispatch";
+      await this.recordDispatchGuardrailStop(issue, message, {
+        phase: "human-required",
+        reviewStatus: "human_required",
+        stopReason: message
+      });
+      await this.moveIssue(issue, this.config.tracker.needsInputState);
+      return true;
+    }
 
     const mergeTarget = mergeTargetPullRequest(state);
-    if (state.reviewStatus === "approved" && mergeTarget?.url) {
+    if (state?.reviewStatus === "approved" && mergeTarget?.url) {
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
       const github = new GitHubClient(this.config.github.command);
@@ -689,8 +726,8 @@ export class Orchestrator {
       return true;
     }
 
-    const recovery = await inspectWorkspaceRecovery(resolve(this.options.repoRoot), state).catch(() => null);
-    if (recovery?.recoverable && isRecoverablePartialWorkState(state)) {
+    const recovery = await this.dispatchRecoveryDiagnostics(issue, state, scopeReport);
+    if (recovery?.recoverable && (state ? isRecoverablePartialWorkState(state) : true)) {
       const message = `recoverable partial work found: ${recovery.reasons.join("; ")}`;
       await this.recordIssueState(issue, {
         phase: "human-required",
@@ -715,7 +752,94 @@ export class Orchestrator {
       return true;
     }
 
+    if (!allowImplementationContinuation && scopeReport?.dispatchAdvice.shouldBlock) {
+      const message = scopeReport.dispatchAdvice.reason ?? "pre-dispatch scope guardrail blocked implementation dispatch";
+      if (scopeReport.likelyLarge) {
+        await this.markLinearPlanningRecommended(issue, scopeReport);
+      } else {
+        await this.recordDispatchGuardrailStop(issue, message, {
+          phase: "needs-input",
+          stopReason: message
+        });
+      }
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message,
+        payload: scopeReport.dispatchAdvice
+      });
+      return true;
+    }
+
     return false;
+  }
+
+  private async dispatchRecoveryDiagnostics(issue: Issue, state: IssueState | null, scopeReport: PreDispatchScopeReport | null): Promise<WorkspaceRecoveryDiagnostics | null> {
+    if (state) return inspectWorkspaceRecovery(resolve(this.options.repoRoot), state).catch(() => null);
+    const workspacePath = scopeReport?.evidence.workspace.path;
+    if (!workspacePath) return null;
+    return inspectWorkspaceRecovery(resolve(this.options.repoRoot), {
+      issueIdentifier: issue.identifier,
+      workspacePath
+    }).catch(() => null);
+  }
+
+  private async recordDispatchGuardrailStop(issue: Issue, message: string, patch: Partial<IssueState>): Promise<IssueState> {
+    const state = await this.recordIssueState(issue, {
+      activeRunId: undefined,
+      nextRetryAt: undefined,
+      retryAttempt: undefined,
+      ...patch,
+      stopReason: patch.stopReason ?? message
+    });
+    await this.runtimeState.clearIssue(issue.id);
+    this.retries.delete(issue.id);
+    await this.logger.write({
+      type: "dispatch_skipped",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message
+    });
+    return state;
+  }
+
+  private async markLinearPlanningRecommended(issue: Issue, report: PreDispatchScopeReport): Promise<void> {
+    const message = report.dispatchAdvice.reason ?? "likely-large scope needs planning or decomposition before implementation dispatch";
+    await this.recordDispatchGuardrailStop(issue, message, {
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      lastError: message,
+      errorCategory: "prompt",
+      stopReason: message
+    });
+    await this.commentIssue(
+      issue,
+      [
+        "### AgentOS planning recommended",
+        "",
+        "AgentOS refused to start a fresh implementation turn because the pre-dispatch scope report classified this issue as likely large.",
+        "",
+        `- Scope: ${report.scopeSize}`,
+        report.scopeReasons.length ? `- Scope reasons: ${report.scopeReasons.join("; ")}` : null,
+        `- Next safe action: ${report.dispatchAdvice.nextSafeAction}`
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n"),
+      "planning_recommended"
+    );
+    await this.moveIssue(issue, this.config.tracker.needsInputState);
+    await this.writePhaseTimingEvent(issue, {
+      phase: "needs-input",
+      status: "waiting",
+      label: "planning/decomposition pause started",
+      metadata: {
+        needsInputState: this.config.tracker.needsInputState,
+        reason: message,
+        scopeSize: report.scopeSize,
+        likelyLarge: report.likelyLarge
+      }
+    });
   }
 
   private async preTurnCheck(issue: Issue): Promise<string | null> {
@@ -752,11 +876,16 @@ export class Orchestrator {
       terminalState: issue.state,
       terminalReason: reason,
       terminalAt,
+      reviewStatus: undefined,
+      lastError: undefined,
+      errorCategory: undefined,
       activeRunId: undefined,
       nextRetryAt: undefined,
       retryAttempt: undefined,
+      mergeCleanupWarnings: undefined,
+      ...terminalHeadPatch(storedState, null, terminalAt),
       stopReason: reason,
-      ...(missingWorkspace ? { workspaceMissingAt: terminalAt } : {})
+      ...(missingWorkspace ? { workspaceMissingAt: terminalAt } : { workspaceMissingAt: undefined })
     });
     await this.runtimeState.clearIssue(issue.id);
     this.retries.delete(issue.id);
@@ -770,8 +899,8 @@ export class Orchestrator {
     });
   }
   private async classifyAlreadyMergedIssue(issue: Issue, state: IssueState | null, reason: string): Promise<boolean> {
-    const prUrl = await this.alreadyMergedPullRequestUrl(state);
-    if (!prUrl) return false;
+    const pr = await this.alreadyMergedPullRequestStatus(state);
+    if (!pr) return false;
     const terminalAt = new Date().toISOString();
     const retry = await readRuntimeRetryForIssue(this.runtimeState, issue);
     if (retry) await this.finishRetryBackoff(retry, issue, "completed", reason, terminalAt);
@@ -791,9 +920,15 @@ export class Orchestrator {
       mergedAt: terminalAt,
       terminalReason: reason,
       terminalAt,
+      reviewStatus: undefined,
+      lastError: undefined,
+      errorCategory: undefined,
       activeRunId: undefined,
       nextRetryAt: undefined,
       retryAttempt: undefined,
+      workspaceMissingAt: undefined,
+      mergeCleanupWarnings: undefined,
+      ...terminalHeadPatch(state, pr, terminalAt),
       stopReason: reason
     });
     await this.runtimeState.clearIssue(issue.id);
@@ -807,16 +942,16 @@ export class Orchestrator {
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       message: reason,
-      payload: { prUrl }
+      payload: { prUrl: pr.url }
     });
     return true;
   }
 
   private async hasAlreadyMergedPullRequest(state: IssueState | null): Promise<boolean> {
-    return Boolean(await this.alreadyMergedPullRequestUrl(state));
+    return Boolean(await this.alreadyMergedPullRequestStatus(state));
   }
 
-  private async alreadyMergedPullRequestUrl(state: IssueState | null): Promise<string | null> {
+  private async alreadyMergedPullRequestStatus(state: IssueState | null): Promise<PullRequestStatus | null> {
     const urls = uniqueStrings([mergeTargetPullRequest(state)?.url].filter((url): url is string => Boolean(url)));
     if (urls.length === 0) return null;
     const github = new GitHubClient(this.config.github.command);
@@ -829,7 +964,7 @@ export class Orchestrator {
         });
         return null;
       });
-      if (status?.merged) return url;
+      if (status?.merged) return status;
     }
     return null;
   }
@@ -2538,6 +2673,44 @@ function isNoPrHandoffApproved(state: IssueState): boolean { return state.phase 
 
 function isLocallySettledIssueState(state: IssueState): boolean { return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required"; }
 
+function isLocallyCompletedState(state: IssueState): boolean {
+  return state.phase === "completed" || state.outcome === "already_satisfied";
+}
+
+function completedDispatchStopReason(state: IssueState): string {
+  if (state.outcome === "already_satisfied") return "work is already satisfied by prior AgentOS handoff";
+  if (pullRequestUrls(state).length > 0) return "work is already completed locally and has recorded pull request metadata";
+  return "work is already completed locally and should not be redispatched";
+}
+
+function terminalHeadPatch(state: IssueState | null, pr: PullRequestStatus | null, checkedAt: string): Partial<IssueState> {
+  const headSha = pr?.headSha ?? state?.headSha ?? state?.validation?.githubCi?.headSha ?? null;
+  if (!headSha) return {};
+  return {
+    headSha,
+    lastReviewedSha: headSha,
+    lastFixedSha: headSha,
+    ...(state?.validation ? { validation: refreshValidationHead(state.validation, pr, headSha, checkedAt) } : {})
+  };
+}
+
+function refreshValidationHead(validation: NonNullable<IssueState["validation"]>, pr: PullRequestStatus | null, headSha: string, checkedAt: string): NonNullable<IssueState["validation"]> {
+  const existingCi = validation.githubCi;
+  const prChecksPassed = pr ? pr.checkSummary.total > 0 && pr.checkSummary.failing === 0 && pr.checkSummary.pending === 0 && pr.checkSummary.successful > 0 : false;
+  return {
+    ...validation,
+    githubCi:
+      existingCi || pr
+        ? {
+            status: prChecksPassed ? "passed" : existingCi?.status ?? "pending",
+            source: existingCi?.source ?? "github-pr",
+            checkedAt,
+            headSha
+          }
+        : validation.githubCi
+  };
+}
+
 function isSupervisorContinuationPaused(state: IssueState | null): boolean {
   if (!state?.lifecycleStatus) return false;
   if (!["human_continuation", "supervisor_continuation", "externally_fixed"].includes(state.lifecycleStatus)) return false;
@@ -2620,155 +2793,7 @@ function runningAllowedStates(config: ServiceConfig): string[] {
   return [...config.tracker.activeStates, config.tracker.runningState].filter((state): state is string => Boolean(state));
 }
 
-function formatPullRequestTargets(targets: PullRequestRef[]): string {
-  if (targets.length === 0) return "- PRs: none";
-  if (targets.length === 1) return `- PR: ${targets[0].url} (${targets[0].role ?? "supporting"})`;
-  return ["- PRs:", ...targets.map((target) => `  - ${target.url} (${target.role ?? "supporting"})`)].join("\n");
-}
-
-function formatRecordedPullRequests(state: IssueState): string {
-  if (state.prs?.length) return formatPullRequestTargets(state.prs);
-  const urls = pullRequestUrls(state);
-  if (urls.length === 0) return "- PRs: none";
-  if (urls.length === 1) return `- PR: ${urls[0]}`;
-  return ["- PRs:", ...urls.map((url) => `  - ${url}`)].join("\n");
-}
-
-function reviewTargetSelectionError(state: IssueState, reviewTargetMode: ReviewTargetMode): string {
-  if (reviewTargetMode === "primary") {
-    const primaryCount = state.prs?.filter((pr) => pr.role === "primary").length ?? 0;
-    if (primaryCount === 0) return "review.target_mode=primary requires exactly one primary PR, but no primary PR was recorded.";
-    return `review.target_mode=primary requires exactly one primary PR, but ${primaryCount} primary PRs were recorded.`;
-  }
-  return "review.target_mode=merge-eligible requires at least one primary or docs PR, but no merge-eligible PR was recorded.";
-}
-
-function joinedHeadShas(entries: Array<{ status: Awaited<ReturnType<GitHubClient["getPullRequest"]>> }>): string | null {
-  const shas = [...new Set(entries.map((entry) => entry.status.headSha).filter((sha): sha is string => Boolean(sha)))];
-  return shas.length ? shas.join(",") : null;
-}
-
-function readOnlyReviewConfig(config: ServiceConfig, reviewWritableRoot: string): ServiceConfig {
-  return {
-    ...config,
-    codex: {
-      ...config.codex,
-      approvalEventPolicy: "deny",
-      userInputPolicy: "deny",
-      threadSandbox: "workspace-write",
-      turnSandboxPolicy: { type: "workspaceWrite", writableRoots: [reviewWritableRoot], networkAccess: false }
-    }
-  };
-}
-
-function reviewCheckFindings(
-  status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>,
-  config: ServiceConfig,
-  diagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>> = []
-): ReviewFinding[] {
-  const findings: ReviewFinding[] = [];
-  if (status.checkSummary.failing > 0) {
-    const mechanical = diagnostics.filter((diagnostic) => diagnostic.classification === "mechanical");
-    const humanRequired = diagnostics.filter((diagnostic) => diagnostic.classification === "human_required");
-    const capabilities = trustCapabilities(config.trustMode);
-    const canRunMechanicalCiFix = config.automation.repairPolicy === "mechanical-first" && capabilities.prNetwork;
-    if (mechanical.length > 0 && canRunMechanicalCiFix) {
-      findings.push({
-        reviewer: "checks",
-        decision: "changes_requested" as const,
-        severity: "P1" as const,
-        file: null,
-        line: null,
-        body: `${mechanical.length} GitHub check(s) failed mechanically with logs available. Run a bounded CI fix before Human Review.\n\n${summarizeCheckDiagnostics(mechanical)}`,
-        findingHash: `checks-failing-mechanical-${checkDiagnosticFingerprint(mechanical)}`
-      });
-    }
-    if (humanRequired.length > 0 || mechanical.length === 0 || !canRunMechanicalCiFix) {
-      const unresolved = humanRequired.length > 0 ? humanRequired : diagnostics.length > 0 ? diagnostics : [];
-      const reason =
-        config.automation.repairPolicy !== "mechanical-first"
-          ? "automation.repair_policy is conservative, so CI repair is not attempted automatically."
-          : !capabilities.prNetwork
-            ? `trust_mode=${config.trustMode} does not allow PR/network capability, so CI repair is not attempted automatically.`
-            : "AgentOS could not classify the failed check as a mechanical failure with enough context.";
-      findings.push({
-        reviewer: "checks",
-        decision: "human_required" as const,
-        severity: "P1" as const,
-        file: null,
-        line: null,
-        body: `${status.checkSummary.failing} GitHub check(s) failed. ${reason}\n\n${unresolved.length > 0 ? summarizeCheckDiagnostics(unresolved) : "No failed check logs were available."}`,
-        findingHash: `checks-failing-human-${unresolved.length > 0 ? checkDiagnosticFingerprint(unresolved) : status.checkSummary.failing}`
-      });
-    }
-  }
-  if (config.github.requireChecks && status.checkSummary.total === 0) {
-    findings.push({
-      reviewer: "checks",
-      decision: "changes_requested" as const,
-      severity: "P1" as const,
-      file: null,
-      line: null,
-      body: "No GitHub checks are present. The Wiggum loop requires at least one successful check or a human escalation.",
-      findingHash: "checks-missing"
-    });
-  }
-  if (config.github.requireChecks && status.checkSummary.total > 0 && status.checkSummary.failing === 0 && status.checkSummary.successful === 0 && status.checkSummary.pending === 0) {
-    findings.push({
-      reviewer: "checks",
-      decision: "changes_requested" as const,
-      severity: "P1" as const,
-      file: null,
-      line: null,
-      body: "No successful GitHub checks are present.",
-      findingHash: "checks-no-success"
-    });
-  }
-  return findings;
-}
-
-function handoffPullRequestValidationFinding(message: string): ReviewFinding {
-  const body = `Focused fixer handoff PR metadata failed current-repository validation before state merge: ${message}`;
-  return {
-    reviewer: "handoff",
-    decision: "human_required",
-    severity: "P1",
-    file: null,
-    line: null,
-    body,
-    findingHash: createHash("sha256").update(`handoff-pr-validation\n${body}`).digest("hex").slice(0, 16)
-  };
-}
-
-function checkDiagnosticFingerprint(diagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>>): string {
-  const stable = diagnostics
-    .map((diagnostic) =>
-      [
-        diagnostic.check.name,
-        diagnostic.check.status ?? "",
-        diagnostic.check.conclusion ?? "",
-        diagnostic.classification,
-        diagnostic.reason,
-        diagnostic.log ? singleLine(diagnostic.log).slice(0, 1200) : ""
-      ].join("\n")
-    )
-    .sort()
-    .join("\n---\n");
-  return createHash("sha256").update(stable).digest("hex").slice(0, 16);
-}
-
-function singleLine(value: string): string {
-  return value.trim().replace(/\s+/g, " ");
-}
-
 function isRecoverablePartialWorkState(state: IssueState): boolean {
-  return (
-    state.phase === "needs-input" ||
-    state.phase === "human-required" ||
-    state.lifecycleStatus === "implementation_failure" ||
-    state.reviewStatus === "human_required" ||
-    Boolean(state.nextRetryAt) ||
-    Boolean(state.lastError?.toLowerCase().includes("stall")) ||
-    Boolean(state.lastError?.toLowerCase().includes("missing_handoff"))
-  );
+  const error = state.lastError?.toLowerCase() ?? "";
+  return state.phase === "needs-input" || state.phase === "human-required" || state.lifecycleStatus === "implementation_failure" || state.reviewStatus === "human_required" || Boolean(state.nextRetryAt) || error.includes("stall") || error.includes("missing_handoff");
 }

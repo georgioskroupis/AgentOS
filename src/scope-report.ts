@@ -2,6 +2,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { exists } from "./fs-utils.js";
 import { pullRequestUrls } from "./issue-state.js";
 import { inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
+import { buildDispatchAdvice } from "./scope-report-advice.js";
 import { buildHumanDecisionEvidence, buildLinearCommentEvidence } from "./scope-report-comments.js";
 import { RunArtifactStore, type RunSummary } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry, type RuntimeState } from "./runtime-state.js";
@@ -30,7 +31,9 @@ export interface PreDispatchScopeReport {
   scopeReasons: string[];
   evidence: ScopeEvidence;
   dispatchAdvice: {
-    shouldBlock: false;
+    shouldBlock: boolean;
+    reason: string | null;
+    nextSafeAction: string;
     notes: string[];
   };
 }
@@ -58,6 +61,7 @@ export interface ScopeEvidence {
     aheadCount: number;
     recoverable: boolean;
     reasons: string[];
+    nextSafeAction: string | null;
   };
   pullRequests: {
     present: boolean;
@@ -199,6 +203,7 @@ export async function buildPreDispatchScopeReport(input: BuildScopeReportInput):
   const likelyTouchedSubsystems = estimateTouchedSubsystems(input.issue, input.state ?? null, evidence);
   const scope = estimateScope(input.issue, implementation.status, likelyTouchedSubsystems, evidence);
   const prLikelihood = estimatePrLikelihood(input.issue, implementation.status, evidence);
+  const dispatchAdvice = buildDispatchAdvice(implementation.status, scope.scopeSize, evidence);
   const report: PreDispatchScopeReport = {
     schemaVersion: 1,
     issueId: input.issue.id,
@@ -215,10 +220,7 @@ export async function buildPreDispatchScopeReport(input: BuildScopeReportInput):
     likelyLarge: scope.scopeSize === "large",
     scopeReasons: scope.reasons,
     evidence,
-    dispatchAdvice: {
-      shouldBlock: false,
-      notes: dispatchNotes(implementation.status, scope.scopeSize, evidence)
-    }
+    dispatchAdvice
   };
   return report;
 }
@@ -228,7 +230,7 @@ export function preDispatchScopeReportMessage(report: PreDispatchScopeReport): s
   return `implementation=${report.implementationStatus}; scope=${report.scopeSize}; pr=${report.prLikelihood}; review=${report.reviewRisk}${large}`;
 }
 
-export async function logPreDispatchScopeReport(input: LogScopeReportInput): Promise<void> {
+export async function logPreDispatchScopeReport(input: LogScopeReportInput): Promise<PreDispatchScopeReport | null> {
   try {
     const report = await buildPreDispatchScopeReport(input);
     await input.logger.write({
@@ -238,6 +240,7 @@ export async function logPreDispatchScopeReport(input: LogScopeReportInput): Pro
       message: preDispatchScopeReportMessage(report),
       payload: report
     });
+    return report;
   } catch (error) {
     await input.logger.write({
       type: "pre_dispatch_scope_report_warning",
@@ -245,6 +248,7 @@ export async function logPreDispatchScopeReport(input: LogScopeReportInput): Pro
       issueIdentifier: input.issue.identifier,
       message: `pre-dispatch scope report failed: ${error instanceof Error ? error.message : String(error)}`
     });
+    return null;
   }
 }
 
@@ -285,7 +289,8 @@ function buildEvidence(
       upstreamMissing: recovery?.upstreamMissing ?? false,
       aheadCount: recovery?.aheadCount ?? 0,
       recoverable: recovery?.recoverable ?? false,
-      reasons: recovery?.reasons ?? []
+      reasons: recovery?.reasons ?? [],
+      nextSafeAction: recovery?.nextSafeAction ?? null
     },
     pullRequests: {
       present: prs.length > 0,
@@ -520,15 +525,6 @@ function estimateReviewRisk(scopeSize: ScopeSize, likelyTouchedSubsystems: strin
   if (scopeSize === "large" || likelyTouchedSubsystems.some((subsystem) => highRiskSubsystems.has(subsystem))) return "high";
   if (scopeSize === "medium" || evidence.workspace.recoverable || likelyTouchedSubsystems.length > 1) return "medium";
   return "low";
-}
-
-function dispatchNotes(implementationStatus: ScopeImplementationStatus, scopeSize: ScopeSize, evidence: ScopeEvidence): string[] {
-  const notes = ["report-only: dispatch is not blocked by this scope report"];
-  if (scopeSize === "large") notes.push("likely-large scope is surfaced for operator visibility only");
-  if (implementationStatus === "partially_satisfied") notes.push("preserve existing partial-work evidence before starting a fresh implementation path");
-  if (evidence.workspace.dirty && evidence.workspace.upstreamMissing) notes.push("dirty workspace with no upstream is recoverable partial work, not fresh missing work");
-  if (evidence.lastRun.quietValidationStop) notes.push("last run appears to have stopped during a quiet validation command");
-  return notes;
 }
 
 function latestCommandActivityFromEvents(events: AgentEvent[]): CommandActivityEvidence | null {

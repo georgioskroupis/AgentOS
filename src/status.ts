@@ -219,6 +219,9 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (mergeWaiting) return `waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`;
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
   if (mergeFailed && issue.phase !== "completed") return `tracker/local disagreement or merge review needed - ${mergeFailed.message ?? "merge failed"}`;
+  if (issue.lifecycleStatus === "planning_required") {
+    return `planning required - ${nextSafeAction(issue, recovery)}`;
+  }
   if (issue.lifecycleStatus === "human_continuation" || issue.lifecycleStatus === "supervisor_continuation" || issue.lifecycleStatus === "externally_fixed") {
     return `${issue.lifecycleStatus} - ${nextSafeAction(issue, recovery)}`;
   }
@@ -240,6 +243,9 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   const terminalAction = cleanTerminalNextSafeAction(issue);
   if (terminalAction) return terminalAction;
   const decision = issue.lastHumanDecision ?? latestHumanDecision(issue.humanDecisions);
+  if (issue.lifecycleStatus === "planning_required" || /planning|decomposition|likely-large/i.test(issue.stopReason ?? "")) {
+    return "create or attach a planning/decomposition artifact, or split follow-up issues, before returning the issue to implementation";
+  }
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
   }
