@@ -268,7 +268,7 @@ export function extractHumanDecision(
 }
 
 export function extractHumanDecisionsFromComments(comments: IssueComment[], options: HumanDecisionTrustOptions = {}): HumanDecisionState[] {
-  return comments
+  return latestIssueComments(comments, Number.MAX_SAFE_INTEGER)
     .map((comment) => {
       const trusted = isTrustedHumanDecisionActor(
         { actor: comment.author, actorId: comment.authorId, actorEmail: comment.authorEmail },
@@ -332,15 +332,39 @@ export function mergeHumanDecisions(existing: HumanDecisionState[], incoming: Hu
   return merged.length ? merged : undefined;
 }
 
-export function reconcileHumanDecisionsForFetchedComments(existing: HumanDecisionState[], incoming: HumanDecisionState[], comments: IssueComment[]): HumanDecisionState[] {
+export function reconcileHumanDecisionsForFetchedComments(
+  existing: HumanDecisionState[],
+  incoming: HumanDecisionState[],
+  comments: IssueComment[],
+  options: { authoritativeCommentSet?: boolean } = {}
+): HumanDecisionState[] {
   const fetchedCommentIds = new Set(comments.map((comment) => comment.id).filter(Boolean));
   const incomingCommentIds = new Set(incoming.map((decision) => decision.commentId).filter((commentId): commentId is string => Boolean(commentId)));
   const retained = existing.filter((decision) => {
     if (decision.source !== "linear-comment" || !decision.commentId) return true;
-    if (!fetchedCommentIds.has(decision.commentId)) return true;
+    if (!fetchedCommentIds.has(decision.commentId)) return !options.authoritativeCommentSet;
     return incomingCommentIds.has(decision.commentId);
   });
   return mergeHumanDecisions(retained, incoming) ?? [];
+}
+
+export function latestIssueComments(comments: IssueComment[], limit: number): IssueComment[] {
+  if (limit <= 0) return [];
+  const sorted = [...comments].sort(compareIssueCommentsByActivity);
+  if (!Number.isFinite(limit) || limit >= sorted.length) return sorted;
+  return sorted.slice(-Math.floor(limit));
+}
+
+function compareIssueCommentsByActivity(a: IssueComment, b: IssueComment): number {
+  const activityDiff = issueCommentActivityMs(a) - issueCommentActivityMs(b);
+  if (activityDiff !== 0) return activityDiff;
+  return a.id.localeCompare(b.id);
+}
+
+function issueCommentActivityMs(comment: IssueComment): number {
+  const timestamp = comment.updatedAt ?? comment.createdAt ?? "";
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function humanDecisionKey(decision: HumanDecisionState): string {

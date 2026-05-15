@@ -15,6 +15,7 @@ import {
   mergeTargetPullRequest,
   primaryPullRequestUrl,
   pullRequestUrls,
+  reconcileHumanDecisionsForFetchedComments,
   reviewTargetPullRequests
 } from "../src/issue-state.js";
 import type { Issue } from "../src/types.js";
@@ -174,6 +175,24 @@ describe("issue state handoff parsing", () => {
         })
       ).toBe(false);
     });
+
+  it("removes stored Linear decisions missing from a full fetched comment set", () => {
+    const storedDecision = {
+      type: "fix_findings" as const,
+      source: "linear-comment" as const,
+      trusted: true,
+      commentId: "comment-deleted",
+      decidedAt: "2026-05-05T00:00:00.000Z",
+      body: "AgentOS-Human-Decision: fix-findings"
+    };
+
+    expect(
+      reconcileHumanDecisionsForFetchedComments([storedDecision], [], [], {
+        authoritativeCommentSet: true
+      })
+    ).toEqual([]);
+    expect(reconcileHumanDecisionsForFetchedComments([storedDecision], [], [])).toEqual([storedDecision]);
+  });
 
   it("treats implemented handoff-only outcomes as valid no-PR issue state", () => {
     const state = issueStateFromHandoff(

@@ -1,4 +1,5 @@
 import type { Issue, IssueComment, IssueTracker, LifecycleDuplicateCommentBehavior, ServiceConfig } from "./types.js";
+import { latestIssueComments } from "./issue-state.js";
 
 type FetchLike = typeof fetch;
 
@@ -132,9 +133,8 @@ export class LinearClient implements IssueTracker {
   async fetchIssueComments(issueIdentifierOrId: string, limit = 20): Promise<IssueComment[]> {
     const issue = await this.findIssueReference(issueIdentifierOrId);
     const comments = await this.listIssueComments(issue.id);
-    return comments
-      .slice(-Math.max(0, limit))
-      .map((comment) => ({
+    return latestIssueComments(
+      comments.map((comment) => ({
         id: comment.id,
         body: comment.body,
         author: comment.user?.displayName ?? comment.user?.name ?? comment.user?.email ?? null,
@@ -142,7 +142,9 @@ export class LinearClient implements IssueTracker {
         authorEmail: comment.user?.email ?? null,
         createdAt: comment.createdAt ?? null,
         updatedAt: comment.updatedAt ?? null
-      }));
+      })),
+      limit
+    );
   }
 
   async listTeams(): Promise<LinearTeam[]> {

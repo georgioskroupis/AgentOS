@@ -172,6 +172,47 @@ describe("LinearClient", () => {
     });
   });
 
+  it("returns the latest issue comments by updated activity before applying the limit", async () => {
+    const laterComments = Array.from({ length: 25 }, (_, index) => ({
+      id: `comment-${String(index + 1).padStart(2, "0")}`,
+      body: `later ${index + 1}`,
+      createdAt: `2026-01-02T00:${String(index + 1).padStart(2, "0")}:00.000Z`,
+      updatedAt: null,
+      user: { id: "user-1", displayName: "User", email: "user@example.com" }
+    }));
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      { data: { issues: { nodes: [{ id: "issue-5", identifier: "VER-5", team: { id: "team-1", key: "VER", name: "Verity" } }] } } },
+      {
+        data: {
+          issue: {
+            comments: {
+              nodes: [
+                {
+                  id: "comment-edited-old",
+                  body: "AgentOS-Human-Decision: approve-as-is",
+                  createdAt: "2026-01-01T00:00:00.000Z",
+                  updatedAt: "2026-01-03T00:00:00.000Z",
+                  user: { id: "user-supervisor", displayName: "Supervisor", email: "supervisor@example.com" }
+                },
+                ...laterComments
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null }
+            }
+          }
+        }
+      }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    const comments = await client.fetchIssueComments("VER-5", 20);
+
+    expect(comments).toHaveLength(20);
+    expect(comments.map((comment) => comment.id)).toContain("comment-edited-old");
+    expect(comments.at(-1)?.id).toBe("comment-edited-old");
+    expect(comments.map((comment) => comment.id)).not.toContain("comment-01");
+  });
+
   it("skips duplicate custom lifecycle markers when configured", async () => {
     const marker = "<!-- agentos:event=status_update issue=VER-5 -->";
     const requests: Array<Record<string, any>> = [];

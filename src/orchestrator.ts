@@ -8,7 +8,9 @@ import {
   extractPullRequestUrls,
   extractHumanDecisionsFromComments,
   hasHumanDecision,
+  isAuthoritativeHumanDecision,
   latestAuthoritativeHumanDecision,
+  latestIssueComments,
   issueStateFromHandoff,
   IssueStateStore,
   latestHumanDecision,
@@ -41,6 +43,7 @@ import {
   reviewTargetSelectionError
 } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
+import { formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, terminalHeadPatch, terminalWaitPhaseFinishes } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import {
@@ -630,13 +633,14 @@ export class Orchestrator {
       return null;
     }
     let state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
-    const linearComments = await this.fetchRecentIssueComments(latest, 20).catch(async (error: Error) => {
+    const linearComments = await this.fetchDispatchGuardrailIssueComments(latest).catch(async (error: Error) => {
       await this.recordCommentReadDispatchStop(latest, error);
       return "failed" as const;
     });
     if (linearComments === "failed") return null;
-    state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined);
-    const scopeReport = await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments, logger: this.logger });
+    state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined, { authoritativeCommentSet: Boolean(linearComments) });
+    const recentLinearComments = linearComments ? latestIssueComments(linearComments, RECENT_LINEAR_COMMENT_LIMIT) : linearComments;
+    const scopeReport = await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments: recentLinearComments, logger: this.logger });
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
       return null;
     }
@@ -673,8 +677,11 @@ export class Orchestrator {
     if (state?.reviewStatus === "approved" && mergeTarget?.url && !allowImplementationContinuation) {
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
+      const repoRoot = resolve(this.options.repoRoot);
+      const targetValid = await this.validateDispatchPullRequestTarget(issue, mergeTarget.url);
+      if (!targetValid) return true;
       const github = new GitHubClient(this.config.github.command);
-      const pr = await github.getPullRequest(mergeTarget.url, resolve(this.options.repoRoot)).catch(async (error: Error) => {
+      const pr = await github.getPullRequest(mergeTarget.url, repoRoot).catch(async (error: Error) => {
         await this.logger.write({
           type: "dispatch_skipped",
           issueId: issue.id,
@@ -819,6 +826,24 @@ export class Orchestrator {
     });
   }
 
+  private async validateDispatchPullRequestTarget(issue: Issue, prUrl: string): Promise<boolean> {
+    try {
+      await assertPullRequestUrlMatchesRepo(resolve(this.options.repoRoot), prUrl);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.recordDispatchGuardrailStop(issue, message, {
+        phase: "human-required",
+        reviewStatus: "human_required",
+        lastError: message,
+        errorCategory: "prompt",
+        stopReason: message
+      });
+      await this.moveIssue(issue, this.config.tracker.reviewState);
+      return false;
+    }
+  }
+
   private async markLinearPlanningRecommended(issue: Issue, report: PreDispatchScopeReport): Promise<void> {
     const message = report.dispatchAdvice.reason ?? "likely-large scope needs planning or decomposition before implementation dispatch";
     await this.recordDispatchGuardrailStop(issue, message, {
@@ -956,6 +981,18 @@ export class Orchestrator {
     const github = new GitHubClient(this.config.github.command);
     const repoRoot = resolve(this.options.repoRoot);
     for (const url of urls) {
+      const targetMatchesRepo = await assertPullRequestUrlMatchesRepo(repoRoot, url).then(
+        () => true,
+        async (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          await this.logger.write({
+            type: "github_status_warning",
+            message: `skipping off-repository PR merge-state read for ${url}: ${message}`
+          });
+          return false;
+        }
+      );
+      if (!targetMatchesRepo) continue;
       const status = await github.getPullRequest(url, repoRoot).catch(async (error: Error) => {
         await this.logger.write({
           type: "github_status_warning",
@@ -1336,19 +1373,22 @@ export class Orchestrator {
     const comments = await this.fetchRecentIssueComments(issue, 10);
     if (!comments) return "";
     const state = await this.ingestHumanDecisions(issue, currentState, comments);
-    if (comments.length === 0 && !state?.lastHumanDecision) return "";
-    const latestDecision = state?.lastHumanDecision ?? latestHumanDecision(state?.humanDecisions);
+    const decisions = mergeHumanDecisions([...(state?.humanDecisions ?? []), ...(state?.lastHumanDecision ? [state.lastHumanDecision] : [])], []) ?? [];
+    if (comments.length === 0 && decisions.length === 0) return "";
+    const latestAuthoritativeDecision = latestAuthoritativeHumanDecision(decisions);
+    const latestContextOnlyDecision = latestHumanDecision(decisions.filter((decision) => !isAuthoritativeHumanDecision(decision)));
     return [
       "",
       "## Linear Human Decision Re-entry",
       "",
       "Recent Linear comments are re-entry input. Structured human decisions are authoritative only when written by a configured trusted actor or the issue assignee, and then take precedence over stale handoff state.",
-      latestDecision ? formatHumanDecision(latestDecision) : "Authoritative structured human decision: none recorded.",
+      latestAuthoritativeDecision ? formatHumanDecision(latestAuthoritativeDecision) : "Authoritative structured human decision: none recorded.",
+      latestContextOnlyDecision ? formatHumanDecision(latestContextOnlyDecision, "Context-only structured human decision") : null,
       state?.reviewStatus ? `Review status from issue state: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : null,
       state?.reviewTargetUrls?.length ? `Review targets: ${state.reviewTargetUrls.join(", ")}` : null,
       "",
       "Recent Linear comments:",
-      ...comments.slice(-5).map((comment) => formatLinearComment(comment.id, comment.author, comment.createdAt ?? comment.updatedAt, comment.body))
+      ...latestIssueComments(comments, 5).map((comment) => formatLinearComment(comment.id, comment.author, comment.updatedAt ?? comment.createdAt, comment.body))
     ]
       .filter((line): line is string => line !== null)
       .join("\n");
@@ -1357,15 +1397,27 @@ export class Orchestrator {
   private async fetchRecentIssueComments(issue: Issue, limit: number): Promise<IssueComment[] | null> {
     if (!this.tracker.fetchIssueComments) return null;
     try {
-      return await this.tracker.fetchIssueComments(issue.identifier, limit);
+      const comments = await this.tracker.fetchIssueComments(issue.identifier, limit);
+      return latestIssueComments(comments, limit);
     } catch (error) {
       await this.logger.write({ type: "linear_comment_read_failed", issueId: issue.id, issueIdentifier: issue.identifier, message: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
 
-  private async ingestHumanDecisions(issue: Issue, currentState: IssueState | null, comments?: IssueComment[]): Promise<IssueState | null> {
-    const fetchedComments = comments ?? (await this.fetchRecentIssueComments(issue, 20));
+  private async fetchDispatchGuardrailIssueComments(issue: Issue): Promise<IssueComment[] | null> {
+    if (!this.tracker.fetchIssueComments) return null;
+    try {
+      const comments = await this.tracker.fetchIssueComments(issue.identifier, GUARDRAIL_LINEAR_COMMENT_LIMIT);
+      return latestIssueComments(comments, GUARDRAIL_LINEAR_COMMENT_LIMIT);
+    } catch (error) {
+      await this.logger.write({ type: "linear_comment_read_failed", issueId: issue.id, issueIdentifier: issue.identifier, message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
+
+  private async ingestHumanDecisions(issue: Issue, currentState: IssueState | null, comments?: IssueComment[], options: { authoritativeCommentSet?: boolean } = {}): Promise<IssueState | null> {
+    const fetchedComments = comments ?? (await this.fetchRecentIssueComments(issue, RECENT_LINEAR_COMMENT_LIMIT));
     if (!fetchedComments) return currentState;
     const decisions = extractHumanDecisionsFromComments(fetchedComments, {
       trustedActors: this.config.lifecycle.trustedDecisionActors,
@@ -1374,7 +1426,7 @@ export class Orchestrator {
       issueAssigneeEmail: issue.assigneeEmail
     });
     const previousDecisions = mergeHumanDecisions([...(currentState?.humanDecisions ?? []), ...(currentState?.lastHumanDecision ? [currentState.lastHumanDecision] : [])], []) ?? [];
-    const mergedDecisions = reconcileHumanDecisionsForFetchedComments(previousDecisions, decisions, fetchedComments);
+    const mergedDecisions = reconcileHumanDecisionsForFetchedComments(previousDecisions, decisions, fetchedComments, options);
     const newDecisions = mergedDecisions.filter((decision) => !hasHumanDecision(previousDecisions, decision));
     const removedDecisions = previousDecisions.filter((decision) => !hasHumanDecision(mergedDecisions, decision));
     const latestAuthoritativeDecision = latestAuthoritativeHumanDecision(mergedDecisions);
@@ -2705,45 +2757,6 @@ function lifecycleStatusForHumanDecision(decision: HumanDecisionState): Lifecycl
   if (decision.type === "fix_findings") return "human_continuation";
   if (decision.type === "proceed_to_merge_after_supervisor_fix") return "externally_fixed";
   return "supervisor_continuation";
-}
-
-function formatHumanDecision(decision: HumanDecisionState): string {
-  return [
-    "Structured human decision:",
-    `- Type: ${decision.type}`,
-    `- Decided at: ${decision.decidedAt}`,
-    decision.actor ? `- Actor: ${decision.actor}` : null,
-    decision.prHeadSha ? `- PR head SHA: ${decision.prHeadSha}` : null,
-    decision.validationEvidence ? `- Validation evidence: ${decision.validationEvidence}` : null,
-    decision.ciState ? `- CI state: ${decision.ciState}` : null,
-    decision.findings ? `- Findings: ${decision.findings}` : null,
-    decision.summary ? `- Summary: ${decision.summary}` : null
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
-}
-
-function formatLinearComment(id: string, author: string | null | undefined, timestamp: string | null | undefined, body: string): string {
-  return [`- Comment ${id}${author ? ` by ${author}` : ""}${timestamp ? ` at ${timestamp}` : ""}:`, indentBlock(truncateForPrompt(body.trim(), 1200))].join("\n");
-}
-
-function indentBlock(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((line) => `  ${line}`)
-    .join("\n");
-}
-
-function truncateForPrompt(text: string, maxLength: number): string {
-  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 15).trimEnd()}... [truncated]`;
-}
-
-function linearCommentKey(event: string, issueIdentifier: string): string {
-  return `${event}:${issueIdentifier}`;
-}
-
-function linearCommentMarker(event: string, issueIdentifier: string): string {
-  return `<!-- agentos:event=${linearCommentKey(event, issueIdentifier)} -->`;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
