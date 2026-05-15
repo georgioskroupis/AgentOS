@@ -12,6 +12,7 @@ import {
   issueStateFromHandoff,
   IssueStateStore,
   latestHumanDecision,
+  mergeHumanDecisions,
   mergeEligiblePullRequests,
   mergeTargetAmbiguityReason,
   mergeTargetPullRequest,
@@ -628,7 +629,11 @@ export class Orchestrator {
       return null;
     }
     let state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
-    const linearComments = await this.fetchRecentIssueComments(latest, 20);
+    const linearComments = await this.fetchRecentIssueComments(latest, 20).catch(async (error: Error) => {
+      await this.recordCommentReadDispatchStop(latest, error);
+      return "failed" as const;
+    });
+    if (linearComments === "failed") return null;
     state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined);
     const scopeReport = await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments, logger: this.logger });
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
@@ -803,6 +808,14 @@ export class Orchestrator {
       message
     });
     return state;
+  }
+
+  private async recordCommentReadDispatchStop(issue: Issue, error: Error): Promise<IssueState> {
+    const message = `could not read latest Linear comments before dispatch guardrails: ${error.message}`;
+    return this.recordDispatchGuardrailStop(issue, message, {
+      phase: "needs-input",
+      stopReason: message
+    });
   }
 
   private async markLinearPlanningRecommended(issue: Issue, report: PreDispatchScopeReport): Promise<void> {
@@ -1342,15 +1355,17 @@ export class Orchestrator {
 
   private async fetchRecentIssueComments(issue: Issue, limit: number): Promise<IssueComment[] | null> {
     if (!this.tracker.fetchIssueComments) return null;
-    return this.tracker.fetchIssueComments(issue.identifier, limit).catch(async (error: Error) => {
-      await this.logger.write({ type: "linear_comment_read_failed", issueId: issue.id, issueIdentifier: issue.identifier, message: error.message });
-      return [];
-    });
+    try {
+      return await this.tracker.fetchIssueComments(issue.identifier, limit);
+    } catch (error) {
+      await this.logger.write({ type: "linear_comment_read_failed", issueId: issue.id, issueIdentifier: issue.identifier, message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
   }
 
   private async ingestHumanDecisions(issue: Issue, currentState: IssueState | null, comments?: IssueComment[]): Promise<IssueState | null> {
-    if (!this.tracker.fetchIssueComments && !comments) return currentState;
-    const fetchedComments = comments ?? (await this.tracker.fetchIssueComments!(issue.identifier, 20).catch(() => []));
+    const fetchedComments = comments ?? (await this.fetchRecentIssueComments(issue, 20));
+    if (!fetchedComments) return currentState;
     const decisions = extractHumanDecisionsFromComments(fetchedComments, {
       trustedActors: this.config.lifecycle.trustedDecisionActors,
       issueAssignee: issue.assignee,
@@ -1358,13 +1373,14 @@ export class Orchestrator {
       issueAssigneeEmail: issue.assigneeEmail
     });
     if (decisions.length === 0) return currentState;
-    const latestDecision = latestHumanDecision(decisions);
     const previousDecisions = [...(currentState?.humanDecisions ?? []), ...(currentState?.lastHumanDecision ? [currentState.lastHumanDecision] : [])];
     const newDecisions = decisions.filter((decision) => !hasHumanDecision(previousDecisions, decision));
     if (newDecisions.length === 0) return currentState;
+    const mergedDecisions = mergeHumanDecisions(previousDecisions, decisions) ?? [];
+    const latestDecision = latestAuthoritativeHumanDecision(mergedDecisions) ?? latestHumanDecision(mergedDecisions);
     const previousLastRunId = currentState?.lastRunId ?? null;
     const state = await this.recordIssueState(issue, {
-      humanDecisions: decisions,
+      humanDecisions: mergedDecisions,
       lastHumanDecision: latestDecision,
       lastHumanFeedbackAt: latestDecision?.decidedAt ?? new Date().toISOString(),
       lifecycleStatus: latestDecision ? lifecycleStatusForHumanDecision(latestDecision) : currentState?.lifecycleStatus
@@ -1374,7 +1390,7 @@ export class Orchestrator {
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       message: latestDecision?.type ?? "unknown",
-      payload: { decisions }
+      payload: { decisions: mergedDecisions, newDecisions }
     });
     if (latestDecision) {
       await this.writePhaseTimingEvent(issue, {

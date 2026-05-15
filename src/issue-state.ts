@@ -289,10 +289,10 @@ export function extractHumanDecisionsFromComments(comments: IssueComment[], opti
 export function isTrustedHumanDecisionActor(actor: string | HumanDecisionActorIdentity | null | undefined, options: HumanDecisionTrustOptions = {}): boolean {
   const identity = typeof actor === "string" || actor == null ? { actor } : actor;
   const actorIds = uniqueStableKeys([identity.actorId]);
-  const actorEmails = uniqueEmailKeys([identity.actorEmail, identity.actor]);
+  const actorEmails = uniqueEmailKeys([identity.actorEmail]);
   if (actorIds.length === 0 && actorEmails.length === 0) return false;
   const trustedIds = uniqueStableKeys([...(options.trustedActors ?? []), options.issueAssigneeId]);
-  const trustedEmails = uniqueEmailKeys([...(options.trustedActors ?? []), options.issueAssigneeEmail, options.issueAssignee]);
+  const trustedEmails = uniqueEmailKeys([...(options.trustedActors ?? []), options.issueAssigneeEmail]);
   return actorIds.some((value) => trustedIds.includes(value)) || actorEmails.some((value) => trustedEmails.includes(value));
 }
 
@@ -321,7 +321,7 @@ function normalizePullRequestRefs(existing: PullRequestRef[], legacyUrl?: string
   return mergePullRequestRefs(existing, legacy);
 }
 
-function mergeHumanDecisions(existing: HumanDecisionState[], incoming: HumanDecisionState[]): HumanDecisionState[] | undefined {
+export function mergeHumanDecisions(existing: HumanDecisionState[], incoming: HumanDecisionState[]): HumanDecisionState[] | undefined {
   const byKey = new Map<string, HumanDecisionState>();
   for (const decision of [...existing, ...incoming]) {
     byKey.set(humanDecisionKey(decision), decision);

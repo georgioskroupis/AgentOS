@@ -1074,6 +1074,158 @@ describe("orchestrator", () => {
     expect(state?.stopReason).toContain("supervisor continuation or external fix is active");
   });
 
+  it("preserves newer local supervisor decisions when older trusted comments are ingested", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-preserve-local-supervisor-decision-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
+    const supervisorFixedDecision = {
+      type: "proceed_to_merge_after_supervisor_fix" as const,
+      source: "manual" as const,
+      decidedAt: "2026-05-10T00:03:00.000Z",
+      actor: "local-supervisor",
+      body: "AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix",
+      prHeadSha: "fixed-head"
+    };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "review",
+      reviewStatus: "human_required",
+      lastHumanDecision: supervisorFixedDecision,
+      updatedAt: "2026-05-10T00:03:00.000Z"
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-older-fix",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-10T00:01:00.000Z",
+            body: "AgentOS-Human-Decision: fix-findings"
+          }
+        ];
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          runnerCalled = true;
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented");
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lastHumanDecision).toMatchObject({
+      type: "proceed_to_merge_after_supervisor_fix",
+      source: "manual",
+      prHeadSha: "fixed-head"
+    });
+    expect(state?.humanDecisions?.map((decision) => decision.type)).toEqual(["fix_findings", "proceed_to_merge_after_supervisor_fix"]);
+    expect(state?.lifecycleStatus).toBe("externally_fixed");
+  });
+
+  it("fails closed when Linear comments cannot be read before dispatch guardrails", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-comment-read-fail-closed-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "review",
+      reviewStatus: "human_required",
+      humanDecisions: [
+        {
+          type: "fix_findings",
+          source: "linear-comment",
+          trusted: true,
+          actor: "Supervisor",
+          actorId: "user-supervisor",
+          actorEmail: "supervisor@example.com",
+          decidedAt: "2026-05-10T00:01:00.000Z",
+          commentId: "comment-old"
+        }
+      ],
+      lastHumanDecision: {
+        type: "fix_findings",
+        source: "linear-comment",
+        trusted: true,
+        actor: "Supervisor",
+        actorId: "user-supervisor",
+        actorEmail: "supervisor@example.com",
+        decidedAt: "2026-05-10T00:01:00.000Z",
+        commentId: "comment-old"
+      },
+      lifecycleStatus: "human_continuation",
+      updatedAt: "2026-05-10T00:01:00.000Z"
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        throw new Error("Linear comments unavailable");
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          runnerCalled = true;
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented");
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.stopReason).toContain("could not read latest Linear comments before dispatch guardrails");
+    expect(state?.lastHumanDecision?.type).toBe("fix_findings");
+    const logs = await logger.tail(20);
+    expect(logs.some((entry) => entry.type === "linear_comment_read_failed")).toBe(true);
+    expect(logs.some((entry) => entry.type === "dispatch_skipped" && entry.message.includes("could not read latest Linear comments"))).toBe(true);
+  });
+
   it("suppresses stale active runs and redispatch during supervisor continuation", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-supervisor-paused-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -1612,6 +1764,75 @@ describe("orchestrator", () => {
     });
     expect(state?.workspaceMissingAt).toBeUndefined();
     await expect(access(workspacePath)).rejects.toThrow();
+  });
+
+  it("refreshes terminal Linear heads from newer CI metadata when no PR status is available", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-terminal-ci-head-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  terminal_states: [Done]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "review",
+      headSha: "stale-recorded-head",
+      lastReviewedSha: "stale-reviewed-head",
+      lastFixedSha: "stale-fixed-head",
+      validation: {
+        status: "passed",
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        githubCi: {
+          status: "passed",
+          headSha: "newer-ci-head",
+          checkedAt: "2026-01-02T00:00:00.000Z"
+        }
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+    const doneIssue = { ...readyIssue, state: "Done", updated_at: "2026-01-03T00:00:00.000Z" };
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, doneIssue]]);
+      },
+      async comment() {},
+      async move() {}
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for terminal issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      phase: "completed",
+      lifecycleStatus: "terminal_missing_workspace",
+      terminalState: "Done",
+      headSha: "newer-ci-head",
+      lastReviewedSha: "newer-ci-head",
+      lastFixedSha: "newer-ci-head",
+      validation: expect.objectContaining({
+        githubCi: expect.objectContaining({
+          status: "passed",
+          headSha: "newer-ci-head"
+        })
+      })
+    });
   });
 
   it("closes stored wait phases when a recorded issue becomes terminal", async () => {

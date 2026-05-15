@@ -47,7 +47,7 @@ export function alreadyMergedIssuePatch(
 }
 
 export function terminalHeadPatch(state: IssueState | null, pr: PullRequestStatus | null, checkedAt: string): Partial<IssueState> {
-  const headSha = pr?.headSha ?? state?.headSha ?? state?.validation?.githubCi?.headSha ?? null;
+  const headSha = pr?.headSha ?? state?.validation?.githubCi?.headSha ?? state?.headSha ?? null;
   if (!headSha) return {};
   return {
     headSha,
