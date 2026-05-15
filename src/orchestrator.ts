@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { exists, readText } from "./fs-utils.js";
+import { exists } from "./fs-utils.js";
 import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPreflightResult, type RepoEnvLoadResult } from "./env.js";
 import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeFeedback } from "./github.js";
 import { readGitHubReviewContext } from "./github-context.js";
@@ -30,7 +29,9 @@ import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
+import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { terminalWaitPhaseFinishes } from "./orchestrator-terminal.js";
+import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import {
   blockingFindings,
   ensureReviewIterationDir,
@@ -161,10 +162,14 @@ export class Orchestrator {
       const prepared = await this.prepareForDispatch(issue);
       if (!prepared) { if (retry && retry.dueAtMs <= Date.now() && !this.retries.has(retry.issueId)) await this.finishRetryBackoff(retry, issue, "canceled", "retry skipped before dispatch"); continue; }
       const dueRetry = retry && retry.dueAtMs <= Date.now() ? retry : null;
-      if (dueRetry) await this.finishRetryBackoff(dueRetry, prepared, "completed", "retry dispatched");
-      await this.dispatch(prepared, dueRetry?.attempt ?? null);
-      dispatched += 1;
-      candidateDispatched += 1;
+      const didDispatch = await this.dispatch(prepared, dueRetry?.attempt ?? null);
+      if (didDispatch) {
+        if (dueRetry) await this.finishRetryBackoff(dueRetry, prepared, "completed", "retry dispatched");
+        dispatched += 1;
+        candidateDispatched += 1;
+      } else if (dueRetry) {
+        await this.finishRetryBackoff(dueRetry, prepared, "canceled", "retry skipped before dispatch");
+      }
     }
     if (waitForWorkers) {
       await Promise.allSettled([...this.running.values()].map((entry) => entry.promise));
@@ -714,13 +719,9 @@ export class Orchestrator {
   }
 
   private async preTurnCheck(issue: Issue): Promise<string | null> {
-    const states = await this.tracker.fetchIssueStates([issue.id]).catch(() => null);
-    const current = states?.get(issue.id);
-    if (current === null) return "issue_no_longer_exists";
-    const latest = current ?? issue;
-    if (isStateIn(latest.state, this.config.tracker.terminalStates)) return `issue_became_terminal:${latest.state}`;
-    if (!isStateIn(latest.state, runningAllowedStates(this.config))) return `issue_no_longer_dispatchable:${latest.state}`;
-    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
+    const trackerStop = await trackerDispatchStop(this.config, this.tracker, issue);
+    if (trackerStop) return trackerStop;
+    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
     if (await this.hasAlreadyMergedPullRequest(state)) return "pull_request_already_merged";
     if (isSupervisorContinuationPaused(state)) return "supervisor_continuation_active";
     return null;
@@ -833,7 +834,19 @@ export class Orchestrator {
     return null;
   }
 
-  private async dispatch(issue: Issue, attempt: number | null): Promise<void> {
+  private async dispatch(issue: Issue, attempt: number | null): Promise<boolean> {
+    const dispatchStop = await trackerDispatchStop(this.config, this.tracker, issue);
+    if (dispatchStop && isConfiguredReviewDispatchStop(this.config, dispatchStop)) {
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: dispatchStop
+      });
+      return false;
+    }
     this.claimed.add(issue.id);
     this.retries.delete(issue.id);
     this.completedMarkers.delete(issue.id);
@@ -859,9 +872,22 @@ export class Orchestrator {
       abortController,
       promise
     });
+    return true;
   }
 
   private async runIssue(issue: Issue, attempt: number | null, abortController: AbortController): Promise<void> {
+    const startStop = await trackerDispatchStop(this.config, this.tracker, issue);
+    if (startStop && isConfiguredReviewDispatchStop(this.config, startStop)) {
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        message: startStop
+      });
+      return;
+    }
     const run = await this.runArtifacts.startRun({ issue, attempt });
     const runId = run.runId;
     const running = this.running.get(issue.id);
@@ -905,7 +931,21 @@ export class Orchestrator {
     });
     await this.runArtifacts.setWorkspace(runId, workspace);
     try {
-      await this.markLinearStarted(issue, workspace, attempt);
+      const linearStarted = await this.markLinearStarted(issue, workspace, attempt);
+      if (!linearStarted) {
+        const stopReason = `issue_no_longer_dispatchable:${this.config.tracker.reviewState ?? "review"}`;
+        const result: AgentRunResult = { status: "canceled", error: stopReason };
+        await this.writeRunEvent(runId, {
+          type: "run_canceled",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: stopReason,
+          payload: result
+        });
+        await this.handleTerminalStoppedRun(issue, stopReason, runId);
+        await this.runArtifacts.completeRun(runId, result);
+        return;
+      }
       await workspaceManager.beforeRun(workspace);
       const result = await this.runImplementationTurns(issue, attempt, workspace, abortController.signal, runId);
       if (result.status !== "succeeded") {
@@ -1271,9 +1311,13 @@ export class Orchestrator {
         if (!this.retries.has(retry.issueId)) await this.finishRetryBackoff(retry, issue, "canceled", "retry skipped before dispatch");
         continue;
       }
-      await this.finishRetryBackoff(retry, prepared, "completed", "retry dispatched");
-      await this.dispatch(prepared, retry.attempt);
-      dispatched += 1;
+      const didDispatch = await this.dispatch(prepared, retry.attempt);
+      if (didDispatch) {
+        await this.finishRetryBackoff(retry, prepared, "completed", "retry dispatched");
+        dispatched += 1;
+      } else {
+        await this.finishRetryBackoff(retry, prepared, "canceled", "retry skipped before dispatch");
+      }
     }
     return dispatched;
   }
@@ -2186,8 +2230,9 @@ export class Orchestrator {
     await this.finishOpenRunPhase(retry.runId, issue, "retry-backoff", status, finishedAt, retryBackoffFinishMetadata(retry, reason));
   }
 
-  private async markLinearStarted(issue: Issue, workspace: Workspace, attempt: number | null): Promise<void> {
-    await this.moveIssue(issue, this.config.tracker.runningState);
+  private async markLinearStarted(issue: Issue, workspace: Workspace, attempt: number | null): Promise<boolean> {
+    const moveResult = await this.moveIssue(issue, this.config.tracker.runningState);
+    if (moveResult === "blocked") return false;
     await this.commentIssue(
       issue,
       [
@@ -2202,6 +2247,7 @@ export class Orchestrator {
       ].join("\n"),
       "run_started"
     );
+    return true;
   }
 
   private async markLinearSucceeded(issue: Issue, workspace: Workspace, handoff: string | null, state?: IssueState): Promise<void> {
@@ -2450,21 +2496,28 @@ export class Orchestrator {
     return state;
   }
 
-  private async moveIssue(issue: Issue, stateName: string | null): Promise<void> {
-    if (!stateName || !this.tracker.move || !orchestratorMayMoveIssue(this.config)) return;
-    await this.tracker.move(issue.identifier, stateName).catch((error: Error) =>
-      this.logger.write({
+  private async moveIssue(issue: Issue, stateName: string | null): Promise<TrackerUpdateResult> {
+    if (!stateName || !this.tracker.move || !orchestratorMayMoveIssue(this.config)) return "unsupported";
+    if (await reviewStateBlocksTrackerUpdate({ config: this.config, tracker: this.tracker, logger: this.logger, issue, operation: `move to ${stateName}` })) return "blocked";
+    try {
+      await this.tracker.move(issue.identifier, stateName);
+      return "applied";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.logger.write({
         type: "linear_update_failed",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
-        message: `move to ${stateName}: ${error.message}`
-      })
-    );
+        message: `move to ${stateName}: ${message}`
+      });
+      return "failed";
+    }
   }
 
   private async commentIssue(issue: Issue, body: string, key?: string, kind: "bookkeeping" | "substantive" = "bookkeeping"): Promise<void> {
     if (!orchestratorMayComment(this.config, kind)) return;
     if (!this.tracker.comment && !this.tracker.upsertComment) return;
+    if (await reviewStateBlocksTrackerUpdate({ config: this.config, tracker: this.tracker, logger: this.logger, issue, operation: "comment" })) return;
     const safeBody = redactText(key ? `${linearCommentMarker(key, issue.identifier)}\n${body}` : body);
     const operation =
       key && this.tracker.upsertComment
@@ -2708,54 +2761,6 @@ function singleLine(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
-function validationFailureMessage(validation: NonNullable<IssueState["validation"]>): string {
-  const reason = validation.errors?.length ? validation.errors.join("; ") : `status=${validation.status}`;
-  return `validation_failed: ${reason}`;
-}
-
-function issueFromState(state: IssueState): Issue {
-  return {
-    id: state.issueId,
-    identifier: state.issueIdentifier,
-    title: state.issueIdentifier,
-    description: null,
-    priority: null,
-    state: state.terminalState ?? "",
-    branch_name: null,
-    url: null,
-    labels: [],
-    blocked_by: [],
-    created_at: null,
-    updated_at: state.updatedAt
-  };
-}
-
-function issueFromRunSummary(summary: RunSummary): Issue {
-  return {
-    id: summary.issueId,
-    identifier: summary.issueIdentifier,
-    title: summary.issueIdentifier,
-    description: null,
-    priority: null,
-    state: "",
-    branch_name: null,
-    url: null,
-    labels: [],
-    blocked_by: [],
-    created_at: null,
-    updated_at: summary.startedAt
-  };
-}
-
-function workspaceFromRuntime(active: RuntimeActiveRun, summary: RunSummary | undefined, workspaceRoot: string): Workspace {
-  const workspaceKey = active.workspaceKey ?? active.identifier.replace(/[^A-Za-z0-9._-]/g, "_");
-  return {
-    path: active.workspacePath ?? summary?.workspacePath ?? join(workspaceRoot, workspaceKey),
-    workspaceKey,
-    createdNow: false
-  };
-}
-
 function isRecoverablePartialWorkState(state: IssueState): boolean {
   return (
     state.phase === "needs-input" ||
@@ -2766,27 +2771,4 @@ function isRecoverablePartialWorkState(state: IssueState): boolean {
     Boolean(state.lastError?.toLowerCase().includes("stall")) ||
     Boolean(state.lastError?.toLowerCase().includes("missing_handoff"))
   );
-}
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.filter((value): value is string => Boolean(value)))];
-}
-
-async function readHandoff(workspacePath: string, identifier: string): Promise<string | null> {
-  const path = join(workspacePath, ".agent-os", `handoff-${identifier}.md`);
-  if (!(await exists(path))) return null;
-  const text = await readText(path);
-  return text.trim() ? text : null;
-}
-
-function gitRevParse(cwd: string, ref: string): Promise<string | null> {
-  return new Promise((resolvePromise) => {
-    const child = spawn("git", ["-C", cwd, "rev-parse", ref], { stdio: ["ignore", "pipe", "ignore"] });
-    let stdout = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.on("error", () => resolvePromise(null));
-    child.on("close", (code) => resolvePromise(code === 0 ? stdout.trim() || null : null));
-  });
 }

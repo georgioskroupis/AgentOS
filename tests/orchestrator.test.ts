@@ -4982,6 +4982,110 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "dispatch_skipped" && entry.message?.includes("approved PR is merge-ready"))).toBe(true);
   });
 
+  it("refuses dispatch when a prepared active issue is now in Human Review", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-review-dispatch-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const humanReviewIssue = { ...readyIssue, state: "Human Review", updated_at: "2026-05-08T21:00:00.000Z" };
+    let stateChecks = 0;
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        stateChecks += 1;
+        return new Map([[readyIssue.id, stateChecks === 1 ? readyIssue : humanReviewIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual([]);
+    expect(comments).toEqual([]);
+    const logs = await logger.tail(20);
+    expect(logs.some((entry) => entry.type === "dispatch_skipped" && entry.message === "issue_no_longer_dispatchable:Human Review")).toBe(true);
+  });
+
+  it("does not move or comment when an issue reaches Human Review before start bookkeeping", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-review-start-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const humanReviewIssue = { ...readyIssue, state: "Human Review", updated_at: "2026-05-08T21:00:00.000Z" };
+    let stateChecks = 0;
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        stateChecks += 1;
+        return new Map([[readyIssue.id, stateChecks <= 3 ? readyIssue : humanReviewIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual([]);
+    expect(comments).toEqual([]);
+    const logs = await logger.tail(20);
+    expect(logs.some((entry) => entry.type === "linear_update_skipped" && entry.message?.includes("move to In Progress: refused because issue is in Human Review"))).toBe(true);
+  });
+
   it("refuses fresh dispatch when a prior failed run left dirty recoverable workspace work", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-dirty-salvage-"));
     const workflowPath = join(repo, "WORKFLOW.md");
