@@ -472,7 +472,22 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
       blockingSeverities: ["P0", "P1", "P2"],
       parallelReviewers: false,
       maxConcurrentReviewers: 1,
-      skipOptionalReviewersAfterBlockingRequired: false
+      skipOptionalReviewersAfterBlockingRequired: false,
+      budget: {
+        enabled: true,
+        mode: "recommend-only",
+        maxReviewElapsedMs: 30 * 60 * 1000,
+        maxReviewIterations: 1,
+        maxFixerIterations: 0,
+        maxBlockingFindings: 10,
+        maxP1P2Findings: 5,
+        maxChangedFiles: 40,
+        maxValidationReruns: 2,
+        maxReviewTokens: 200_000,
+        repeatedBroadCategoryThreshold: 2,
+        lateNewBlockingFindingAfterApproval: true,
+        broadCategories: ["architecture", "lifecycle", "orchestration", "status", "workflow"]
+      }
     }
   };
 }

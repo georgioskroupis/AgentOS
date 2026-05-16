@@ -234,6 +234,7 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
   const codex = objectRecord(config.codex);
   const github = objectRecord(config.github);
   const review = objectRecord(config.review);
+  const reviewBudget = objectRecord(review.budget);
   return {
     ...config,
     trust_mode: typeof config.trust_mode === "string" ? config.trust_mode : "ci-locked",
@@ -301,7 +302,23 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
       required_reviewers: stringList(review.required_reviewers, ["self", "correctness", "tests", "architecture"]),
       optional_reviewers: stringList(review.optional_reviewers, ["security"]),
       require_all_blocking_resolved: typeof review.require_all_blocking_resolved === "boolean" ? review.require_all_blocking_resolved : true,
-      blocking_severities: stringList(review.blocking_severities, ["P0", "P1", "P2"])
+      blocking_severities: stringList(review.blocking_severities, ["P0", "P1", "P2"]),
+      budget: {
+        ...reviewBudget,
+        enabled: typeof reviewBudget.enabled === "boolean" ? reviewBudget.enabled : true,
+        mode: reviewBudget.mode === "prepare-draft" ? "prepare-draft" : "recommend-only",
+        max_review_elapsed_ms: typeof reviewBudget.max_review_elapsed_ms === "number" ? reviewBudget.max_review_elapsed_ms : 1_800_000,
+        max_review_iterations: typeof reviewBudget.max_review_iterations === "number" ? reviewBudget.max_review_iterations : 3,
+        max_fixer_iterations: typeof reviewBudget.max_fixer_iterations === "number" ? reviewBudget.max_fixer_iterations : 2,
+        max_blocking_findings: typeof reviewBudget.max_blocking_findings === "number" ? reviewBudget.max_blocking_findings : 10,
+        max_p1_p2_findings: typeof reviewBudget.max_p1_p2_findings === "number" ? reviewBudget.max_p1_p2_findings : 5,
+        max_changed_files: typeof reviewBudget.max_changed_files === "number" ? reviewBudget.max_changed_files : 40,
+        max_validation_reruns: typeof reviewBudget.max_validation_reruns === "number" ? reviewBudget.max_validation_reruns : 2,
+        max_review_tokens: typeof reviewBudget.max_review_tokens === "number" ? reviewBudget.max_review_tokens : 200_000,
+        repeated_broad_category_threshold: typeof reviewBudget.repeated_broad_category_threshold === "number" ? reviewBudget.repeated_broad_category_threshold : 2,
+        late_new_blocking_finding_after_approval: typeof reviewBudget.late_new_blocking_finding_after_approval === "boolean" ? reviewBudget.late_new_blocking_finding_after_approval : true,
+        broad_categories: stringList(reviewBudget.broad_categories, ["architecture", "lifecycle", "orchestration", "status", "workflow"])
+      }
     }
   };
 }

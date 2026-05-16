@@ -10,6 +10,7 @@ export interface ReviewerRunOutcome {
   canonicalArtifactPath: string;
   failures: ReviewRunnerFailure[];
   terminalFailure: ReviewRunnerFailure | null;
+  tokenTotal: number;
 }
 
 export async function runReviewerWithArtifactRetry(input: {
@@ -31,6 +32,7 @@ export async function runReviewerWithArtifactRetry(input: {
 }): Promise<ReviewerRunOutcome> {
   const failures: ReviewRunnerFailure[] = [];
   const maxAttempts = input.config.agent.maxRetryAttempts + 1;
+  let tokenTotal = 0;
   for (let reviewerAttempt = 1; reviewerAttempt <= maxAttempts; reviewerAttempt += 1) {
     const artifactBeforeAttempt = await reviewArtifactSnapshot(input.workspaceArtifactPath);
     const result = await input.runner.run({
@@ -46,6 +48,7 @@ export async function runReviewerWithArtifactRetry(input: {
       }
     });
     const terminalRunnerFailure = nonMechanicalRunnerFailure(input, result, reviewerAttempt, maxAttempts);
+    tokenTotal += result.totalTokens ?? 0;
     if (terminalRunnerFailure) {
       failures.push(terminalRunnerFailure);
       await input.logger.write({
@@ -56,14 +59,14 @@ export async function runReviewerWithArtifactRetry(input: {
         payload: terminalRunnerFailure
       });
       await writeReviewArtifact(input.canonicalArtifactPath, reviewRunnerFailureArtifact(terminalRunnerFailure));
-      return { artifact: null, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: terminalRunnerFailure };
+      return { artifact: null, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: terminalRunnerFailure, tokenTotal };
     }
 
     const artifactResult = await readReviewArtifactResult(input.workspaceArtifactPath, input.reviewer, { staleIfUnchangedFrom: artifactBeforeAttempt });
     if (artifactResult.ok) {
       await writeReviewArtifact(input.canonicalArtifactPath, artifactResult.artifact);
       if (result.status !== "succeeded") await logRunnerFailedWithArtifact(input, result, reviewerAttempt);
-      return { artifact: artifactResult.artifact, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: null };
+      return { artifact: artifactResult.artifact, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: null, tokenTotal };
     }
 
     const failure = reviewerFailure(input, artifactResult.failure, result, reviewerAttempt, maxAttempts);
@@ -77,12 +80,12 @@ export async function runReviewerWithArtifactRetry(input: {
     });
     if (!failure.retryable) {
       await writeReviewArtifact(input.canonicalArtifactPath, reviewRunnerFailureArtifact(failure));
-      return { artifact: null, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: failure };
+      return { artifact: null, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: failure, tokenTotal };
     }
   }
   const failure = failures[failures.length - 1] ?? fallbackFailure(input, maxAttempts);
   await writeReviewArtifact(input.canonicalArtifactPath, reviewRunnerFailureArtifact(failure));
-  return { artifact: null, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: failure };
+  return { artifact: null, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: failure, tokenTotal };
 }
 
 function retryPrompt(prompt: string, artifactRelativePath: string, reviewerAttempt: number, previousFailure?: ReviewRunnerFailure): string {

@@ -82,6 +82,49 @@ describe("issue inspection", () => {
     expect(output).toContain("npm run agent-check: exitCode 1");
   });
 
+  it("shows review budget split recommendations in inspect output", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-review-budget-"));
+    const stateRoot = join(repo, ".agent-os", "state", "issues");
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(
+      join(stateRoot, "AG-2.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-2",
+          issueIdentifier: "AG-2",
+          phase: "review",
+          reviewStatus: "human_required",
+          reviewBudget: {
+            status: "exceeded",
+            mode: "recommend-only",
+            evaluatedAt: "2026-05-16T00:00:00.000Z",
+            summary: "1 review budget signal(s) exceeded.",
+            signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }]
+          },
+          splitRecommendation: {
+            recommended: true,
+            action: "recommend-only",
+            reason: "review budget exceeded for broad or non-mechanical signals",
+            summary: "Recommend split or follow-up work for AG-2: changed_file_count.",
+            signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }],
+            recordedAt: "2026-05-16T00:00:00.000Z"
+          },
+          updatedAt: "2026-05-16T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-2");
+
+    expect(output).toContain("Review budget: exceeded (recommend-only)");
+    expect(output).toContain("Split recommendation: recommend-only");
+    expect(output).toContain("Next safe action: record a split-follow-up decision");
+  });
+
   it("shows registry project health, CI wait state, daemon freshness, and validation timing splits", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-registry-status-"));
     const repo = join(root, "alpha");

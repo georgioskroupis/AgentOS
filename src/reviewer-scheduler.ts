@@ -17,6 +17,7 @@ export interface ReviewerIterationResult {
   reviewerStates: ReviewStateReviewer[];
   reviewRunnerFailures: ReviewRunnerFailure[];
   terminalReviewerFailure: ReviewRunnerFailure | null;
+  tokenTotal: number;
 }
 
 export async function runReviewerIteration(input: {
@@ -143,7 +144,8 @@ export async function runReviewerIteration(input: {
     artifacts,
     reviewerStates: reviewerStatesFor(reviewerOutcomes, input.iteration),
     reviewRunnerFailures: reviewerOutcomes.flatMap((outcome) => outcome.failures),
-    terminalReviewerFailure: terminalReviewerFailures[0] ?? null
+    terminalReviewerFailure: terminalReviewerFailures[0] ?? null,
+    tokenTotal: reviewerOutcomes.reduce((total, outcome) => total + outcome.tokenTotal, 0)
   };
 }
 

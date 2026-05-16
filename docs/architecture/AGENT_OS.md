@@ -67,6 +67,13 @@ It keeps orchestration logic narrow:
   `mechanical-first` failures with enough context. Non-converging, malformed,
   ambiguous, or logless failures escalate to `Human Review` with
   `reviewStatus: human_required`.
+- Review budget policy sits beside the bounded fixer loop. It evaluates elapsed
+  review/fix time, review token volume, validation reruns, review and fixer
+  iteration count, finding count/severity, changed-file count, repeated broad
+  categories, and late new P1/P2 findings after a prior approved state. Broad
+  or non-mechanical budget exhaustion records a structured split/follow-up
+  recommendation, while narrow mechanical findings stay on the existing fixer
+  path while within budget.
 - The merge shepherd watches `Merging`, validates GitHub PR checks, squash-merges
   the selected primary merge target, respects Wiggum review state or an explicit
   Linear `Merging` human override, treats already-merged PRs and successful

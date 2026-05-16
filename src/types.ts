@@ -157,6 +157,7 @@ export interface ServiceConfig {
     parallelReviewers: boolean;
     maxConcurrentReviewers: number;
     skipOptionalReviewersAfterBlockingRequired: boolean;
+    budget: ReviewBudgetConfig;
   };
 }
 
@@ -260,6 +261,8 @@ export interface IssueState {
   reviewTargetMode?: ReviewTargetMode;
   reviewTargetUrls?: string[];
   reviewRunnerFailures?: ReviewRunnerFailure[];
+  reviewBudget?: ReviewBudgetState;
+  splitRecommendation?: ReviewSplitRecommendation;
   mergeTargetUrl?: string | null;
   mergeTargetRole?: PullRequestRole | null;
   mergeCleanupWarnings?: string[];
@@ -370,6 +373,57 @@ export type RunErrorCategory =
   | "fix";
 
 export type ReviewStatus = "pending" | "approved" | "changes_requested" | "human_required";
+
+export type ReviewBudgetMode = "recommend-only" | "prepare-draft";
+export type ReviewBudgetSignalClassification = "mechanical" | "broad" | "non_mechanical";
+
+export interface ReviewBudgetConfig {
+  enabled: boolean;
+  mode: ReviewBudgetMode;
+  maxReviewElapsedMs: number;
+  maxReviewIterations: number;
+  maxFixerIterations: number;
+  maxBlockingFindings: number;
+  maxP1P2Findings: number;
+  maxChangedFiles: number;
+  maxValidationReruns: number;
+  maxReviewTokens: number;
+  repeatedBroadCategoryThreshold: number;
+  lateNewBlockingFindingAfterApproval: boolean;
+  broadCategories: string[];
+}
+
+export interface ReviewBudgetSignal {
+  name: string;
+  classification: ReviewBudgetSignalClassification;
+  current: number;
+  threshold?: number;
+  summary: string;
+}
+
+export interface ReviewBudgetState {
+  status: "within_budget" | "exceeded";
+  mode: ReviewBudgetMode;
+  evaluatedAt: string;
+  summary: string;
+  signals: ReviewBudgetSignal[];
+}
+
+export interface ReviewFollowUpProposal {
+  title: string;
+  body: string;
+  artifactPath?: string;
+}
+
+export interface ReviewSplitRecommendation {
+  recommended: boolean;
+  action: ReviewBudgetMode;
+  reason: string;
+  summary: string;
+  signals: ReviewBudgetSignal[];
+  proposals?: ReviewFollowUpProposal[];
+  recordedAt: string;
+}
 
 export interface ReviewStateReviewer {
   name: string;

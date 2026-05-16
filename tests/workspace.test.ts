@@ -6,6 +6,22 @@ import { describe, expect, it } from "vitest";
 import { acquireWorkspaceLock, releaseWorkspaceLock, WorkspaceManager, workspaceKey } from "../src/workspace.js";
 import type { ServiceConfig } from "../src/types.js";
 
+const defaultReviewBudget: ServiceConfig["review"]["budget"] = {
+  enabled: true,
+  mode: "recommend-only",
+  maxReviewElapsedMs: 30 * 60 * 1000,
+  maxReviewIterations: 3,
+  maxFixerIterations: 2,
+  maxBlockingFindings: 10,
+  maxP1P2Findings: 5,
+  maxChangedFiles: 40,
+  maxValidationReruns: 2,
+  maxReviewTokens: 200_000,
+  repeatedBroadCategoryThreshold: 2,
+  lateNewBlockingFindingAfterApproval: true,
+  broadCategories: ["architecture", "lifecycle", "orchestration", "status", "workflow"]
+};
+
 describe("workspace", () => {
   it("sanitizes keys", () => {
     expect(workspaceKey("AG 1/hello")).toBe("AG_1_hello");
@@ -54,7 +70,7 @@ describe("workspace", () => {
         passThrough: {}
       },
       github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
-      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false }
+      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, budget: defaultReviewBudget }
     };
 
     const manager = new WorkspaceManager(config, source);
@@ -157,7 +173,7 @@ function serviceConfig(root: string): ServiceConfig {
       passThrough: {}
     },
     github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
-    review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false }
+    review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, budget: defaultReviewBudget }
   };
 }
 
