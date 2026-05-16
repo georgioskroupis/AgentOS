@@ -256,6 +256,7 @@ export interface IssueState {
   lastHumanDecision?: HumanDecisionState | null;
   reviewTargetMode?: ReviewTargetMode;
   reviewTargetUrls?: string[];
+  reviewRunnerFailures?: ReviewRunnerFailure[];
   mergeTargetUrl?: string | null;
   mergeTargetRole?: PullRequestRole | null;
   mergeCleanupWarnings?: string[];
@@ -372,6 +373,24 @@ export interface ReviewStateReviewer {
   decision: ReviewStatus;
   iteration: number;
   artifactPath?: string;
+}
+
+export type ReviewRunnerFailureClassification = "mechanical" | "non_mechanical";
+
+export interface ReviewRunnerFailure {
+  reviewer: string;
+  iteration: number;
+  attempt: number;
+  maxAttempts: number;
+  classification: ReviewRunnerFailureClassification;
+  reason: string;
+  message: string;
+  artifactPath?: string;
+  resultStatus?: string;
+  runnerError?: string;
+  retryable: boolean;
+  exhausted: boolean;
+  recordedAt: string;
 }
 
 export interface ReviewFinding {

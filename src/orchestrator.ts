@@ -4,25 +4,7 @@ import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPr
 import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, type PullRequestStatus } from "./github.js";
 import { readGitHubReviewContext } from "./github-context.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
-import {
-  extractPullRequestUrls,
-  extractHumanDecisionsFromComments,
-  hasHumanDecision,
-  isAuthoritativeHumanDecision,
-  latestAuthoritativeHumanDecision,
-  latestIssueComments,
-  issueStateFromHandoff,
-  IssueStateStore,
-  latestHumanDecision,
-  mergeHumanDecisions,
-  reconcileHumanDecisionsForFetchedComments,
-  mergeEligiblePullRequests,
-  mergeTargetAmbiguityReason,
-  mergeTargetPullRequest,
-  primaryPullRequestUrl,
-  pullRequestUrls,
-  reviewTargetPullRequests
-} from "./issue-state.js";
+import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls, reviewTargetPullRequests } from "./issue-state.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
@@ -34,31 +16,13 @@ import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceReco
 import { redactText } from "./redaction.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
-import {
-  formatPullRequestTargets,
-  formatRecordedPullRequests,
-  handoffPullRequestValidationFinding,
-  joinedHeadShas,
-  readOnlyReviewConfig,
-  reviewCheckFindings,
-  reviewTargetSelectionError
-} from "./orchestrator-review-helpers.js";
+import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
-import {
-  blockingFindings,
-  ensureReviewIterationDir,
-  fixPrompt,
-  formatFindings,
-  readReviewArtifact,
-  repeatedBlockingHashes,
-  reviewArtifactPath,
-  reviewArtifactRelativePath,
-  reviewerPrompt,
-  writeReviewArtifact
-} from "./review.js";
+import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes, reviewArtifactPath, reviewArtifactRelativePath, reviewerPrompt } from "./review.js";
+import { runReviewerWithArtifactRetry } from "./reviewer-runner.js";
 import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
@@ -67,7 +31,7 @@ import { logPreDispatchScopeReport, type PreDispatchScopeReport } from "./scope-
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 export interface OrchestratorOptions {
   repoRoot: string;
@@ -1650,12 +1614,14 @@ export class Orchestrator {
 
     const repoRoot = resolve(this.options.repoRoot);
     let previousFindings = state.findings ?? [];
+    let reviewRunnerFailures: ReviewRunnerFailure[] = [];
     latestState = await this.recordIssueState(issue, {
       phase: "review",
       reviewStatus: "pending",
       reviewIteration: state.reviewIteration ?? 0,
       reviewTargetMode,
-      reviewTargetUrls: initialReviewTargetUrls
+      reviewTargetUrls: initialReviewTargetUrls,
+      reviewRunnerFailures: []
     });
     for (let iteration = (state.reviewIteration ?? 0) + 1; iteration <= this.config.review.maxIterations; iteration += 1) {
       const reviewTargets = reviewTargetPullRequests(latestState, reviewTargetMode);
@@ -1702,6 +1668,8 @@ export class Orchestrator {
       }
       const reviewers = this.reviewersFor([...new Set(githubContext.entries.flatMap((entry) => entry.status.changedFiles))]);
       const artifacts: Array<{ artifact: ReviewerArtifact; path: string }> = [];
+      let terminalReviewerFailure: ReviewRunnerFailure | null = null;
+      let terminalReviewerArtifactPath: string | null = null;
 
       await this.logger.write({
         type: "review_started",
@@ -1726,30 +1694,33 @@ export class Orchestrator {
           feedbackSummary: githubContext.feedback,
           contextPack: buildTargetedContextPack({ kind: "reviewer", issue, state: latestState, pullRequests: githubContext.entries, findings: previousFindings, validation: latestState?.validation, feedback: githubContext.feedback, artifactRefs: [artifactRelativePath], runId, reviewer, iteration })
         });
-        const result = await this.runner.run({
+        const outcome = await runReviewerWithArtifactRetry({
           issue,
           prompt,
           attempt,
           workspace,
-          config: readOnlyReviewConfig(this.config, workspaceReviewDir),
+          workspaceReviewDir,
+          workspaceArtifactPath,
+          canonicalArtifactPath,
+          artifactRelativePath,
+          reviewer,
+          iteration,
           signal,
-          onEvent: (event) => {
-            this.markRunningActivity(issue.id, event.timestamp);
-            void this.logger.write({ ...event, type: `review_${event.type}` });
-          }
+          config: this.config,
+          runner: this.runner,
+          logger: this.logger,
+          onActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
         });
-        if (result.status !== "succeeded") {
-          await this.logger.write({
-            type: "review_runner_failed",
-            issueId: issue.id,
-            issueIdentifier: issue.identifier,
-            message: `${reviewer}: ${result.error ?? result.status}`
-          });
+        reviewRunnerFailures = [...reviewRunnerFailures, ...outcome.failures];
+        if (outcome.artifact) {
+          artifacts.push({ artifact: outcome.artifact, path: canonicalArtifactPath });
         }
-        const artifact = await readReviewArtifact(workspaceArtifactPath, reviewer);
-        await writeReviewArtifact(canonicalArtifactPath, artifact);
-        artifacts.push({ artifact, path: canonicalArtifactPath });
-        for (const finding of artifact.findings) {
+        if (outcome.terminalFailure) {
+          terminalReviewerFailure = outcome.terminalFailure;
+          terminalReviewerArtifactPath = outcome.canonicalArtifactPath;
+          break;
+        }
+        for (const finding of outcome.artifact?.findings ?? []) {
           await this.logger.write({
             type: "review_finding",
             issueId: issue.id,
@@ -1789,7 +1760,18 @@ export class Orchestrator {
         iteration,
         artifactPath: entry.path
       }));
-      const humanRequired = artifacts.some((entry) => entry.artifact.decision === "human_required") || findings.some((finding) => finding.decision === "human_required");
+      if (terminalReviewerFailure) {
+        reviewerStates.push({
+          name: terminalReviewerFailure.reviewer,
+          decision: "human_required",
+          iteration,
+          artifactPath: terminalReviewerArtifactPath ?? terminalReviewerFailure.artifactPath
+        });
+      }
+      const humanRequired =
+        Boolean(terminalReviewerFailure) ||
+        artifacts.some((entry) => entry.artifact.decision === "human_required") ||
+        findings.some((finding) => finding.decision === "human_required");
       const allRequiredApproved = this.config.review.requiredReviewers.every((reviewer) =>
         artifacts.some((entry) => entry.artifact.reviewer === reviewer && entry.artifact.decision === "approved")
       );
@@ -1806,7 +1788,8 @@ export class Orchestrator {
         headSha: joinedHeadShas(githubContext.entries),
         lastReviewedSha: joinedHeadShas(githubContext.entries),
         reviewTargetMode,
-        reviewTargetUrls
+        reviewTargetUrls,
+        reviewRunnerFailures
       });
 
       await this.logger.write({
@@ -1834,12 +1817,16 @@ export class Orchestrator {
       }
 
       if (humanRequired || repeated.length > 0 || iteration >= this.config.review.maxIterations) {
-        const reason = humanRequired
-          ? "a reviewer requested human judgment"
+        const reason = terminalReviewerFailure
+          ? terminalReviewerFailure.classification === "mechanical" && terminalReviewerFailure.exhausted
+            ? "a reviewer runner failed to produce a trusted artifact after its retry budget was exhausted"
+            : "a reviewer runner failure requires human judgment"
+          : humanRequired
+            ? "a reviewer requested human judgment"
           : repeated.length > 0
             ? "the same blocking finding repeated after a fix"
             : "maximum review iterations reached";
-        latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", findings });
+        latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", findings, reviewRunnerFailures });
         await this.commentIssue(
           issue,
           [
@@ -1850,6 +1837,9 @@ export class Orchestrator {
             reviewTargetList,
             `- Iteration: ${iteration}`,
             "",
+            "Reviewer runner failures:",
+            formatReviewRunnerFailures(reviewRunnerFailures),
+            "",
             "Blocking findings:",
             formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
           ].join("\n")
@@ -1859,7 +1849,7 @@ export class Orchestrator {
           issueId: issue.id,
           issueIdentifier: issue.identifier,
           message: reason,
-          payload: { findings: blocking, repeated, prUrls: reviewTargetUrls }
+          payload: { findings: blocking, repeated, prUrls: reviewTargetUrls, reviewRunnerFailures }
         });
         return latestState;
       }
