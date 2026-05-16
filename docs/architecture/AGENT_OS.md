@@ -37,13 +37,16 @@ It keeps orchestration logic narrow:
   opens or updates pull requests only when the issue produced repo changes and
   the workflow expects a PR, and writes a handoff file for the orchestrator to
   post.
-- Before dispatch, the orchestrator emits a read-only scope report for the
+- Before dispatch, the orchestrator emits a scope report for the
   active candidate. The report classifies existing implementation evidence as
   already satisfied, partially satisfied, missing, or unclear; estimates touched
   subsystems, docs/tests impact, PR likelihood, review risk, and likely-large
   scope; and records Linear comment, trusted human-decision,
-  run/runtime/workspace/PR/validation/handoff signals without creating child
-  issues or blocking dispatch.
+  run/runtime/workspace/PR/validation/handoff signals. Dispatch guardrails use
+  that report and durable state to refuse duplicate implementation for
+  already-completed, approved, merged, terminal, or recoverably partial work,
+  and to pause likely-large missing work for planning/decomposition without
+  creating child issues directly.
 - Every agent run starts with an implementation audit. Already-satisfied issues
   are reported as `AgentOS-Outcome: already-satisfied`, persisted as issue
   state, and moved to review without requiring a PR.

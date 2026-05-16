@@ -36,7 +36,7 @@ export class IssueStateStore {
     return states.sort((a, b) => a.issueIdentifier.localeCompare(b.issueIdentifier));
   }
 
-  async merge(identifier: string, patch: Partial<IssueState> & Pick<IssueState, "issueId" | "issueIdentifier">): Promise<IssueState> {
+  async merge(identifier: string, patch: Partial<IssueState> & Pick<IssueState, "issueId" | "issueIdentifier">, options: { replaceHumanDecisions?: boolean } = {}): Promise<IssueState> {
     const current = await this.read(identifier);
     const patchState = normalizeIssueState({
       ...patch,
@@ -44,11 +44,14 @@ export class IssueStateStore {
       issueIdentifier: patch.issueIdentifier,
       updatedAt: patch.updatedAt ?? new Date().toISOString()
     });
+    const humanDecisions = options.replaceHumanDecisions
+      ? patchState.humanDecisions
+      : mergeHumanDecisions(current?.humanDecisions ?? [], patchState.humanDecisions ?? []);
     const next = normalizeIssueState({
       ...(current ?? { schemaVersion: ISSUE_STATE_SCHEMA_VERSION, issueId: patch.issueId, issueIdentifier: patch.issueIdentifier, updatedAt: new Date().toISOString() }),
       ...patchState,
       prs: mergePullRequestRefs(current?.prs ?? [], patchState.prs ?? []),
-      humanDecisions: mergeHumanDecisions(current?.humanDecisions ?? [], patchState.humanDecisions ?? []),
+      humanDecisions,
       appProof: mergeAppProof(current?.appProof, patchState.appProof),
       updatedAt: new Date().toISOString()
     });
@@ -61,9 +64,17 @@ export class IssueStateStore {
   }
 }
 
-interface HumanDecisionTrustOptions {
+export interface HumanDecisionTrustOptions {
   trustedActors?: string[];
   issueAssignee?: string | null;
+  issueAssigneeId?: string | null;
+  issueAssigneeEmail?: string | null;
+}
+
+export interface HumanDecisionActorIdentity {
+  actor?: string | null;
+  actorId?: string | null;
+  actorEmail?: string | null;
 }
 
 export function issueStateFromHandoff(issue: Issue, handoff: string): IssueState | null {
@@ -226,6 +237,9 @@ export function extractHumanDecision(
   metadata: {
     source: HumanDecisionState["source"];
     actor?: string | null;
+    actorId?: string | null;
+    actorEmail?: string | null;
+    trusted?: boolean;
     commentId?: string;
     createdAt?: string | null;
   }
@@ -240,6 +254,9 @@ export function extractHumanDecision(
     decidedAt,
     source: metadata.source,
     ...(metadata.actor !== undefined ? { actor: metadata.actor } : {}),
+    ...(metadata.actorId !== undefined ? { actorId: metadata.actorId } : {}),
+    ...(metadata.actorEmail !== undefined ? { actorEmail: metadata.actorEmail } : {}),
+    ...(metadata.trusted !== undefined ? { trusted: metadata.trusted } : {}),
     ...(metadata.commentId ? { commentId: metadata.commentId } : {}),
     body: text.trim().slice(0, 2000),
     prHeadSha: fields.get("pr-head-sha") ?? fields.get("head-sha") ?? null,
@@ -251,33 +268,50 @@ export function extractHumanDecision(
 }
 
 export function extractHumanDecisionsFromComments(comments: IssueComment[], options: HumanDecisionTrustOptions = {}): HumanDecisionState[] {
-  return comments
-    .map((comment) =>
-      extractHumanDecision(comment.body, {
+  return latestIssueComments(comments, Number.MAX_SAFE_INTEGER)
+    .map((comment) => {
+      const trusted = isTrustedHumanDecisionActor(
+        { actor: comment.author, actorId: comment.authorId, actorEmail: comment.authorEmail },
+        options
+      );
+      if (!trusted) return null;
+      return extractHumanDecision(comment.body, {
         source: "linear-comment",
         actor: comment.author,
+        actorId: comment.authorId,
+        actorEmail: comment.authorEmail,
+        trusted,
         commentId: comment.id,
         createdAt: comment.updatedAt ?? comment.createdAt
-      })
-    )
+      });
+    })
     .filter((decision): decision is HumanDecisionState => Boolean(decision))
-    .filter((decision) => isTrustedHumanDecisionActor(decision.actor, options))
     .sort((a, b) => a.decidedAt.localeCompare(b.decidedAt));
 }
 
-export function isTrustedHumanDecisionActor(actor: string | null | undefined, options: HumanDecisionTrustOptions = {}): boolean {
-  const normalizedActor = normalizeActor(actor);
-  if (!normalizedActor) return false;
-  const trusted = [...(options.trustedActors ?? []), options.issueAssignee ?? ""]
-    .map(normalizeActor)
-    .filter((value): value is string => Boolean(value));
-  return trusted.includes(normalizedActor);
+export function isTrustedHumanDecisionActor(actor: string | HumanDecisionActorIdentity | null | undefined, options: HumanDecisionTrustOptions = {}): boolean {
+  const identity = typeof actor === "string" || actor == null ? { actor } : actor;
+  const actorIds = uniqueStableKeys([identity.actorId]);
+  const actorEmails = uniqueEmailKeys([identity.actorEmail]);
+  if (actorIds.length === 0 && actorEmails.length === 0) return false;
+  const trustedIds = uniqueStableKeys([...(options.trustedActors ?? []), options.issueAssigneeId]);
+  const trustedEmails = uniqueEmailKeys([...(options.trustedActors ?? []), options.issueAssigneeEmail]);
+  return actorIds.some((value) => trustedIds.includes(value)) || actorEmails.some((value) => trustedEmails.includes(value));
 }
 
 export function latestHumanDecision(decisions: HumanDecisionState[] | undefined): HumanDecisionState | null {
   if (!decisions?.length) return null;
   const sorted = [...decisions].sort((a, b) => a.decidedAt.localeCompare(b.decidedAt));
   return sorted[sorted.length - 1] ?? null;
+}
+
+export function isAuthoritativeHumanDecision(decision: HumanDecisionState | null | undefined): decision is HumanDecisionState {
+  if (!decision) return false;
+  return decision.source === "linear-comment" && decision.trusted === true && Boolean(decision.commentId);
+}
+
+export function latestAuthoritativeHumanDecision(decisions: HumanDecisionState[] | undefined): HumanDecisionState | null {
+  return latestHumanDecision(decisions?.filter(isAuthoritativeHumanDecision));
 }
 
 export function hasHumanDecision(decisions: HumanDecisionState[], decision: HumanDecisionState): boolean {
@@ -289,13 +323,49 @@ function normalizePullRequestRefs(existing: PullRequestRef[], legacyUrl?: string
   return mergePullRequestRefs(existing, legacy);
 }
 
-function mergeHumanDecisions(existing: HumanDecisionState[], incoming: HumanDecisionState[]): HumanDecisionState[] | undefined {
+export function mergeHumanDecisions(existing: HumanDecisionState[], incoming: HumanDecisionState[]): HumanDecisionState[] | undefined {
   const byKey = new Map<string, HumanDecisionState>();
   for (const decision of [...existing, ...incoming]) {
     byKey.set(humanDecisionKey(decision), decision);
   }
   const merged = [...byKey.values()].sort((a, b) => a.decidedAt.localeCompare(b.decidedAt));
   return merged.length ? merged : undefined;
+}
+
+export function reconcileHumanDecisionsForFetchedComments(
+  existing: HumanDecisionState[],
+  incoming: HumanDecisionState[],
+  comments: IssueComment[],
+  options: { authoritativeCommentSet?: boolean } = {}
+): HumanDecisionState[] {
+  const fetchedCommentIds = new Set(comments.map((comment) => comment.id).filter(Boolean));
+  const incomingCommentIds = new Set(incoming.map((decision) => decision.commentId).filter((commentId): commentId is string => Boolean(commentId)));
+  const retained = existing.filter((decision) => {
+    if (decision.source !== "linear-comment") return true;
+    if (!decision.commentId) return !options.authoritativeCommentSet;
+    if (!fetchedCommentIds.has(decision.commentId)) return !options.authoritativeCommentSet;
+    return incomingCommentIds.has(decision.commentId);
+  });
+  return mergeHumanDecisions(retained, incoming) ?? [];
+}
+
+export function latestIssueComments(comments: IssueComment[], limit: number): IssueComment[] {
+  if (limit <= 0) return [];
+  const sorted = [...comments].sort(compareIssueCommentsByActivity);
+  if (!Number.isFinite(limit) || limit >= sorted.length) return sorted;
+  return sorted.slice(-Math.floor(limit));
+}
+
+function compareIssueCommentsByActivity(a: IssueComment, b: IssueComment): number {
+  const activityDiff = issueCommentActivityMs(a) - issueCommentActivityMs(b);
+  if (activityDiff !== 0) return activityDiff;
+  return a.id.localeCompare(b.id);
+}
+
+function issueCommentActivityMs(comment: IssueComment): number {
+  const timestamp = comment.updatedAt ?? comment.createdAt ?? "";
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function humanDecisionKey(decision: HumanDecisionState): string {
@@ -308,6 +378,9 @@ function humanDecisionContentKey(decision: HumanDecisionState): string {
     decidedAt: decision.decidedAt,
     source: decision.source,
     actor: decision.actor ?? null,
+    actorId: decision.actorId ?? null,
+    actorEmail: decision.actorEmail ?? null,
+    trusted: decision.trusted ?? false,
     body: decision.body ?? null,
     prHeadSha: decision.prHeadSha ?? null,
     validationEvidence: decision.validationEvidence ?? null,
@@ -363,9 +436,23 @@ function normalizeFindingsState(value: string | null | undefined): HumanDecision
   return value ? "unknown" : undefined;
 }
 
-function normalizeActor(value: string | null | undefined): string | null {
-  const normalized = value?.trim().toLowerCase().replace(/\s+/g, " ");
-  return normalized ? normalized : null;
+function uniqueStableKeys(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map(normalizeStableIdentity).filter((value): value is string => Boolean(value)))];
+}
+
+function uniqueEmailKeys(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map(normalizeEmailIdentity).filter((value): value is string => Boolean(value)))];
+}
+
+function normalizeStableIdentity(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized.includes("@")) return null;
+  return normalized;
+}
+
+function normalizeEmailIdentity(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
 }
 
 function assignDefaultPullRequestRoles<T extends { url: string; role?: PullRequestRole }>(refs: T[]): Array<T & { role: PullRequestRole }> {

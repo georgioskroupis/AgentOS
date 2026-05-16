@@ -46,6 +46,7 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
   const headSha = await gitOutput(workspacePath, ["rev-parse", "HEAD"]);
   const status = await gitOutput(workspacePath, ["status", "--porcelain"]);
   const upstreamSha = await gitOutput(workspacePath, ["rev-parse", "--verify", "@{u}"]);
+  const baseSha = await gitOutput(workspacePath, ["rev-parse", "--verify", "origin/main"]).then((sha) => sha ?? gitOutput(workspacePath, ["rev-parse", "--verify", "main"]));
   const aheadRaw = upstreamSha ? await gitOutput(workspacePath, ["rev-list", "--count", "@{u}..HEAD"]) : null;
   const dirty = Boolean(status?.trim());
   const upstreamMissing = Boolean(branch && branch !== "HEAD" && !upstreamSha);
@@ -53,9 +54,10 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
   const stalePrHead = Boolean(issue.headSha && headSha && issue.headSha !== headSha);
   const ciHeadSha = issue.validation?.githubCi?.headSha ?? null;
   const staleCiHead = Boolean(ciHeadSha && headSha && ciHeadSha !== headSha);
+  const cleanBaseWithoutUpstream = Boolean(upstreamMissing && !dirty && headSha && baseSha && headSha === baseSha);
   const reasons = [
     dirty ? "workspace has uncommitted changes" : null,
-    upstreamMissing ? "branch has no upstream" : null,
+    upstreamMissing && !cleanBaseWithoutUpstream ? "branch has no upstream" : null,
     aheadCount > 0 ? `branch is ${aheadCount} commit(s) ahead of upstream` : null,
     stalePrHead ? `local HEAD ${headSha} differs from recorded PR head ${issue.headSha}` : null,
     staleCiHead ? `local HEAD ${headSha} differs from recorded CI head ${ciHeadSha}` : null

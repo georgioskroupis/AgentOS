@@ -30,6 +30,10 @@ describe("issue inspection", () => {
             type: "fix_findings",
             source: "linear-comment",
             actor: "Supervisor",
+            actorId: "user-supervisor",
+            actorEmail: "supervisor@example.com",
+            trusted: true,
+            commentId: "comment-supervisor-fix",
             decidedAt: "2026-05-01T00:02:45.000Z",
             prHeadSha: "abc123",
             ciState: "pending",
@@ -215,6 +219,36 @@ describe("issue inspection", () => {
       ),
       "utf8"
     );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-4.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-4",
+          issueIdentifier: "AG-4",
+          phase: "completed",
+          lifecycleStatus: "human_continuation",
+          reviewStatus: "approved",
+          prs: [{ url: "https://github.com/o/r/pull/4", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          lastHumanDecision: {
+            type: "fix_findings",
+            source: "linear-comment",
+            trusted: true,
+            commentId: "comment-old-fix-findings",
+            decidedAt: "2026-05-05T00:01:00.000Z"
+          },
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:08:00.000Z",
+            githubCi: { status: "passed", headSha: "ghi789", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:08:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
     await new JsonlLogger(repo).write({
       type: "merge_waiting",
       issueId: "issue-2",
@@ -232,9 +266,52 @@ describe("issue inspection", () => {
     expect(output).toContain("Repo env: missing");
     expect(output).toContain("AG-2: waiting on CI - 1 GitHub check(s) still pending");
     expect(output).toContain("AG-3: completed locally");
+    expect(output).toContain("AG-4: waiting on merge");
+    expect(output).not.toContain("AG-4: human_continuation");
     expect(output).not.toContain("AG-2: status warning");
     expect(output).not.toContain("AG-3: status warning");
     expect(output).toContain("AG-1: local full-suite validation timing failure recorded separately; focused test passed; GitHub CI passed at abc123");
+  });
+
+  it("does not recommend redispatch after old fix-findings once a PR is approved", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-approved-pr-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "completed",
+          lifecycleStatus: "human_continuation",
+          reviewStatus: "approved",
+          prs: [{ url: "https://github.com/o/r/pull/1", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+          lastHumanDecision: {
+            type: "fix_findings",
+            source: "linear-comment",
+            trusted: true,
+            commentId: "comment-old-fix-findings",
+            decidedAt: "2026-05-05T00:01:00.000Z"
+          },
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-05T00:08:00.000Z",
+            githubCi: { status: "passed", headSha: "abc123", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:08:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-1");
+
+    expect(output).toContain("Review: approved");
+    expect(output).toContain("Next safe action: mark the PR ready only after fresh validation and green CI, then move the issue to Merging for the shepherd");
+    expect(output).not.toContain("Next safe action: redispatch from Todo/In Progress");
   });
 
   it("reports daemon liveness states and status next safe actions", async () => {
@@ -661,6 +738,52 @@ describe("issue inspection", () => {
     expect(output).not.toContain("missing terminal workspace warning");
   });
 
+  it("names the planning/decomposition next safe action for planning-required issues", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-status-planning-required-"));
+    const repo = join(root, "alpha");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "lifecycle:",
+        "  mode: orchestrator-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(registryPath, ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"), "utf8");
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-10.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-10",
+          issueIdentifier: "AG-10",
+          phase: "needs-input",
+          lifecycleStatus: "planning_required",
+          stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const registryOutput = await getRegistryStatus(registryPath);
+    expect(registryOutput).toContain("AG-10: planning required - create or attach a planning/decomposition artifact");
+
+    const inspectOutput = await inspectIssue(repo, "AG-10");
+    expect(inspectOutput).toContain("Next safe action: create or attach a planning/decomposition artifact");
+  });
+
   it("does not warn when clean post-merge cleanup removed the recorded workspace", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-clean-merge-"));
     const repo = join(root, "alpha");
@@ -741,14 +864,35 @@ describe("issue inspection", () => {
       ),
       "utf8"
     );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-11.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-11",
+          issueIdentifier: "AG-11",
+          phase: "completed",
+          lifecycleStatus: "terminal_linear",
+          terminalState: "Done",
+          terminalAt: "2026-05-05T00:10:00.000Z",
+          workspacePath: ".agent-os/workspaces/AG-11",
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
 
     const registryOutput = await getRegistryStatus(registryPath);
     expect(registryOutput).toContain("AG-5: merged");
     expect(registryOutput).toContain("AG-6: already merged");
+    expect(registryOutput).toContain("AG-11: terminal (Done)");
     expect(registryOutput).not.toContain("AG-5: waiting on merge");
     expect(registryOutput).not.toContain("AG-6: waiting on merge");
     expect(registryOutput).not.toContain("AG-5: status warning");
     expect(registryOutput).not.toContain("AG-6: status warning");
+    expect(registryOutput).not.toContain("AG-11: status warning");
 
     const inspectOutput = await inspectIssue(repo, "AG-5");
     expect(inspectOutput).toContain("Status warnings: none");
@@ -767,6 +911,12 @@ describe("issue inspection", () => {
     expect(alreadyMergedOutput).not.toContain("Workspace recovery: workspace missing");
     expect(alreadyMergedOutput).not.toContain("Recovery reasons: workspace is missing");
     expect(alreadyMergedOutput).not.toContain("inspect runtime state and recover from the last handoff or run artifact");
+
+    const terminalLinearOutput = await inspectIssue(repo, "AG-11");
+    expect(terminalLinearOutput).toContain("Status warnings: none");
+    expect(terminalLinearOutput).toContain("Next safe action: no operator action required; issue is already in terminal state Done");
+    expect(terminalLinearOutput).not.toContain("missing terminal workspace warning");
+    expect(terminalLinearOutput).not.toContain("Workspace recovery: workspace missing");
   });
 });
 

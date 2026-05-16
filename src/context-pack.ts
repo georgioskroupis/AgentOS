@@ -1,4 +1,5 @@
 import { redactText } from "./redaction.js";
+import { isAuthoritativeHumanDecision } from "./issue-state.js";
 import type { CheckDiagnostic, PullRequestStatus, ReviewThread } from "./github.js";
 import type { HumanDecisionState, Issue, IssueState, PullRequestRef, ReviewFinding, ReviewStateReviewer, ValidationState } from "./types.js";
 
@@ -52,7 +53,7 @@ export function buildTargetedContextPack(input: TargetedContextPackInput): strin
     "Issue text:",
     ...formatIssue(input.issue),
     "",
-    "Recent authoritative human decisions:",
+    "Recent structured human decisions:",
     ...formatHumanDecisions(recentHumanDecisions(state)),
     "",
     "Selected PR metadata:",
@@ -114,7 +115,7 @@ function recentHumanDecisions(state: IssueState | null): HumanDecisionState[] {
 function formatHumanDecisions(decisions: HumanDecisionState[]): string[] {
   if (decisions.length === 0) return ["- none recorded"];
   return decisions.flatMap((decision) => [
-    `- ${decision.type} at ${decision.decidedAt}${decision.actor ? ` by ${cleanSingleLine(decision.actor, 120)}` : ""}`,
+    `- ${decision.type} at ${decision.decidedAt}${decision.actor ? ` by ${cleanSingleLine(decision.actor, 120)}` : ""} (${isAuthoritativeHumanDecision(decision) ? "authoritative" : "context-only"}; source=${decision.source})`,
     decision.prHeadSha ? `  PR head SHA: ${decision.prHeadSha}` : null,
     decision.validationEvidence ? `  Validation evidence: ${decision.validationEvidence}` : null,
     decision.ciState ? `  CI state: ${decision.ciState}` : null,

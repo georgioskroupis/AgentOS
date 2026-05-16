@@ -7,6 +7,7 @@ import {
   extractHumanDecision,
   extractHumanDecisionsFromComments,
   extractPullRequestUrls,
+  isAuthoritativeHumanDecision,
   isTrustedHumanDecisionActor,
   issueStateFromHandoff,
   IssueStateStore,
@@ -14,6 +15,7 @@ import {
   mergeTargetPullRequest,
   primaryPullRequestUrl,
   pullRequestUrls,
+  reconcileHumanDecisionsForFetchedComments,
   reviewTargetPullRequests
 } from "../src/issue-state.js";
 import type { Issue } from "../src/types.js";
@@ -102,11 +104,14 @@ describe("issue state handoff parsing", () => {
   });
 
   it("normalizes human decision aliases from Linear comments", () => {
-    const decision = extractHumanDecision("AgentOS-Human-Decision: supervisor-fixed\nValidation-JSON: .agent-os/validation/AG-1.json", {
-      source: "linear-comment",
-      actor: "Supervisor",
-      commentId: "comment-1",
-      createdAt: "2026-05-05T00:00:00.000Z"
+      const decision = extractHumanDecision("AgentOS-Human-Decision: supervisor-fixed\nValidation-JSON: .agent-os/validation/AG-1.json", {
+        source: "linear-comment",
+        actor: "Supervisor",
+        actorId: "user-supervisor",
+        actorEmail: "supervisor@example.com",
+        trusted: true,
+        commentId: "comment-1",
+        createdAt: "2026-05-05T00:00:00.000Z"
     });
 
     expect(decision).toMatchObject({
@@ -121,26 +126,102 @@ describe("issue state handoff parsing", () => {
   it("keeps Linear human decisions authoritative only for trusted actors", () => {
     const comments = [
       {
-        id: "comment-1",
-        author: "Random User",
-        createdAt: "2026-05-05T00:00:00.000Z",
-        body: "AgentOS-Human-Decision: approve-as-is"
-      },
-      {
-        id: "comment-2",
-        author: "Supervisor",
-        createdAt: "2026-05-05T00:01:00.000Z",
-        body: "AgentOS-Human-Decision: fix-findings"
-      }
-    ];
+          id: "comment-1",
+          author: "Random User",
+          authorId: "user-random",
+          authorEmail: "random@example.com",
+          createdAt: "2026-05-05T00:00:00.000Z",
+          body: "AgentOS-Human-Decision: approve-as-is"
+        },
+        {
+          id: "comment-2",
+          author: "Supervisor",
+          authorId: "user-supervisor",
+          authorEmail: "supervisor@example.com",
+          createdAt: "2026-05-05T00:01:00.000Z",
+          body: "AgentOS-Human-Decision: fix-findings"
+        }
+      ];
 
-    expect(isTrustedHumanDecisionActor("supervisor", { trustedActors: ["Supervisor"] })).toBe(true);
-    expect(extractHumanDecisionsFromComments(comments, { trustedActors: ["Supervisor"] }).map((decision) => decision.type)).toEqual([
-      "fix_findings"
-    ]);
-    expect(extractHumanDecisionsFromComments(comments, { issueAssignee: "Random User" }).map((decision) => decision.type)).toEqual([
-      "approve_as_is"
-    ]);
+      expect(isTrustedHumanDecisionActor({ actor: "Supervisor", actorId: "user-supervisor" }, { trustedActors: ["user-supervisor"] })).toBe(true);
+      expect(isTrustedHumanDecisionActor("Supervisor", { trustedActors: ["Supervisor"] })).toBe(false);
+      expect(isTrustedHumanDecisionActor({ actor: "trusted@example.com", actorId: "user-random", actorEmail: "random@example.com" }, { trustedActors: ["trusted@example.com"] })).toBe(false);
+      expect(extractHumanDecisionsFromComments(comments, { trustedActors: ["user-supervisor"] }).map((decision) => decision.type)).toEqual([
+        "fix_findings"
+      ]);
+      expect(extractHumanDecisionsFromComments(comments, { issueAssigneeId: "user-random" }).map((decision) => decision.type)).toEqual([
+        "approve_as_is"
+      ]);
+      expect(
+        extractHumanDecisionsFromComments(
+          [
+            {
+              id: "comment-display-collision",
+              author: "trusted@example.com",
+              authorId: "user-random",
+              authorEmail: "random@example.com",
+              createdAt: "2026-05-05T00:02:00.000Z",
+              body: "AgentOS-Human-Decision: approve-as-is"
+            }
+          ],
+          { trustedActors: ["trusted@example.com"] }
+        )
+      ).toEqual([]);
+      expect(
+        isAuthoritativeHumanDecision({
+          type: "fix_findings",
+          source: "manual",
+          decidedAt: "2026-05-05T00:03:00.000Z"
+        })
+      ).toBe(false);
+      expect(
+        isAuthoritativeHumanDecision({
+          type: "fix_findings",
+          source: "linear-comment",
+          trusted: true,
+          decidedAt: "2026-05-05T00:04:00.000Z"
+        })
+      ).toBe(false);
+      expect(
+        isAuthoritativeHumanDecision({
+          type: "fix_findings",
+          source: "linear-comment",
+          trusted: true,
+          commentId: "comment-verified",
+          decidedAt: "2026-05-05T00:05:00.000Z"
+        })
+      ).toBe(true);
+    });
+
+  it("removes stored Linear decisions missing from a full fetched comment set", () => {
+    const storedDecision = {
+      type: "fix_findings" as const,
+      source: "linear-comment" as const,
+      trusted: true,
+      commentId: "comment-deleted",
+      decidedAt: "2026-05-05T00:00:00.000Z",
+      body: "AgentOS-Human-Decision: fix-findings"
+    };
+
+    expect(
+      reconcileHumanDecisionsForFetchedComments([storedDecision], [], [], {
+        authoritativeCommentSet: true
+      })
+    ).toEqual([]);
+    expect(reconcileHumanDecisionsForFetchedComments([storedDecision], [], [])).toEqual([storedDecision]);
+
+    const unverifiedStoredDecision = {
+      type: "fix_findings" as const,
+      source: "linear-comment" as const,
+      trusted: true,
+      decidedAt: "2026-05-05T00:01:00.000Z",
+      body: "AgentOS-Human-Decision: fix-findings"
+    };
+    expect(
+      reconcileHumanDecisionsForFetchedComments([unverifiedStoredDecision], [], [], {
+        authoritativeCommentSet: true
+      })
+    ).toEqual([]);
   });
 
   it("treats implemented handoff-only outcomes as valid no-PR issue state", () => {

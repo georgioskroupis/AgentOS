@@ -70,12 +70,18 @@ preserve the dirty or unpushed branch, rerun validation, and commit/push before
 updating the handoff or PR. Do not start a duplicate implementation until the
 existing workspace and PR state have been reconciled.
 
+If the output reports `planning_required`, create or attach a planning or
+decomposition artifact, or split the work into follow-up issues, before
+returning the issue to implementation. The orchestrator owns the pause and
+Linear bookkeeping; it does not create child issues directly.
+
 ## Human Review Re-Entry
 
 Use trusted Linear comments when a supervisor needs to continue a Human Review
-issue. Authoritative comments must come from the issue assignee or a configured
-`lifecycle.trusted_decision_actors` entry; other comments remain prompt context
-only.
+issue. Authoritative comments must come from a stable Linear user ID or verified
+email that matches the issue assignee or a configured
+`lifecycle.trusted_decision_actors` entry; other comments and agent-authored
+handoff decisions remain prompt context only.
 
 Supported decision values:
 

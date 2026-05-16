@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { daemonLaunchCommand, inspectDaemonHealth } from "./daemon-health.js";
-import { IssueStateStore, latestHumanDecision, normalizeIssueState, pullRequestUrls } from "./issue-state.js";
+import { IssueStateStore, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestHumanDecision, normalizeIssueState, pullRequestUrls } from "./issue-state.js";
 import { JsonlLogger } from "./logging.js";
 import { loadRegistry, RegistryStateStore, resolveRegistryProjectPaths, type RegistryProjectSummary } from "./registry.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
@@ -162,6 +162,8 @@ function humanDecisionDetails(state: IssueState | null): string | null {
   if (!decision) return "Human decision: none recorded";
   const lines = [
     `Human decision: ${decision.type}`,
+    `Decision source: ${decision.source}`,
+    `Decision authority: ${isAuthoritativeHumanDecision(decision) ? "authoritative" : "context-only"}`,
     decision.actor ? `Decision actor: ${decision.actor}` : null,
     `Decision time: ${decision.decidedAt}`,
     decision.prHeadSha ? `Decision PR head SHA: ${decision.prHeadSha}` : null,
@@ -219,13 +221,17 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (mergeWaiting) return `waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`;
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
   if (mergeFailed && issue.phase !== "completed") return `tracker/local disagreement or merge review needed - ${mergeFailed.message ?? "merge failed"}`;
+  if (isCommentReadDispatchStop(issue)) return `dispatch guardrail paused - ${nextSafeAction(issue, recovery)}`;
+  if (issue.lifecycleStatus === "planning_required") {
+    return `planning required - ${nextSafeAction(issue, recovery)}`;
+  }
+  if (hasApprovedPullRequest(issue) && issue.phase === "completed") return "waiting on merge";
   if (issue.lifecycleStatus === "human_continuation" || issue.lifecycleStatus === "supervisor_continuation" || issue.lifecycleStatus === "externally_fixed") {
     return `${issue.lifecycleStatus} - ${nextSafeAction(issue, recovery)}`;
   }
   if (issue.reviewStatus === "pending" || issue.phase === "review") return `waiting on review (${issue.reviewStatus ?? "pending"})`;
   if (issue.reviewStatus === "human_required" || issue.phase === "human-required") return `waiting on Human Review${issue.lastError ? ` - ${issue.lastError}` : ""}`;
   if (issue.phase === "merge") return "waiting on merge";
-  if (pullRequestUrls(issue).length > 0 && issue.reviewStatus === "approved" && issue.phase === "completed") return "waiting on merge";
   if (issue.nextRetryAt) return `retrying after ${issue.lastError ?? "unknown error"}; next retry ${issue.nextRetryAt}`;
   if (issue.validation) {
     const validation = validationStatusPhrase(issue.validation);
@@ -239,9 +245,21 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (recovery?.recoverable) return recovery.nextSafeAction;
   const terminalAction = cleanTerminalNextSafeAction(issue);
   if (terminalAction) return terminalAction;
-  const decision = issue.lastHumanDecision ?? latestHumanDecision(issue.humanDecisions);
+  const decision = latestAuthoritativeHumanDecision([
+    ...(issue.humanDecisions ?? []),
+    ...(issue.lastHumanDecision ? [issue.lastHumanDecision] : [])
+  ]);
+  if (issue.lifecycleStatus === "planning_required" || /planning|decomposition|likely-large/i.test(issue.stopReason ?? "")) {
+    return "create or attach a planning/decomposition artifact, or split follow-up issues, before returning the issue to implementation";
+  }
+  if (isCommentReadDispatchStop(issue)) {
+    return "restore Linear comment access, then rerun dispatch so latest structured decisions are reconciled before any implementation turn";
+  }
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
+  }
+  if (hasApprovedPullRequest(issue)) {
+    return "mark the PR ready only after fresh validation and green CI, then move the issue to Merging for the shepherd";
   }
   if (decision?.type === "fix_findings") {
     return "redispatch from Todo/In Progress with recent Linear comments, PR feedback, and review context included in the next prompt";
@@ -252,9 +270,6 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (issue.reviewStatus === "human_required" || issue.phase === "human-required") {
     return "record `AgentOS-Human-Decision: fix-findings`, `approve-as-is`, `accept-risk`, `split-follow-up`, or `proceed-to-merge-after-supervisor-fix` in Linear before re-entry";
   }
-  if (issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0) {
-    return "mark the PR ready only after fresh validation and green CI, then move the issue to Merging for the shepherd";
-  }
   if (issue.phase === "merge") return "wait for merge shepherding or inspect GitHub checks if progress stalls";
   if (issue.validation?.status === "failed" || issue.validation?.status === "missing") return "repair or rerun validation evidence before Human Review handoff";
   if (issue.phase === "completed" && pullRequestUrls(issue).length === 0) return "review the no-PR handoff and move to Merging only if the outcome is accepted";
@@ -262,6 +277,14 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
 }
 
 export { daemonLaunchCommand, inspectDaemonHealth };
+
+function hasApprovedPullRequest(issue: IssueState): boolean {
+  return issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0;
+}
+
+function isCommentReadDispatchStop(issue: IssueState): boolean {
+  return /could not read latest Linear comments before dispatch guardrails/i.test(issue.stopReason ?? "");
+}
 
 function validationStatusPhrase(validation: ValidationState): string | null {
   const failedFullSuite = validation.failedHistoricalAttempts?.find((command) => command.name === "npm run agent-check");
@@ -417,10 +440,11 @@ function shouldReportMissingTerminalWorkspace(issue: IssueState): boolean {
 function isExpectedPostMergeWorkspaceCleanup(issue: IssueState): boolean {
   return Boolean(
     issue.mergedAt ||
-      issue.lifecycleStatus === "merge_success" ||
-      issue.lifecycleStatus === "post_merge_cleanup_warning" ||
-      issue.lifecycleStatus === "already_merged_pr"
-  );
+	      issue.lifecycleStatus === "merge_success" ||
+	      issue.lifecycleStatus === "post_merge_cleanup_warning" ||
+	      issue.lifecycleStatus === "already_merged_pr" ||
+	      issue.lifecycleStatus === "terminal_linear"
+	  );
 }
 
 function cleanupDriftWarning(issue: IssueState): string | null {
