@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { ensureDir, exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
-import type { Issue, ReviewFinding, ReviewStateReviewer, ReviewStatus, ServiceConfig } from "./types.js";
+import type { Issue, ReviewFinding, ReviewRunnerFailure, ReviewStateReviewer, ReviewStatus, ServiceConfig } from "./types.js";
 
 export const REVIEW_ARTIFACT_SCHEMA_VERSION = 1;
 
@@ -12,6 +13,27 @@ export interface ReviewerArtifact {
   findings: ReviewFinding[];
   summary?: string;
 }
+
+export type ReviewArtifactFailureKind = "missing_artifact" | "malformed_artifact" | "stale_artifact" | "incomplete_artifact";
+
+export interface ReviewArtifactFailure {
+  kind: ReviewArtifactFailureKind;
+  reviewer: string;
+  artifactPath: string;
+  summary: string;
+  body: string;
+}
+
+export type ReviewArtifactReadResult = { ok: true; artifact: ReviewerArtifact } | { ok: false; failure: ReviewArtifactFailure };
+
+export type ReviewArtifactSnapshot =
+  | { exists: false }
+  | {
+      exists: true;
+      mtimeMs: number;
+      size: number;
+      contentHash: string;
+    };
 
 export interface ReviewContext {
   issue: Issue;
@@ -71,51 +93,141 @@ export async function writeReviewArtifact(path: string, artifact: ReviewerArtifa
 }
 
 export async function readReviewArtifact(path: string, reviewer: string): Promise<ReviewerArtifact> {
+  const result = await readReviewArtifactResult(path, reviewer);
+  return result.ok ? result.artifact : humanRequiredReviewArtifact(reviewer, result.failure.summary, result.failure.body);
+}
+
+export async function reviewArtifactSnapshot(path: string): Promise<ReviewArtifactSnapshot> {
+  if (!(await exists(path))) return { exists: false };
+  const artifactStat = await stat(path);
+  return {
+    exists: true,
+    mtimeMs: artifactStat.mtimeMs,
+    size: artifactStat.size,
+    contentHash: createHash("sha256").update(await readText(path)).digest("hex")
+  };
+}
+
+export async function readReviewArtifactResult(
+  path: string,
+  reviewer: string,
+  options: { notBeforeMs?: number; staleIfUnchangedFrom?: ReviewArtifactSnapshot } = {}
+): Promise<ReviewArtifactReadResult> {
   if (!(await exists(path))) {
-    return humanRequiredReviewArtifact(reviewer, "Reviewer did not produce the required machine-readable artifact.", `Reviewer ${reviewer} did not write ${path}.`);
+    return {
+      ok: false,
+      failure: reviewArtifactFailure("missing_artifact", reviewer, path, "Reviewer did not produce the required machine-readable artifact.", `Reviewer ${reviewer} did not write ${path}.`)
+    };
+  }
+  const previousArtifact = options.staleIfUnchangedFrom;
+  if (previousArtifact?.exists) {
+    const artifactStat = await stat(path);
+    const contentHash = createHash("sha256").update(await readText(path)).digest("hex");
+    if (artifactStat.mtimeMs <= previousArtifact.mtimeMs && artifactStat.size === previousArtifact.size && contentHash === previousArtifact.contentHash) {
+      return {
+        ok: false,
+        failure: reviewArtifactFailure(
+          "stale_artifact",
+          reviewer,
+          path,
+          "Reviewer artifact was stale.",
+          `Reviewer ${reviewer} did not write a fresh review artifact at ${path}; the existing file was unchanged after this reviewer attempt.`
+        )
+      };
+    }
+  } else if (options.notBeforeMs != null) {
+    const artifactStat = await stat(path);
+    if (artifactStat.mtimeMs < options.notBeforeMs) {
+      return {
+        ok: false,
+        failure: reviewArtifactFailure(
+          "stale_artifact",
+          reviewer,
+          path,
+          "Reviewer artifact was stale.",
+          `Reviewer ${reviewer} did not write a fresh review artifact at ${path}; the existing file predates this reviewer attempt.`
+        )
+      };
+    }
   }
   let parsed: Record<string, unknown>;
   try {
     const raw = JSON.parse(await readText(path)) as unknown;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      return humanRequiredReviewArtifact(reviewer, "Reviewer artifact was not a JSON object.", `Reviewer ${reviewer} wrote malformed review JSON at ${path}.`);
+      return {
+        ok: false,
+        failure: reviewArtifactFailure("malformed_artifact", reviewer, path, "Reviewer artifact was not a JSON object.", `Reviewer ${reviewer} wrote malformed review JSON at ${path}.`)
+      };
     }
     parsed = raw as Record<string, unknown>;
   } catch {
-    return humanRequiredReviewArtifact(reviewer, "Reviewer artifact was not valid JSON.", `Reviewer ${reviewer} wrote invalid review JSON at ${path}.`);
+    return {
+      ok: false,
+      failure: reviewArtifactFailure("malformed_artifact", reviewer, path, "Reviewer artifact was not valid JSON.", `Reviewer ${reviewer} wrote invalid review JSON at ${path}.`)
+    };
   }
   if (parsed.schemaVersion !== REVIEW_ARTIFACT_SCHEMA_VERSION) {
-    return humanRequiredReviewArtifact(
-      reviewer,
-      "Reviewer artifact schema version was missing or unsupported.",
-      `Reviewer ${reviewer} wrote a review artifact with unsupported schemaVersion at ${path}.`
-    );
+    return {
+      ok: false,
+      failure: reviewArtifactFailure(
+        "incomplete_artifact",
+        reviewer,
+        path,
+        "Reviewer artifact schema version was missing or unsupported.",
+        `Reviewer ${reviewer} wrote a review artifact with unsupported schemaVersion at ${path}.`
+      )
+    };
   }
   if (parsed.reviewer !== reviewer) {
-    return humanRequiredReviewArtifact(
-      reviewer,
-      "Reviewer artifact did not match the requested reviewer.",
-      `Reviewer ${reviewer} wrote an artifact with reviewer=${String(parsed.reviewer ?? "missing")} at ${path}.`
-    );
+    return {
+      ok: false,
+      failure: reviewArtifactFailure(
+        "incomplete_artifact",
+        reviewer,
+        path,
+        "Reviewer artifact did not match the requested reviewer.",
+        `Reviewer ${reviewer} wrote an artifact with reviewer=${String(parsed.reviewer ?? "missing")} at ${path}.`
+      )
+    };
   }
   if (parsed.decision !== "approved" && parsed.decision !== "changes_requested" && parsed.decision !== "human_required") {
-    return humanRequiredReviewArtifact(reviewer, "Reviewer artifact had an unsupported decision.", `Reviewer ${reviewer} wrote an unsupported review decision at ${path}.`);
+    return {
+      ok: false,
+      failure: reviewArtifactFailure("incomplete_artifact", reviewer, path, "Reviewer artifact had an unsupported decision.", `Reviewer ${reviewer} wrote an unsupported review decision at ${path}.`)
+    };
   }
   if (!Array.isArray(parsed.findings)) {
-    return humanRequiredReviewArtifact(reviewer, "Reviewer artifact findings were missing or malformed.", `Reviewer ${reviewer} wrote malformed findings at ${path}.`);
+    return {
+      ok: false,
+      failure: reviewArtifactFailure("incomplete_artifact", reviewer, path, "Reviewer artifact findings were missing or malformed.", `Reviewer ${reviewer} wrote malformed findings at ${path}.`)
+    };
   }
   const decision = parsed.decision;
   const findings = parsed.findings.map((finding) => normalizeFinding(finding, reviewer, decision));
   if (findings.some((finding) => !finding)) {
-    return humanRequiredReviewArtifact(reviewer, "Reviewer artifact contained malformed findings.", `Reviewer ${reviewer} wrote malformed findings at ${path}.`);
+    return {
+      ok: false,
+      failure: reviewArtifactFailure("incomplete_artifact", reviewer, path, "Reviewer artifact contained malformed findings.", `Reviewer ${reviewer} wrote malformed findings at ${path}.`)
+    };
   }
   return {
+    ok: true,
+    artifact: {
     schemaVersion: REVIEW_ARTIFACT_SCHEMA_VERSION,
     reviewer,
     decision,
     findings: findings as ReviewFinding[],
     summary: typeof parsed.summary === "string" ? parsed.summary : undefined
+    }
   };
+}
+
+export function reviewRunnerFailureArtifact(failure: ReviewRunnerFailure): ReviewerArtifact {
+  const summary =
+    failure.classification === "mechanical"
+      ? "Reviewer failed to produce a trusted artifact."
+      : "Reviewer runner failure requires human judgment.";
+  return humanRequiredReviewArtifact(failure.reviewer, summary, failure.message);
 }
 
 export function reviewArtifactRelativePath(issueIdentifier: string, iteration: number, reviewer: string): string {
@@ -253,6 +365,17 @@ export function formatFindings(findings: ReviewFinding[], repoRoot: string, opti
     .join("\n");
 }
 
+export function formatReviewRunnerFailures(failures: ReviewRunnerFailure[]): string {
+  if (failures.length === 0) return "No reviewer runner failures.";
+  return failures
+    .map((failure) => {
+      const retry = failure.retryable ? "retry scheduled" : failure.exhausted ? "retry budget exhausted" : "not retried";
+      const result = failure.resultStatus ? `, result=${failure.resultStatus}` : "";
+      return `- ${failure.reviewer} iteration ${failure.iteration} attempt ${failure.attempt}/${failure.maxAttempts}: ${failure.classification} ${failure.reason}${result}; ${retry}. ${singleLine(failure.message).slice(0, 500)}`;
+    })
+    .join("\n");
+}
+
 function omitDiagnosticLogExcerpts(body: string): string {
   return body
     .replace(/\n  Log excerpt \(sanitized, untrusted\): .*/g, "\n  Log excerpt: omitted from tracker comments.")
@@ -301,6 +424,14 @@ function humanRequiredReviewArtifact(reviewer: string, summary: string, body: st
       }
     ]
   };
+}
+
+function reviewArtifactFailure(kind: ReviewArtifactFailureKind, reviewer: string, artifactPath: string, summary: string, body: string): ReviewArtifactFailure {
+  return { kind, reviewer, artifactPath, summary, body };
+}
+
+function singleLine(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
 }
 
 function safeFileName(value: string): string {

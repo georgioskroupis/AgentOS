@@ -338,6 +338,11 @@ After a PR-producing run opens or updates a PR, AgentOS keeps the issue in
   path shown in the review prompt, under
   `.agent-os/reviews/<issue>/iteration-<n>/`; AgentOS validates that JSON and
   stores the canonical runtime copy.
+- Missing, malformed, stale, or incomplete reviewer artifacts are classified as
+  reviewer-runner failures first. AgentOS retries only that reviewer while the
+  bounded retry budget allows it, preserves successful reviewer artifacts, and
+  reports exhausted/non-mechanical runner failures separately from blocking
+  review findings.
 - When `review.target_mode` is `merge-eligible`, reviewer prompts include every
   selected merge-eligible PR and exclude review-only/supporting PRs.
 - If blocking findings remain, AgentOS runs a focused fixer turn on the same PR

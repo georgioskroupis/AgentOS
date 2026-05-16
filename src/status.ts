@@ -6,6 +6,7 @@ import { IssueStateStore, isAuthoritativeHumanDecision, latestAuthoritativeHuman
 import { JsonlLogger } from "./logging.js";
 import { loadRegistry, RegistryStateStore, resolveRegistryProjectPaths, type RegistryProjectSummary } from "./registry.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
+import { formatReviewRunnerFailures } from "./review.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
@@ -105,6 +106,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.terminalState ? `Terminal state: ${state.terminalState}${state.terminalReason ? ` (${state.terminalReason})` : ""}` : null,
     prs.length ? `PRs:\n${prs.map((pr) => `- ${pr.url}${pr.role ? ` (${pr.role})` : ""}`).join("\n")}` : "PRs: none recorded",
     state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
+    state?.reviewRunnerFailures?.length ? `Review runner failures:\n${formatReviewRunnerFailures(state.reviewRunnerFailures)}` : "Review runner failures: none recorded",
     humanDecisionDetails(state),
     appProofDetails(state),
     shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
@@ -214,6 +216,10 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (statusDiagnostics.length) return `status warning - ${statusDiagnostics[0].message}; next: ${statusDiagnostics[0].nextAction}`;
   if (runtimeActive) return `running (${runtimeActive.phase ?? issue.phase ?? "active"})`;
   if (retry) return `retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`;
+  const latestRunnerFailure = latestReviewRunnerFailure(issue);
+  if ((issue.reviewStatus === "human_required" || issue.phase === "human-required") && latestRunnerFailure) {
+    return `waiting on Human Review - reviewer runner failure (${latestRunnerFailure.reviewer}: ${latestRunnerFailure.reason})`;
+  }
   if (recovery?.recoverable) return `recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`;
   const terminalStatus = cleanTerminalStatusLine(issue);
   if (terminalStatus) return terminalStatus;
@@ -230,7 +236,9 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
     return `${issue.lifecycleStatus} - ${nextSafeAction(issue, recovery)}`;
   }
   if (issue.reviewStatus === "pending" || issue.phase === "review") return `waiting on review (${issue.reviewStatus ?? "pending"})`;
-  if (issue.reviewStatus === "human_required" || issue.phase === "human-required") return `waiting on Human Review${issue.lastError ? ` - ${issue.lastError}` : ""}`;
+  if (issue.reviewStatus === "human_required" || issue.phase === "human-required") {
+    return `waiting on Human Review${issue.lastError ? ` - ${issue.lastError}` : ""}`;
+  }
   if (issue.phase === "merge") return "waiting on merge";
   if (issue.nextRetryAt) return `retrying after ${issue.lastError ?? "unknown error"}; next retry ${issue.nextRetryAt}`;
   if (issue.validation) {
@@ -268,6 +276,9 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
     return "keep Codex paused; move to Merging only when remaining risk is accepted and required validation/CI evidence is fresh";
   }
   if (issue.reviewStatus === "human_required" || issue.phase === "human-required") {
+    if (latestReviewRunnerFailure(issue)) {
+      return "inspect reviewer runner failure details and decide whether to redispatch, accept risk, or split follow-up work";
+    }
     return "record `AgentOS-Human-Decision: fix-findings`, `approve-as-is`, `accept-risk`, `split-follow-up`, or `proceed-to-merge-after-supervisor-fix` in Linear before re-entry";
   }
   if (issue.phase === "merge") return "wait for merge shepherding or inspect GitHub checks if progress stalls";
@@ -294,6 +305,11 @@ function validationStatusPhrase(validation: ValidationState): string | null {
   }
   if (validation.status === "failed") return `validation failed${validation.errors?.length ? ` - ${validation.errors.join("; ")}` : ""}`;
   return null;
+}
+
+function latestReviewRunnerFailure(issue: IssueState): NonNullable<IssueState["reviewRunnerFailures"]>[number] | null {
+  const failures = issue.reviewRunnerFailures ?? [];
+  return failures.length ? failures[failures.length - 1] : null;
 }
 
 interface IssueStatusDiagnostic {

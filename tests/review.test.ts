@@ -2,7 +2,15 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findingHash, readReviewArtifact, repeatedBlockingHashes, reviewArtifactPath, writeReviewArtifact } from "../src/review.js";
+import {
+  findingHash,
+  readReviewArtifact,
+  readReviewArtifactResult,
+  repeatedBlockingHashes,
+  reviewArtifactPath,
+  reviewArtifactSnapshot,
+  writeReviewArtifact
+} from "../src/review.js";
 import type { ReviewFinding, ServiceConfig } from "../src/types.js";
 
 const config = {
@@ -88,6 +96,43 @@ describe("review artifacts", () => {
       reviewer: "tests",
       decision: "human_required",
       findings: [expect.objectContaining({ body: expect.stringContaining("reviewer=architecture") })]
+    });
+  });
+
+  it("detects stale artifacts by pre-attempt snapshot instead of wall-clock timestamp", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-review-stale-"));
+    const path = reviewArtifactPath(repo, "AG-1", 1, "self");
+    await writeReviewArtifact(path, {
+      reviewer: "self",
+      decision: "approved",
+      findings: []
+    });
+    const previous = await reviewArtifactSnapshot(path);
+
+    await expect(readReviewArtifactResult(path, "self", { staleIfUnchangedFrom: previous })).resolves.toMatchObject({
+      ok: false,
+      failure: { kind: "stale_artifact" }
+    });
+
+    await writeReviewArtifact(path, {
+      reviewer: "self",
+      decision: "changes_requested",
+      findings: [
+        {
+          reviewer: "self",
+          decision: "changes_requested",
+          severity: "P2",
+          file: "src/reviewer-runner.ts",
+          line: 1,
+          body: "Fresh finding.",
+          findingHash: "fresh"
+        }
+      ]
+    });
+
+    await expect(readReviewArtifactResult(path, "self", { staleIfUnchangedFrom: previous })).resolves.toMatchObject({
+      ok: true,
+      artifact: { decision: "changes_requested" }
     });
   });
 });

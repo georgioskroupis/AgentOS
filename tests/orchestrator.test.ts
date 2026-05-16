@@ -5891,11 +5891,14 @@ describe("orchestrator", () => {
     }).runOnce(true);
 
     expect(comments.join("\n")).toContain("automated review needs human judgment");
+    expect(comments.join("\n")).toContain("Reviewer runner failures:");
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.reviewStatus).toBe("human_required");
-    expect(state.findings[0].body).toContain("invalid review JSON");
+    expect(state.findings).toEqual([]);
+    expect(state.reviewRunnerFailures.at(-1)).toEqual(expect.objectContaining({ reason: "malformed_artifact", exhausted: true }));
     const canonicalArtifact = JSON.parse(await readFile(join(repo, ".agent-os", "reviews", "AG-1", "iteration-1", "self.json"), "utf8"));
     expect(canonicalArtifact.decision).toBe("human_required");
+    expect(canonicalArtifact.findings[0].body).toContain("invalid review JSON");
   });
 
   it("blocks unapproved merge state when human override is disabled", async () => {

@@ -104,7 +104,8 @@ Runs one Symphony-style scheduling pass:
 10. fail/retry dead Codex App Server turns, missing handoffs, and failed
    validation instead of silently parking them in review
 11. run the Ralph Wiggum review/fix loop for PR-producing issues before
-   `Human Review`
+    `Human Review`, retrying failed reviewer artifacts narrowly before
+    classifying them as reviewer-runner failures
 12. shepherd `Merging` issues through GitHub checks, squash merge, and `Done`
 13. track durable retries, stale runtime reconstruction, unchanged successful
     issues, startup cleanup, and reconciliation
