@@ -50,7 +50,7 @@ export function evaluateReviewBudget(input: ReviewBudgetEvaluationInput): Review
   pushIf(signals, elapsedMs > config.maxReviewElapsedMs, "review_elapsed_ms", "broad", elapsedMs, config.maxReviewElapsedMs, `Review/fix elapsed time is ${elapsedMs}ms.`);
   pushIf(signals, input.reviewTokenTotal > config.maxReviewTokens, "review_token_total", "broad", input.reviewTokenTotal, config.maxReviewTokens, `Review/fix token volume is ${input.reviewTokenTotal}.`);
   pushIf(signals, validationReruns > config.maxValidationReruns, "validation_reruns", "broad", validationReruns, config.maxValidationReruns, `${validationReruns} validation rerun(s) recorded.`);
-  pushIf(signals, input.iteration > config.maxReviewIterations, "review_iteration_count", hasBroadOrNonMechanicalFinding ? "broad" : "mechanical", input.iteration, config.maxReviewIterations, `Review iteration ${input.iteration} exceeds the budget.`);
+  pushIf(signals, input.iteration >= config.maxReviewIterations, "review_iteration_count", hasBroadOrNonMechanicalFinding ? "broad" : "mechanical", input.iteration, config.maxReviewIterations, `Review iteration ${input.iteration} reached the budget limit.`);
   pushIf(signals, blocking.length > 0 && input.fixerIterations >= config.maxFixerIterations, "fixer_iteration_count", hasBroadOrNonMechanicalFinding ? "broad" : "mechanical", input.fixerIterations, config.maxFixerIterations, `${input.fixerIterations} fixer iteration(s) have already run.`);
   pushIf(signals, blocking.length > config.maxBlockingFindings, "blocking_finding_count", hasBroadOrNonMechanicalFinding ? "broad" : "mechanical", blocking.length, config.maxBlockingFindings, `${blocking.length} blocking finding(s) exceed the budget.`);
   pushIf(signals, p1p2Count > config.maxP1P2Findings, "p1_p2_finding_count", hasBroadOrNonMechanicalFinding ? "broad" : "mechanical", p1p2Count, config.maxP1P2Findings, `${p1p2Count} P1/P2 finding(s) exceed the budget.`);
@@ -198,8 +198,9 @@ function lateNewP1P2Findings(input: ReviewBudgetEvaluationInput): number {
 function validationRerunCount(validation: ValidationState | undefined): number {
   if (!validation) return 0;
   const accepted = validation.acceptedCommands?.length ?? 0;
+  const additionalPassing = validation.additionalPassingCommands?.length ?? 0;
   const failed = validation.failedHistoricalAttempts?.length ?? 0;
-  return Math.max(0, accepted + failed - 1);
+  return Math.max(0, accepted + additionalPassing + failed - 1);
 }
 
 function safeFileName(value: string): string {

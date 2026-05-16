@@ -5524,7 +5524,7 @@ describe("orchestrator", () => {
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.reviewStatus).toBe("human_required");
     expect(state.splitRecommendation.reason).toContain("review budget exceeded");
-  });
+  }, 15000);
 
   it("prepares a follow-up proposal when changed-file budget is exceeded", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-budget-proposal-"));

@@ -10,7 +10,7 @@ describe("review budget", () => {
   it("keeps narrow mechanical findings in the bounded retry path", () => {
     const result = evaluateReviewBudget({
       issue: fakeIssue(),
-      config: config({ maxFixerIterations: 2 }),
+      config: config({ maxFixerIterations: 2, maxReviewIterations: 3 }),
       iteration: 1,
       reviewStartedAt: "2026-05-16T00:00:00.000Z",
       now: "2026-05-16T00:00:01.000Z",
@@ -113,6 +113,63 @@ describe("review budget", () => {
 
     expect(result.splitRecommendation?.signals.map((signal) => signal.name)).toEqual(
       expect.arrayContaining(["review_token_total", "validation_reruns", "late_new_p1_p2_after_approval"])
+    );
+  });
+
+  it("counts additional passing validation commands as reruns", () => {
+    const result = evaluateReviewBudget({
+      issue: fakeIssue(),
+      config: config({ maxValidationReruns: 1, maxReviewIterations: 3 }),
+      iteration: 1,
+      reviewStartedAt: "2026-05-16T00:00:00.000Z",
+      now: "2026-05-16T00:00:01.000Z",
+      changedFiles: ["src/a.ts"],
+      previousFindings: [],
+      currentFindings: [],
+      repeatedFindingHashes: [],
+      reviewTokenTotal: 1000,
+      fixerIterations: 0,
+      validation: {
+        status: "passed",
+        checkedAt: "2026-05-16T00:00:00.000Z",
+        acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-16T00:00:00.000Z", finishedAt: "2026-05-16T00:00:01.000Z" }],
+        additionalPassingCommands: [
+          { name: "npm test -- tests/review-budget.test.ts", exitCode: 0, startedAt: "2026-05-16T00:00:01.000Z", finishedAt: "2026-05-16T00:00:02.000Z" },
+          { name: "npm run typecheck", exitCode: 0, startedAt: "2026-05-16T00:00:02.000Z", finishedAt: "2026-05-16T00:00:03.000Z" }
+        ]
+      }
+    });
+
+    expect(result.splitRecommendation?.signals).toContainEqual(
+      expect.objectContaining({ name: "validation_reruns", current: 2, threshold: 1 })
+    );
+  });
+
+  it("recommends split work when broad findings reach the review-iteration budget", () => {
+    const result = evaluateReviewBudget({
+      issue: fakeIssue(),
+      config: config({ maxReviewIterations: 3, maxFixerIterations: 5 }),
+      iteration: 3,
+      reviewStartedAt: "2026-05-16T00:00:00.000Z",
+      now: "2026-05-16T00:00:03.000Z",
+      changedFiles: ["src/orchestrator.ts"],
+      previousFindings: [],
+      currentFindings: [
+        finding({
+          reviewer: "architecture",
+          body: "Architecture lifecycle boundaries are still too broad for another cheap fixer turn.",
+          findingHash: "architecture-budget-limit"
+        })
+      ],
+      repeatedFindingHashes: [],
+      reviewTokenTotal: 1000,
+      fixerIterations: 2,
+      validation: undefined
+    });
+
+    expect(result.shouldRecommendSplit).toBe(true);
+    expect(result.splitRecommendation?.signals).toContainEqual(
+      expect.objectContaining({ name: "review_iteration_count", classification: "broad", current: 3, threshold: 3 })
     );
   });
 
