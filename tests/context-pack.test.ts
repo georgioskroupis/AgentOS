@@ -111,6 +111,35 @@ describe("targeted context packs", () => {
     expect(pack).not.toContain("IRRELEVANT_HISTORIC_OUTPUT");
   });
 
+  it("groups duplicate fixer findings while preserving reviewer evidence", () => {
+    const findings: ReviewFinding[] = [
+      {
+        reviewer: "self",
+        decision: "changes_requested",
+        severity: "P1",
+        file: "src/orchestrator.ts",
+        line: 42,
+        body: "The review retry path reruns successful reviewers.",
+        findingHash: "self-finding"
+      },
+      {
+        reviewer: "correctness",
+        decision: "changes_requested",
+        severity: "P1",
+        file: "src/orchestrator.ts",
+        line: 42,
+        body: "The review retry path reruns successful reviewers.",
+        findingHash: "correctness-finding"
+      }
+    ];
+
+    const pack = buildTargetedContextPack({ kind: "fixer", issue, findings });
+
+    expect(pack).toContain("duplicate group src/orchestrator.ts:42");
+    expect(pack).toContain("self=self-finding");
+    expect(pack).toContain("correctness=correctness-finding");
+  });
+
   it("includes sanitized bounded CI repair excerpts", () => {
     const secret = `ghp_${"abcdefghijklmnopqrstuvwxyz123456"}`;
     const diagnostics: CheckDiagnostic[] = [

@@ -185,10 +185,35 @@ function formatValidation(validation: ValidationState | null): string[] {
 
 function formatFindingsForContext(findings: ReviewFinding[]): string[] {
   if (findings.length === 0) return ["- none recorded"];
-  return findings.slice(0, 20).map((finding) => {
-    const location = finding.file ? `${finding.file}${finding.line ? `:${finding.line}` : ""}` : "general";
-    return `- ${finding.severity} ${finding.reviewer} ${location} [${finding.findingHash}]: ${boundContextText(finding.body, LIMITS.findingBody, "review artifact finding")}`;
+  return groupedFindings(findings.slice(0, 20)).map((group) => {
+    const location = group.finding.file ? `${group.finding.file}${group.finding.line ? `:${group.finding.line}` : ""}` : "general";
+    const body = boundContextText(group.finding.body, LIMITS.findingBody, "review artifact finding");
+    if (group.findings.length === 1) {
+      return `- ${group.finding.severity} ${group.finding.reviewer} ${location} [${group.finding.findingHash}]: ${body}`;
+    }
+    const evidence = group.findings.map((finding) => `${finding.reviewer}=${finding.findingHash}`).join("; ");
+    return `- ${group.finding.severity} duplicate group ${location} [${group.findings.length} reviewers: ${evidence}]: ${body}`;
   });
+}
+
+function groupedFindings(findings: ReviewFinding[]): Array<{ finding: ReviewFinding; findings: ReviewFinding[] }> {
+  const groups = new Map<string, { finding: ReviewFinding; findings: ReviewFinding[] }>();
+  for (const finding of findings) {
+    const key = duplicateFindingKey(finding);
+    const group = groups.get(key);
+    if (group) group.findings.push(finding);
+    else groups.set(key, { finding, findings: [finding] });
+  }
+  return [...groups.values()];
+}
+
+function duplicateFindingKey(finding: ReviewFinding): string {
+  return [
+    finding.severity,
+    finding.file ?? "",
+    finding.line ?? "",
+    finding.body.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+  ].join("\n");
 }
 
 function formatCiLogExcerpts(entries: PullRequestContextEntry[]): string[] {

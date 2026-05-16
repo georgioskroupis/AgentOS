@@ -289,6 +289,8 @@ settings do not grant network, merge, tracker, approval, or user-input
 capability by themselves.
 PR-producing implemented issues now pass through automated reviewer turns for
 self-review, correctness, tests, architecture, and conditional security review.
+Workflows can opt into bounded read-only reviewer fan-out with isolated
+per-reviewer artifact roots; conservative defaults keep the sequential path.
 Blocking findings trigger focused fixer turns on the same PR until reviewers
 approve or AgentOS escalates to Human Review with a concrete reason.
 For failed GitHub checks, AgentOS reads PR/check status and failed GitHub

@@ -154,6 +154,9 @@ export interface ServiceConfig {
     optionalReviewers: string[];
     requireAllBlockingResolved: boolean;
     blockingSeverities: Array<"P0" | "P1" | "P2">;
+    parallelReviewers: boolean;
+    maxConcurrentReviewers: number;
+    skipOptionalReviewersAfterBlockingRequired: boolean;
   };
 }
 

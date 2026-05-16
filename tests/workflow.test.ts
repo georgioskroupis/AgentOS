@@ -72,7 +72,10 @@ describe("workflow", () => {
       requiredReviewers: ["self", "correctness", "tests", "architecture"],
       optionalReviewers: ["security"],
       requireAllBlockingResolved: true,
-      blockingSeverities: ["P0", "P1", "P2"]
+      blockingSeverities: ["P0", "P1", "P2"],
+      parallelReviewers: false,
+      maxConcurrentReviewers: 1,
+      skipOptionalReviewersAfterBlockingRequired: false
     });
     expect(config.workspace.root).toContain(".agent-os/workspaces");
   });
@@ -195,6 +198,35 @@ describe("workflow", () => {
     expect(validateWorkflowDefinition(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true)).toMatchObject({
       ok: true,
       errors: []
+    });
+  });
+
+  it("parses opt-in reviewer parallelism controls", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-review-parallel-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "review:",
+        "  parallel_reviewers: true",
+        "  max_concurrent_reviewers: 3",
+        "  skip_optional_reviewers_after_blocking_required: true",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const workflow = await loadWorkflow(workflowPath);
+    const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+    expect(config.review).toMatchObject({
+      parallelReviewers: true,
+      maxConcurrentReviewers: 3,
+      skipOptionalReviewersAfterBlockingRequired: true
     });
   });
 

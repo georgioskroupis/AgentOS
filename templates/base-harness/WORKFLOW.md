@@ -54,6 +54,9 @@ review:
   enabled: true
   target_mode: merge-eligible
   max_iterations: 3
+  parallel_reviewers: false
+  max_concurrent_reviewers: 1
+  skip_optional_reviewers_after_blocking_required: false
   required_reviewers:
     - self
     - correctness
@@ -306,12 +309,16 @@ After a PR-producing run opens or updates a PR, AgentOS keeps the issue in
 - Required reviewers: `self`, `correctness`, `tests`, `architecture`.
 - Optional reviewer: `security` when touched files involve auth, secrets,
   external APIs, config, runners, GitHub, Linear, or orchestration.
+- `review.parallel_reviewers` may opt into bounded read-only fan-out with
+  `review.max_concurrent_reviewers`; conservative workflows keep the sequential
+  path.
 - Blocking findings use severity `P0`, `P1`, or `P2`; `P3` findings are
   suggestions and do not force another fix iteration.
 - Reviewers write exactly one machine-readable artifact to the workspace-local
   path shown in the review prompt, under
-  `.agent-os/reviews/<issue>/iteration-<n>/`; AgentOS validates that JSON and
-  stores the canonical runtime copy.
+  `.agent-os/reviews/<issue>/iteration-<n>/`; parallel reviewers receive
+  isolated per-reviewer writable roots. AgentOS validates that JSON and stores
+  the canonical runtime copy.
 - When `review.target_mode` is `merge-eligible`, reviewer prompts include every
   selected merge-eligible PR and exclude review-only/supporting PRs.
 - If blocking findings remain, AgentOS runs a focused fixer turn on the same PR

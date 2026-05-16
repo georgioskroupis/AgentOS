@@ -58,10 +58,12 @@ It keeps orchestration logic narrow:
 - PR-producing implemented issues run through the Ralph Wiggum loop while
   Linear remains `In Progress`: self, correctness, tests, architecture, and
   conditional security reviewers write machine-readable findings to a
-  workspace-local review artifact path; AgentOS validates and copies those
-  artifacts into the runtime review store. Blocking findings trigger focused
-  fixer turns on the same PR. Failed GitHub checks are diagnosed from PR/check
-  status and failed Actions logs, and CI fixer turns run only for
+  workspace-local review artifact path; opt-in parallel reviewer runs are
+  bounded by workflow config and use isolated per-reviewer writable roots.
+  AgentOS validates and copies those artifacts into the runtime review store.
+  Blocking findings trigger focused fixer turns on the same PR. Failed GitHub
+  checks are diagnosed from PR/check status and failed Actions logs, and CI
+  fixer turns run only for
   `mechanical-first` failures with enough context. Non-converging, malformed,
   ambiguous, or logless failures escalate to `Human Review` with
   `reviewStatus: human_required`.

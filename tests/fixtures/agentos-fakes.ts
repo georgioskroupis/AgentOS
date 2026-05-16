@@ -81,7 +81,10 @@ export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): Servi
       requiredReviewers: ["self", "correctness", "tests", "architecture"],
       optionalReviewers: ["security"],
       requireAllBlockingResolved: true,
-      blockingSeverities: ["P0", "P1", "P2"]
+      blockingSeverities: ["P0", "P1", "P2"],
+      parallelReviewers: false,
+      maxConcurrentReviewers: 1,
+      skipOptionalReviewersAfterBlockingRequired: false
     },
     ...overrides
   };

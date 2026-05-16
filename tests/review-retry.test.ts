@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
 import { getRegistryStatus, inspectIssue } from "../src/status.js";
@@ -89,6 +90,197 @@ describe("reviewer artifact retry", () => {
       ["self", "approved"],
       ["correctness", "approved"]
     ]);
+  });
+
+  it("runs opt-in reviewers in parallel with a concurrency cap and deterministic ordering", async () => {
+    const scenario = await setupReviewScenario({
+      requiredReviewers: ["self", "correctness", "tests"],
+      maxRetryAttempts: 1,
+      parallelReviewers: true,
+      maxConcurrentReviewers: 2
+    });
+    const started: string[] = [];
+    const completed: string[] = [];
+    const writableRoots: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      started.push(reviewer);
+      const policy = input.config.codex.turnSandboxPolicy as { writableRoots?: string[] };
+      writableRoots.push(policy.writableRoots?.[0] ?? "");
+      await delay(reviewer === "self" ? 30 : reviewer === "correctness" ? 5 : 10);
+      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      completed.push(reviewer);
+      active -= 1;
+      return { status: "succeeded" };
+    });
+
+    const state = await scenario.readState();
+    expect(maxActive).toBe(2);
+    expect(new Set(started)).toEqual(new Set(["self", "correctness", "tests"]));
+    expect(completed[0]).toBe("correctness");
+    expect(state.reviewStatus).toBe("approved");
+    expect(state.reviewers.map((reviewer: { name: string }) => reviewer.name)).toEqual(["self", "correctness", "tests"]);
+    expect(new Set(writableRoots).size).toBe(3);
+    expect(writableRoots).toEqual(
+      expect.arrayContaining([
+        join(scenario.repo, ".agent-os", "workspaces", "AG-1", ".agent-os", "reviews", "AG-1", "iteration-1", "self"),
+        join(scenario.repo, ".agent-os", "workspaces", "AG-1", ".agent-os", "reviews", "AG-1", "iteration-1", "correctness"),
+        join(scenario.repo, ".agent-os", "workspaces", "AG-1", ".agent-os", "reviews", "AG-1", "iteration-1", "tests")
+      ])
+    );
+  });
+
+  it("keeps conservative reviewer runs on the sequential path", async () => {
+    const scenario = await setupReviewScenario({ requiredReviewers: ["self", "correctness"], maxRetryAttempts: 1 });
+    const artifactPaths: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      artifactPaths.push(artifactPath);
+      await delay(5);
+      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      active -= 1;
+      return { status: "succeeded" };
+    });
+
+    expect(maxActive).toBe(1);
+    expect(artifactPaths).toEqual([
+      join(".agent-os", "reviews", "AG-1", "iteration-1", "self.json"),
+      join(".agent-os", "reviews", "AG-1", "iteration-1", "correctness.json")
+    ]);
+  });
+
+  it("retries one failed parallel reviewer narrowly while preserving successful artifacts", async () => {
+    const scenario = await setupReviewScenario({
+      requiredReviewers: ["self", "correctness"],
+      maxRetryAttempts: 1,
+      parallelReviewers: true,
+      maxConcurrentReviewers: 2
+    });
+    const attempts = new Map<string, number>();
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      const count = increment(attempts, reviewer);
+      if (reviewer === "correctness" && count === 1) return { status: "succeeded" };
+      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      return { status: "succeeded" };
+    });
+
+    const state = await scenario.readState();
+    expect(attempts.get("self")).toBe(1);
+    expect(attempts.get("correctness")).toBe(2);
+    expect(state.reviewStatus).toBe("approved");
+    expect(state.reviewRunnerFailures).toEqual([expect.objectContaining({ reviewer: "correctness", reason: "missing_artifact", retryable: true })]);
+    expect(state.reviewers.map((reviewer: { name: string }) => reviewer.name)).toEqual(["self", "correctness"]);
+  });
+
+  it("aggregates blocking parallel findings in configured reviewer order", async () => {
+    const scenario = await setupReviewScenario({
+      requiredReviewers: ["self", "correctness"],
+      maxRetryAttempts: 1,
+      parallelReviewers: true,
+      maxConcurrentReviewers: 2,
+      maxIterations: 1
+    });
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      await delay(reviewer === "self" ? 20 : 1);
+      await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+        reviewer,
+        decision: "changes_requested",
+        summary: "fix required",
+        findings: [
+          {
+            reviewer,
+            decision: "changes_requested",
+            severity: "P1",
+            file: "src/orchestrator.ts",
+            line: reviewer === "self" ? 10 : 20,
+            body: `${reviewer} found a blocking issue.`,
+            findingHash: `${reviewer}-blocking`
+          }
+        ]
+      });
+      return { status: "succeeded" };
+    });
+
+    const state = await scenario.readState();
+    expect(state.reviewStatus).toBe("human_required");
+    expect(state.findings.map((finding: { reviewer: string; findingHash: string }) => [finding.reviewer, finding.findingHash])).toEqual([
+      ["self", "self-blocking"],
+      ["correctness", "correctness-blocking"]
+    ]);
+  });
+
+  it("runs optional security reviewer in parallel when changed files require it", async () => {
+    const scenario = await setupReviewScenario({
+      requiredReviewers: ["self"],
+      optionalReviewers: ["security"],
+      maxRetryAttempts: 1,
+      parallelReviewers: true,
+      maxConcurrentReviewers: 2,
+      changedFiles: ["src/auth/session.ts"]
+    });
+    const attempts = new Map<string, number>();
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      increment(attempts, reviewer);
+      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      return { status: "succeeded" };
+    });
+
+    const state = await scenario.readState();
+    expect(attempts.get("security")).toBe(1);
+    expect(state.reviewStatus).toBe("approved");
+    expect(state.reviewers.map((reviewer: { name: string }) => reviewer.name)).toEqual(["self", "security"]);
+  });
+
+  it("can skip optional reviewers after a blocking required-reviewer signal", async () => {
+    const scenario = await setupReviewScenario({
+      requiredReviewers: ["self"],
+      optionalReviewers: ["security"],
+      maxRetryAttempts: 1,
+      parallelReviewers: true,
+      maxConcurrentReviewers: 2,
+      skipOptionalReviewersAfterBlockingRequired: true,
+      changedFiles: ["src/auth/session.ts"],
+      maxIterations: 1
+    });
+    const attempts = new Map<string, number>();
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      increment(attempts, reviewer);
+      await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+        reviewer,
+        decision: "changes_requested",
+        summary: "fix required",
+        findings: [
+          {
+            reviewer,
+            decision: "changes_requested",
+            severity: "P1",
+            file: "src/orchestrator.ts",
+            line: 10,
+            body: "Required reviewer found enough blocking signal.",
+            findingHash: "self-blocking"
+          }
+        ]
+      });
+      return { status: "succeeded" };
+    });
+
+    const state = await scenario.readState();
+    expect(attempts.get("self")).toBe(1);
+    expect(attempts.has("security")).toBe(false);
+    expect(state.reviewers.map((reviewer: { name: string }) => reviewer.name)).toEqual(["self"]);
+    expect(state.findings).toEqual([expect.objectContaining({ reviewer: "self", findingHash: "self-blocking" })]);
   });
 
   it("escalates after reviewer-specific retry exhaustion without treating P3 advisories as fix-triggering blockers", async () => {
@@ -189,7 +381,16 @@ describe("reviewer artifact retry", () => {
   });
 });
 
-async function setupReviewScenario(options: { requiredReviewers: string[]; maxRetryAttempts: number }): Promise<{
+async function setupReviewScenario(options: {
+  requiredReviewers: string[];
+  maxRetryAttempts: number;
+  optionalReviewers?: string[];
+  parallelReviewers?: boolean;
+  maxConcurrentReviewers?: number;
+  skipOptionalReviewersAfterBlockingRequired?: boolean;
+  changedFiles?: string[];
+  maxIterations?: number;
+}): Promise<{
   repo: string;
   comments: string[];
   run: (onReview: (input: { input: Parameters<AgentRunner["run"]>[0]; reviewer: string; artifactPath: string }) => Promise<AgentRunResult>) => Promise<void>;
@@ -218,9 +419,12 @@ async function setupReviewScenario(options: { requiredReviewers: string[]; maxRe
       `  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}`,
       "review:",
       "  enabled: true",
-      "  max_iterations: 1",
+      `  max_iterations: ${options.maxIterations ?? 1}`,
+      ...(options.parallelReviewers == null ? [] : [`  parallel_reviewers: ${options.parallelReviewers ? "true" : "false"}`]),
+      ...(options.maxConcurrentReviewers == null ? [] : [`  max_concurrent_reviewers: ${options.maxConcurrentReviewers}`]),
+      ...(options.skipOptionalReviewersAfterBlockingRequired == null ? [] : [`  skip_optional_reviewers_after_blocking_required: ${options.skipOptionalReviewersAfterBlockingRequired ? "true" : "false"}`]),
       `  required_reviewers: [${options.requiredReviewers.join(", ")}]`,
-      "  optional_reviewers: []",
+      `  optional_reviewers: [${(options.optionalReviewers ?? []).join(", ")}]`,
       "---",
       "Do {{ issue.identifier }}"
     ].join("\n"),
@@ -237,7 +441,7 @@ async function setupReviewScenario(options: { requiredReviewers: string[]; maxRe
           mergeable: "MERGEABLE",
           headRefOid: "abc123",
           statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
-          files: [{ path: "src/orchestrator.ts" }]
+          files: (options.changedFiles ?? ["src/orchestrator.ts"]).map((path) => ({ path }))
         }
       },
       null,

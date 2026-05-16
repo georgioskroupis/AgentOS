@@ -133,7 +133,10 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       requiredReviewers: stringListAt(objectAt(cfg, "review"), "required_reviewers", ["self", "correctness", "tests", "architecture"]),
       optionalReviewers: stringListAt(objectAt(cfg, "review"), "optional_reviewers", ["security"]),
       requireAllBlockingResolved: booleanAt(objectAt(cfg, "review"), "require_all_blocking_resolved", true),
-      blockingSeverities: blockingSeveritiesAt(objectAt(cfg, "review"), "blocking_severities", ["P0", "P1", "P2"])
+      blockingSeverities: blockingSeveritiesAt(objectAt(cfg, "review"), "blocking_severities", ["P0", "P1", "P2"]),
+      parallelReviewers: booleanAt(objectAt(cfg, "review"), "parallel_reviewers", false),
+      maxConcurrentReviewers: positiveIntAt(objectAt(cfg, "review"), "max_concurrent_reviewers", 1),
+      skipOptionalReviewersAfterBlockingRequired: booleanAt(objectAt(cfg, "review"), "skip_optional_reviewers_after_blocking_required", false)
     }
   };
 }
