@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { writeTextEnsuringDir } from "./fs-utils.js";
+import { latestAuthoritativeHumanDecision } from "./issue-state.js";
 import { blockingFindings } from "./review.js";
-import type { Issue, ReviewBudgetSignal, ReviewBudgetState, ReviewFinding, ReviewSplitRecommendation, ServiceConfig, ValidationState } from "./types.js";
+import type { HumanDecisionState, Issue, IssueState, ReviewBudgetSignal, ReviewBudgetState, ReviewFinding, ReviewSplitRecommendation, ServiceConfig, ValidationState } from "./types.js";
 
 export interface ReviewBudgetEvaluationInput {
   issue: Issue;
@@ -132,6 +133,19 @@ export function formatSplitRecommendation(recommendation: ReviewSplitRecommendat
   const lines = [`Split recommendation: ${recommendation.action}`, `Split reason: ${recommendation.reason}`, `Split summary: ${recommendation.summary}`];
   if (recommendation.proposals?.length) lines.push("Follow-up proposals:", ...recommendation.proposals.map((proposal) => `- ${proposal.title}${proposal.artifactPath ? ` (${proposal.artifactPath})` : ""}`));
   return lines.join("\n");
+}
+
+export function reviewSupervisorMergeDecision(state: Pick<IssueState, "humanDecisions" | "lastHumanDecision"> | null | undefined): HumanDecisionState | null {
+  const decision = latestAuthoritativeHumanDecision([
+    ...(state?.humanDecisions ?? []),
+    ...(state?.lastHumanDecision ? [state.lastHumanDecision] : [])
+  ]);
+  if (!decision) return null;
+  return ["approve_as_is", "accept_risk", "split_follow_up", "proceed_to_merge_after_supervisor_fix"].includes(decision.type) ? decision : null;
+}
+
+export function isReviewSplitRecommendationOpen(state: Pick<IssueState, "splitRecommendation" | "humanDecisions" | "lastHumanDecision"> | null | undefined): boolean {
+  return Boolean(state?.splitRecommendation?.recommended && !reviewSupervisorMergeDecision(state));
 }
 
 function pushIf(signals: ReviewBudgetSignal[], condition: boolean, name: string, classification: ReviewBudgetSignal["classification"], current: number, threshold: number, summary: string): void {
