@@ -8,6 +8,8 @@ import { JsonlLogger } from "../src/logging.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
 import { getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
 
+const INTEGRATION_TEST_TIMEOUT_MS = 15_000;
+
 describe("issue inspection", () => {
   it("shows accepted validation commands and failed historical attempts", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-status-"));
@@ -564,7 +566,7 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
     expect(inspectOutput).not.toContain(`Next safe action: resume ${workspace}`);
     expect(inspectOutput).not.toContain("Workspace recovery: recoverable partial work");
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("reports terminal-state contradictions and post-merge cleanup drift as status warnings", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-drift-"));

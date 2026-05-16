@@ -2016,8 +2016,12 @@ export class Orchestrator {
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
     let state = await stateStore.read(issue.identifier);
     await this.finishOpenRunPhase(state?.lastRunId, issue, "human-wait", "completed", timingStartNoLaterThan(issue.updated_at, timingStartedAt), { reason: "issue entered merge state" });
-    if (this.config.review.enabled && state?.reviewStatus !== "approved" && !reviewSupervisorMergeDecision(state)) {
-      state = (await this.ingestHumanDecisions(issue, state)) ?? state;
+    if (this.config.review.enabled) {
+      const needsSupervisorDecision = state?.reviewStatus !== "approved" && !reviewSupervisorMergeDecision(state);
+      const needsFreshSplitDecision = isReviewSplitRecommendationOpen(state);
+      if (needsSupervisorDecision || needsFreshSplitDecision) {
+        state = (await this.ingestHumanDecisions(issue, state)) ?? state;
+      }
     }
     const mergeTarget = mergeTargetPullRequest(state);
     const mergePr = mergeTarget?.url ?? null;

@@ -2,9 +2,9 @@ import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateReviewBudget, prepareReviewFollowUpProposal } from "../src/review-budget.js";
+import { evaluateReviewBudget, isReviewSplitRecommendationOpen, prepareReviewFollowUpProposal } from "../src/review-budget.js";
 import { fakeIssue, fakeServiceConfig } from "./fixtures/agentos-fakes.js";
-import type { ReviewFinding, ServiceConfig } from "../src/types.js";
+import type { HumanDecisionState, ReviewFinding, ReviewSplitRecommendation, ServiceConfig } from "../src/types.js";
 
 describe("review budget", () => {
   it("keeps narrow mechanical findings in the bounded retry path", () => {
@@ -173,6 +173,83 @@ describe("review budget", () => {
     );
   });
 
+  it("emits mechanical fixer and finding-count signals without recommending split work", () => {
+    const result = evaluateReviewBudget({
+      issue: fakeIssue(),
+      config: config({ maxFixerIterations: 1, maxBlockingFindings: 2, maxP1P2Findings: 1, maxReviewIterations: 5 }),
+      iteration: 2,
+      reviewStartedAt: "2026-05-16T00:00:00.000Z",
+      now: "2026-05-16T00:00:02.000Z",
+      changedFiles: ["src/orchestrator.ts"],
+      previousFindings: [],
+      currentFindings: [
+        finding({ reviewer: "self", severity: "P1", file: "src/orchestrator.ts", line: 10, body: "Narrow deterministic branch still fails.", findingHash: "mechanical-1" }),
+        finding({ reviewer: "tests", severity: "P2", file: "tests/orchestrator.test.ts", line: 20, body: "Narrow assertion needs updating.", findingHash: "mechanical-2" }),
+        finding({ reviewer: "correctness", severity: "P0", file: "src/orchestrator.ts", line: 30, body: "Narrow null handling bug.", findingHash: "mechanical-3" })
+      ],
+      repeatedFindingHashes: [],
+      reviewTokenTotal: 1000,
+      fixerIterations: 1,
+      validation: undefined
+    });
+
+    expect(result.budget.status).toBe("exceeded");
+    expect(result.shouldRecommendSplit).toBe(false);
+    expect(result.budget.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "fixer_iteration_count", classification: "mechanical", current: 1, threshold: 1 }),
+        expect.objectContaining({ name: "blocking_finding_count", classification: "mechanical", current: 3, threshold: 2 }),
+        expect.objectContaining({ name: "p1_p2_finding_count", classification: "mechanical", current: 2, threshold: 1 })
+      ])
+    );
+  });
+
+  it("emits broad fixer and finding-count signals as split work", () => {
+    const result = evaluateReviewBudget({
+      issue: fakeIssue(),
+      config: config({ maxFixerIterations: 1, maxBlockingFindings: 2, maxP1P2Findings: 1, maxReviewIterations: 5 }),
+      iteration: 2,
+      reviewStartedAt: "2026-05-16T00:00:00.000Z",
+      now: "2026-05-16T00:00:02.000Z",
+      changedFiles: ["src/orchestrator.ts"],
+      previousFindings: [],
+      currentFindings: [
+        finding({ reviewer: "architecture", severity: "P1", file: "src/orchestrator.ts", line: 10, body: "Architecture lifecycle boundary is still too broad.", findingHash: "broad-1" }),
+        finding({ reviewer: "architecture", severity: "P2", file: "src/status.ts", line: 20, body: "Status workflow ownership remains broad.", findingHash: "broad-2" }),
+        finding({ reviewer: "architecture", severity: "P0", file: "src/workflow.ts", line: 30, body: "Workflow orchestration scope is too broad.", findingHash: "broad-3" })
+      ],
+      repeatedFindingHashes: [],
+      reviewTokenTotal: 1000,
+      fixerIterations: 1,
+      validation: undefined
+    });
+
+    expect(result.shouldRecommendSplit).toBe(true);
+    expect(result.splitRecommendation?.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "fixer_iteration_count", classification: "broad", current: 1, threshold: 1 }),
+        expect.objectContaining({ name: "blocking_finding_count", classification: "broad", current: 3, threshold: 2 }),
+        expect.objectContaining({ name: "p1_p2_finding_count", classification: "broad", current: 2, threshold: 1 })
+      ])
+    );
+  });
+
+  it("keeps split recommendations open until a newer supervisor decision is recorded", () => {
+    const recommendation: ReviewSplitRecommendation = {
+      recommended: true,
+      action: "recommend-only",
+      reason: "review budget exceeded for broad or non-mechanical signals",
+      summary: "Recommend split or follow-up work for AG-1: repeated_broad_categories.",
+      signals: [{ name: "repeated_broad_categories", classification: "broad", current: 2, threshold: 2, summary: "Repeated broad review categories: architecture." }],
+      recordedAt: "2026-05-16T00:05:00.000Z"
+    };
+    const oldDecision = decision({ type: "approve_as_is", decidedAt: "2026-05-16T00:01:00.000Z" });
+    const freshDecision = decision({ type: "split_follow_up", decidedAt: "2026-05-16T00:06:00.000Z" });
+
+    expect(isReviewSplitRecommendationOpen({ splitRecommendation: recommendation, humanDecisions: [oldDecision], lastHumanDecision: oldDecision })).toBe(true);
+    expect(isReviewSplitRecommendationOpen({ splitRecommendation: recommendation, humanDecisions: [oldDecision, freshDecision], lastHumanDecision: freshDecision })).toBe(false);
+  });
+
   it("prepares a linked follow-up proposal when configured", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-review-budget-proposal-"));
     const issue = fakeIssue({ url: "https://linear.test/AG-1" });
@@ -238,6 +315,20 @@ function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
     line: 1,
     body: "Finding body.",
     findingHash: "finding",
+    ...overrides
+  };
+}
+
+function decision(overrides: Partial<HumanDecisionState> = {}): HumanDecisionState {
+  return {
+    type: "approve_as_is",
+    source: "linear-comment",
+    trusted: true,
+    actor: "Supervisor",
+    actorId: "user-supervisor",
+    actorEmail: "supervisor@example.com",
+    commentId: "comment-supervisor",
+    decidedAt: "2026-05-16T00:00:00.000Z",
     ...overrides
   };
 }

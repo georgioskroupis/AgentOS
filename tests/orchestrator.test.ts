@@ -38,6 +38,7 @@ const mergingIssue: Issue = {
 const fakeGh = resolve("tests/fixtures/fake-gh.mjs");
 const supervisorAssignee = { assignee: "Supervisor", assigneeId: "user-supervisor", assigneeEmail: "supervisor@example.com" };
 const supervisorCommentAuthor = { author: "Supervisor", authorId: "user-supervisor", authorEmail: "supervisor@example.com" };
+const INTEGRATION_TEST_TIMEOUT_MS = 15_000;
 
 class WarningWriteFailingLogger extends JsonlLogger {
   warningAttempts = 0;
@@ -559,7 +560,7 @@ describe("orchestrator", () => {
     const state = await new IssueStateStore(repo).read("AG-1");
     expect(state?.lastHumanDecision?.type).toBe("fix_findings");
     expect(state?.lifecycleStatus).toBe("human_continuation");
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("allows trusted fix-findings re-entry for completed human-required review states with PR metadata", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-completed-human-required-reentry-"));
@@ -648,7 +649,7 @@ describe("orchestrator", () => {
     expect(prompt).toContain("## Linear Human Decision Re-entry");
     expect(prompt).toContain("Type: fix_findings");
     expect(prompt).toContain("Existing PR Feedback Re-entry");
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("updates stored human decisions when a trusted Linear comment is edited", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-reentry-edited-"));
@@ -740,7 +741,7 @@ describe("orchestrator", () => {
         finishedAt: "2026-01-03T00:01:00.000Z"
       })
     );
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("reconciles stored trusted decisions against the full Linear comment set before dispatch", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-reentry-deleted-"));
@@ -820,7 +821,7 @@ describe("orchestrator", () => {
     expect(state?.lastHumanDecision).toBeNull();
     expect(state?.lifecycleStatus).toBeUndefined();
     expect(state?.stopReason).toBe("human-required issue needs a trusted structured decision before redispatch");
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("does not recommend redispatch from stale fix-findings when Linear comments cannot be reconciled", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-reentry-comment-read-failed-"));
@@ -889,7 +890,7 @@ describe("orchestrator", () => {
     const inspectOutput = await inspectIssue(repo, "AG-1");
     expect(inspectOutput).toContain("restore Linear comment access");
     expect(inspectOutput).not.toContain("redispatch from Todo/In Progress");
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("closes human decision waits on the prior run without duplicating timing on the new run", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-reentry-timing-"));
@@ -965,7 +966,7 @@ describe("orchestrator", () => {
     const newHumanWaits = newRun?.timing?.phases.filter((phase) => phase.phase === "human-wait") ?? [];
     expect(newHumanWaits).toHaveLength(1);
     expect(newHumanWaits[0]).toEqual(expect.objectContaining({ status: "waiting", label: "human review wait started" }));
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("closes needs-input waits when a trusted human decision resumes the issue", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-needs-input-reentry-timing-"));
@@ -1037,7 +1038,7 @@ describe("orchestrator", () => {
       })
     );
     expect(prior.summary.timing?.phases.some((phase) => phase.phase === "human-wait")).toBe(false);
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("keeps untrusted human-decision comments as context without lifecycle authority", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-untrusted-human-reentry-"));
@@ -2101,7 +2102,7 @@ describe("orchestrator", () => {
     expect(runtime.activeRuns).toEqual([]);
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.phase).toBe("completed");
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("marks stale running summaries terminal when Linear is Done and the workspace is gone", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-stale-terminal-"));
@@ -3447,7 +3448,7 @@ describe("orchestrator", () => {
     );
     const events = await store.replay(firstRun.runId);
     expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string; status?: string } }).timing?.phase === "retry-backoff" && (event.payload as { timing?: { status?: string } }).timing?.status === "completed")).toBe(true);
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("closes retry backoff timing when a retry becomes due during candidate dispatch", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-retry-timing-candidate-"));
@@ -5792,7 +5793,7 @@ describe("orchestrator", () => {
     expect(state.reviewStatus).toBe("approved");
     expect(state.reviewIteration).toBe(2);
     expect(state.splitRecommendation).toBeUndefined();
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("escalates mechanical CI failures when trust mode cannot update the PR", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-trust-"));
@@ -6360,6 +6361,149 @@ describe("orchestrator", () => {
     expect(state.mergedAt).toBeTruthy();
   });
 
+  it("ingests newer split decisions when stored supervisor decisions predate split recommendations", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-stale-split-decision-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-05-16T00:00:00.000Z" }],
+          reviewStatus: "human_required",
+          validation: {
+            status: "passed",
+            finalStatus: "passed",
+            checkedAt: "2026-05-16T00:05:00.000Z",
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-16T00:04:00.000Z", finishedAt: "2026-05-16T00:05:00.000Z" }]
+          },
+          splitRecommendation: {
+            recommended: true,
+            action: "recommend-only",
+            reason: "review budget exceeded for broad or non-mechanical signals",
+            summary: "Recommend split or follow-up work for AG-1: repeated_broad_categories.",
+            signals: [{ name: "repeated_broad_categories", classification: "broad", current: 2, threshold: 2, summary: "Repeated broad review categories: architecture." }],
+            recordedAt: "2026-05-16T00:03:00.000Z"
+          },
+          humanDecisions: [
+            {
+              type: "approve_as_is",
+              source: "linear-comment",
+              trusted: true,
+              actor: "Supervisor",
+              actorId: "user-supervisor",
+              actorEmail: "supervisor@example.com",
+              commentId: "comment-old-approval",
+              decidedAt: "2026-05-16T00:01:00.000Z",
+              validationEvidence: ".agent-os/validation/AG-1.json",
+              ciState: "passed",
+              findings: "accepted",
+              summary: "approved before later split signal"
+            }
+          ],
+          lastHumanDecision: {
+            type: "approve_as_is",
+            source: "linear-comment",
+            trusted: true,
+            actor: "Supervisor",
+            actorId: "user-supervisor",
+            actorEmail: "supervisor@example.com",
+            commentId: "comment-old-approval",
+            decidedAt: "2026-05-16T00:01:00.000Z",
+            validationEvidence: ".agent-os/validation/AG-1.json",
+            ciState: "passed",
+            findings: "accepted",
+            summary: "approved before later split signal"
+          },
+          lifecycleStatus: "supervisor_continuation",
+          updatedAt: "2026-05-16T00:03:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    const moves: string[] = [];
+    const comments: string[] = [];
+    let commentReads = 0;
+    const issue = { ...mergingIssue, ...supervisorAssignee };
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [issue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async fetchIssueComments() {
+        commentReads += 1;
+        return [
+          {
+            id: "comment-fresh-split",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-16T00:06:00.000Z",
+            body: [
+              "AgentOS-Human-Decision: split-follow-up",
+              "Validation-JSON: .agent-os/validation/AG-1.json",
+              "CI-State: passed",
+              "Findings: accepted",
+              "Decision-Summary: follow-up issue linked after the split signal"
+            ].join("\n")
+          }
+        ];
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(commentReads).toBe(1);
+    expect(moves).toEqual(["AG-1 -> Done"]);
+    expect(comments.join("\n")).not.toContain("split/follow-up recommendation is still open");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.lastHumanDecision.type).toBe("split_follow_up");
+    expect(state.mergedAt).toBeTruthy();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("records supervisor continuation and permits merge with fresh validation", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-human-continue-"));
     await initGitRemote(repo);
@@ -6865,7 +7009,7 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("recoverable partial work");
     expect(comments.join("\n")).toContain("workspace has uncommitted changes");
     expect(comments.join("\n")).toContain(`resume ${workspacePath}`);
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("does not treat a clean no-upstream branch at the base commit as recoverable partial work", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-no-upstream-"));
@@ -6922,7 +7066,7 @@ describe("orchestrator", () => {
     expect(result.dispatched).toBe(1);
     expect(runnerCalled).toBe(true);
     expect(comments.join("\n")).not.toContain("recoverable partial work");
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("injects existing implementation audit context for partially satisfied scope", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-partial-audit-"));

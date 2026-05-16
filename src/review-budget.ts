@@ -145,7 +145,17 @@ export function reviewSupervisorMergeDecision(state: Pick<IssueState, "humanDeci
 }
 
 export function isReviewSplitRecommendationOpen(state: Pick<IssueState, "splitRecommendation" | "humanDecisions" | "lastHumanDecision"> | null | undefined): boolean {
-  return Boolean(state?.splitRecommendation?.recommended && !reviewSupervisorMergeDecision(state));
+  const recommendation = state?.splitRecommendation;
+  if (!recommendation?.recommended) return false;
+  const decision = reviewSupervisorMergeDecision(state);
+  return !decision || !decisionClosesSplitRecommendation(decision, recommendation);
+}
+
+function decisionClosesSplitRecommendation(decision: HumanDecisionState, recommendation: ReviewSplitRecommendation): boolean {
+  const decidedAt = Date.parse(decision.decidedAt);
+  const recordedAt = Date.parse(recommendation.recordedAt);
+  if (!Number.isFinite(decidedAt) || !Number.isFinite(recordedAt)) return false;
+  return decidedAt > recordedAt;
 }
 
 function pushIf(signals: ReviewBudgetSignal[], condition: boolean, name: string, classification: ReviewBudgetSignal["classification"], current: number, threshold: number, summary: string): void {

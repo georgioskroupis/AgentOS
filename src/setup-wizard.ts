@@ -235,6 +235,7 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
   const github = objectRecord(config.github);
   const review = objectRecord(config.review);
   const reviewBudget = objectRecord(review.budget);
+  const reviewMaxIterations = typeof review.max_iterations === "number" ? review.max_iterations : 3;
   return {
     ...config,
     trust_mode: typeof config.trust_mode === "string" ? config.trust_mode : "ci-locked",
@@ -298,7 +299,7 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
       ...review,
       enabled: typeof review.enabled === "boolean" ? review.enabled : true,
       target_mode: review.target_mode === "primary" ? "primary" : "merge-eligible",
-      max_iterations: typeof review.max_iterations === "number" ? review.max_iterations : 3,
+      max_iterations: reviewMaxIterations,
       required_reviewers: stringList(review.required_reviewers, ["self", "correctness", "tests", "architecture"]),
       optional_reviewers: stringList(review.optional_reviewers, ["security"]),
       require_all_blocking_resolved: typeof review.require_all_blocking_resolved === "boolean" ? review.require_all_blocking_resolved : true,
@@ -308,8 +309,8 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
         enabled: typeof reviewBudget.enabled === "boolean" ? reviewBudget.enabled : true,
         mode: reviewBudget.mode === "prepare-draft" ? "prepare-draft" : "recommend-only",
         max_review_elapsed_ms: typeof reviewBudget.max_review_elapsed_ms === "number" ? reviewBudget.max_review_elapsed_ms : 1_800_000,
-        max_review_iterations: typeof reviewBudget.max_review_iterations === "number" ? reviewBudget.max_review_iterations : 3,
-        max_fixer_iterations: typeof reviewBudget.max_fixer_iterations === "number" ? reviewBudget.max_fixer_iterations : 2,
+        max_review_iterations: typeof reviewBudget.max_review_iterations === "number" ? reviewBudget.max_review_iterations : reviewMaxIterations,
+        max_fixer_iterations: typeof reviewBudget.max_fixer_iterations === "number" ? reviewBudget.max_fixer_iterations : Math.max(0, reviewMaxIterations - 1),
         max_blocking_findings: typeof reviewBudget.max_blocking_findings === "number" ? reviewBudget.max_blocking_findings : 10,
         max_p1_p2_findings: typeof reviewBudget.max_p1_p2_findings === "number" ? reviewBudget.max_p1_p2_findings : 5,
         max_changed_files: typeof reviewBudget.max_changed_files === "number" ? reviewBudget.max_changed_files : 40,

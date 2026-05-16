@@ -117,6 +117,59 @@ describe("setup wizard", () => {
     expect(workflow).toContain('after_create: bash "$AGENT_OS_SOURCE_REPO/scripts/agent-bootstrap-worktree.sh"');
   });
 
+  it("derives review budget iteration defaults from existing review max iterations", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-setup-review-budget-defaults-"));
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "review:",
+        "  max_iterations: 5",
+        "---",
+        "",
+        "# AgentOS Workflow",
+        "",
+        "Ralph Wiggum",
+        "AgentOS-Outcome: implemented",
+        ""
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(join(repo, "package.json"), JSON.stringify({ name: "budget-defaults", scripts: { test: "node --test" } }), "utf8");
+
+    await runSetupWizard({
+      projectPath: repo,
+      dryRun: false,
+      mode: "existing",
+      project: "Budget Defaults Project",
+      team: "VER",
+      useCodexSummary: false,
+      commit: false,
+      interactive: false,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" },
+      verify: false,
+      linearClient: {
+        async listTeams() {
+          return [{ id: "team-1", key: "VER", name: "Verity" }];
+        },
+        async findProject() {
+          return { id: "project-1", name: "Budget Defaults Project", slugId: "budget-defaults" };
+        },
+        async createProject() {
+          throw new Error("not needed");
+        },
+        async ensureWorkflowStates() {
+          return { states: [], created: [], missing: [] };
+        }
+      }
+    });
+
+    const workflow = await readFile(join(repo, "WORKFLOW.md"), "utf8");
+    expect(workflow).toContain("max_iterations: 5");
+    expect(workflow).toContain("max_review_iterations: 5");
+    expect(workflow).toContain("max_fixer_iterations: 4");
+  });
+
   it("can install a local harness without touching Linear", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-setup-offline-"));
 
