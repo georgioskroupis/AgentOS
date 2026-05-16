@@ -21,8 +21,8 @@ import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueSt
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
-import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes, reviewArtifactPath, reviewArtifactRelativePath, reviewerPrompt } from "./review.js";
-import { runReviewerWithArtifactRetry } from "./reviewer-runner.js";
+import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
+import { reviewerConcurrencyFor, runReviewerIteration } from "./reviewer-scheduler.js";
 import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
@@ -31,8 +31,7 @@ import { logPreDispatchScopeReport, type PreDispatchScopeReport } from "./scope-
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStateReviewer, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
-import type { ReviewerArtifact } from "./review.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 export interface OrchestratorOptions {
   repoRoot: string;
   workflowPath: string;
@@ -1608,6 +1607,7 @@ export class Orchestrator {
         `- Review target mode: ${reviewTargetMode}`,
         initialReviewTargetList,
         `- Required reviewers: ${this.config.review.requiredReviewers.join(", ")}`,
+        `- Reviewer concurrency: ${this.config.review.parallelReviewers ? `up to ${this.config.review.maxConcurrentReviewers}` : "sequential"}`,
         `- Max iterations: ${this.config.review.maxIterations}`
       ].join("\n")
     );
@@ -1632,7 +1632,7 @@ export class Orchestrator {
       const reviewPr = reviewTargets[0].url;
       const reviewTargetUrls = reviewTargets.map((target) => target.url);
       const reviewTargetList = formatPullRequestTargets(reviewTargets);
-      const workspaceReviewDir = await ensureReviewIterationDir(workspace.path, issue.identifier, iteration);
+      await ensureReviewIterationDir(workspace.path, issue.identifier, iteration);
       const githubContext = await readGitHubReviewContext(reviewTargets, { githubCommand: this.config.github.command, repoRoot: this.options.repoRoot }).catch(async (error: Error) => {
         latestState = await this.recordIssueState(issue, {
           phase: "review",
@@ -1667,69 +1667,40 @@ export class Orchestrator {
         return latestState;
       }
       const reviewers = this.reviewersFor([...new Set(githubContext.entries.flatMap((entry) => entry.status.changedFiles))]);
-      const artifacts: Array<{ artifact: ReviewerArtifact; path: string }> = [];
-      let terminalReviewerFailure: ReviewRunnerFailure | null = null;
-      let terminalReviewerArtifactPath: string | null = null;
+      const reviewerConcurrency = reviewerConcurrencyFor(this.config, reviewers.length);
+      const parallelReviewers = reviewerConcurrency > 1;
 
       await this.logger.write({
         type: "review_started",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
         message: `iteration ${iteration}`,
-        payload: { prUrls: reviewTargetUrls, reviewers }
+        payload: { prUrls: reviewTargetUrls, reviewers, reviewerConcurrency, mode: parallelReviewers ? "parallel" : "sequential" }
       });
 
-      for (const reviewer of reviewers) {
-        const artifactRelativePath = reviewArtifactRelativePath(issue.identifier, iteration, reviewer);
-        const workspaceArtifactPath = join(workspace.path, artifactRelativePath);
-        const canonicalArtifactPath = reviewArtifactPath(repoRoot, issue.identifier, iteration, reviewer);
-        const prompt = reviewerPrompt({
-          issue,
-          prUrl: reviewPr,
-          reviewTargets: reviewTargetUrls,
-          iteration,
-          reviewer,
-          artifactPath: artifactRelativePath,
-          githubSummary: githubContext.summary,
-          feedbackSummary: githubContext.feedback,
-          contextPack: buildTargetedContextPack({ kind: "reviewer", issue, state: latestState, pullRequests: githubContext.entries, findings: previousFindings, validation: latestState?.validation, feedback: githubContext.feedback, artifactRefs: [artifactRelativePath], runId, reviewer, iteration })
-        });
-        const outcome = await runReviewerWithArtifactRetry({
-          issue,
-          prompt,
-          attempt,
-          workspace,
-          workspaceReviewDir,
-          workspaceArtifactPath,
-          canonicalArtifactPath,
-          artifactRelativePath,
-          reviewer,
-          iteration,
-          signal,
-          config: this.config,
-          runner: this.runner,
-          logger: this.logger,
-          onActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
-        });
-        reviewRunnerFailures = [...reviewRunnerFailures, ...outcome.failures];
-        if (outcome.artifact) {
-          artifacts.push({ artifact: outcome.artifact, path: canonicalArtifactPath });
-        }
-        if (outcome.terminalFailure) {
-          terminalReviewerFailure = outcome.terminalFailure;
-          terminalReviewerArtifactPath = outcome.canonicalArtifactPath;
-          break;
-        }
-        for (const finding of outcome.artifact?.findings ?? []) {
-          await this.logger.write({
-            type: "review_finding",
-            issueId: issue.id,
-            issueIdentifier: issue.identifier,
-            message: finding.body,
-            payload: finding
-          });
-        }
-      }
+      const reviewerResult = await runReviewerIteration({
+        issue,
+        iteration,
+        reviewers,
+        reviewPr,
+        reviewTargetUrls,
+        githubContext,
+        previousFindings,
+        latestState,
+        workspace,
+        repoRoot,
+        attempt,
+        signal,
+        runId,
+        config: this.config,
+        runner: this.runner,
+        logger: this.logger,
+        onActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
+      });
+      reviewRunnerFailures = [...reviewRunnerFailures, ...reviewerResult.reviewRunnerFailures];
+      const artifacts = reviewerResult.artifacts;
+      const terminalReviewerFailure = reviewerResult.terminalReviewerFailure;
+      const reviewerStates = reviewerResult.reviewerStates;
 
       const validationFinding = validationEvidenceFinding(latestState?.validation);
       const findings = [
@@ -1754,20 +1725,6 @@ export class Orchestrator {
           .map((finding) => finding.findingHash)
           .filter((hash) => !currentBlockingHashes.has(hash))
       ];
-      const reviewerStates: ReviewStateReviewer[] = artifacts.map((entry) => ({
-        name: entry.artifact.reviewer,
-        decision: entry.artifact.decision,
-        iteration,
-        artifactPath: entry.path
-      }));
-      if (terminalReviewerFailure) {
-        reviewerStates.push({
-          name: terminalReviewerFailure.reviewer,
-          decision: "human_required",
-          iteration,
-          artifactPath: terminalReviewerArtifactPath ?? terminalReviewerFailure.artifactPath
-        });
-      }
       const humanRequired =
         Boolean(terminalReviewerFailure) ||
         artifacts.some((entry) => entry.artifact.decision === "human_required") ||

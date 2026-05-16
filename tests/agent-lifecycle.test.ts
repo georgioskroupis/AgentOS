@@ -469,7 +469,10 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
       requiredReviewers: ["self", "correctness", "tests", "architecture"],
       optionalReviewers: ["security"],
       requireAllBlockingResolved: true,
-      blockingSeverities: ["P0", "P1", "P2"]
+      blockingSeverities: ["P0", "P1", "P2"],
+      parallelReviewers: false,
+      maxConcurrentReviewers: 1,
+      skipOptionalReviewersAfterBlockingRequired: false
     }
   };
 }
