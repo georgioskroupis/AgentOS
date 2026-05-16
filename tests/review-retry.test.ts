@@ -181,6 +181,46 @@ describe("reviewer artifact retry", () => {
     expect(state.reviewers.map((reviewer: { name: string }) => reviewer.name)).toEqual(["self", "correctness"]);
   });
 
+  it("keeps parallel retry failures and artifact paths deterministic when reviewers complete out of order", async () => {
+    const scenario = await setupReviewScenario({
+      requiredReviewers: ["self", "correctness", "tests"],
+      maxRetryAttempts: 1,
+      parallelReviewers: true,
+      maxConcurrentReviewers: 3
+    });
+    const attempts = new Map<string, number>();
+    const firstFailedAttemptsCompleted: string[] = [];
+    const canonicalArtifactPath = (reviewer: string) => join(scenario.repo, ".agent-os", "reviews", "AG-1", "iteration-1", `${reviewer}.json`);
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      const count = increment(attempts, reviewer);
+      if ((reviewer === "self" || reviewer === "tests") && count === 1) {
+        await delay(reviewer === "self" ? 30 : 5);
+        firstFailedAttemptsCompleted.push(reviewer);
+        return { status: "succeeded" };
+      }
+      await delay(reviewer === "correctness" ? 10 : 1);
+      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      return { status: "succeeded" };
+    });
+
+    const state = await scenario.readState();
+    expect(firstFailedAttemptsCompleted).toEqual(["tests", "self"]);
+    expect(attempts.get("self")).toBe(2);
+    expect(attempts.get("correctness")).toBe(1);
+    expect(attempts.get("tests")).toBe(2);
+    expect(state.reviewStatus).toBe("approved");
+    expect(state.reviewRunnerFailures).toEqual([
+      expect.objectContaining({ reviewer: "self", reason: "missing_artifact", retryable: true, artifactPath: canonicalArtifactPath("self") }),
+      expect.objectContaining({ reviewer: "tests", reason: "missing_artifact", retryable: true, artifactPath: canonicalArtifactPath("tests") })
+    ]);
+    expect(state.reviewers).toEqual([
+      expect.objectContaining({ name: "self", decision: "approved", artifactPath: canonicalArtifactPath("self") }),
+      expect.objectContaining({ name: "correctness", decision: "approved", artifactPath: canonicalArtifactPath("correctness") }),
+      expect.objectContaining({ name: "tests", decision: "approved", artifactPath: canonicalArtifactPath("tests") })
+    ]);
+  });
+
   it("aggregates blocking parallel findings in configured reviewer order", async () => {
     const scenario = await setupReviewScenario({
       requiredReviewers: ["self", "correctness"],
