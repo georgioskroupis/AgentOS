@@ -159,6 +159,34 @@ describe("reviewer artifact retry", () => {
       expect.objectContaining({ classification: "non_mechanical", reason: "human_input_required", retryable: false })
     ]);
   });
+
+  it("escalates non-mechanical reviewer failures even when a fresh artifact exists", async () => {
+    const scenario = await setupReviewScenario({ requiredReviewers: ["self"], maxRetryAttempts: 3 });
+    const attempts = new Map<string, number>();
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      increment(attempts, reviewer);
+      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      return { status: "failed", error: "codex_user_input_request_denied: reviewer requested input" };
+    });
+
+    const state = await scenario.readState();
+    expect(attempts.get("self")).toBe(1);
+    expect(state.reviewStatus).toBe("human_required");
+    expect(state.reviewers).toEqual([expect.objectContaining({ name: "self", decision: "human_required" })]);
+    expect(state.reviewRunnerFailures).toEqual([
+      expect.objectContaining({
+        classification: "non_mechanical",
+        reason: "human_input_required",
+        resultStatus: "failed",
+        retryable: false
+      })
+    ]);
+
+    const canonicalArtifact = JSON.parse(await readFile(join(scenario.repo, ".agent-os", "reviews", "AG-1", "iteration-1", "self.json"), "utf8"));
+    expect(canonicalArtifact.decision).toBe("human_required");
+    expect(canonicalArtifact.findings[0].body).toContain("codex_user_input_request_denied");
+  });
 });
 
 async function setupReviewScenario(options: { requiredReviewers: string[]; maxRetryAttempts: number }): Promise<{

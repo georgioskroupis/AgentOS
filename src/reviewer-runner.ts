@@ -1,5 +1,5 @@
 import { readOnlyReviewConfig } from "./orchestrator-review-helpers.js";
-import { readReviewArtifactResult, reviewRunnerFailureArtifact, writeReviewArtifact } from "./review.js";
+import { readReviewArtifactResult, reviewArtifactSnapshot, reviewRunnerFailureArtifact, writeReviewArtifact } from "./review.js";
 import { isHumanInputStop } from "./run-errors.js";
 import type { AgentRunResult, AgentRunner, Issue, ReviewRunnerFailure, ServiceConfig, Workspace } from "./types.js";
 import type { JsonlLogger } from "./logging.js";
@@ -32,7 +32,7 @@ export async function runReviewerWithArtifactRetry(input: {
   const failures: ReviewRunnerFailure[] = [];
   const maxAttempts = input.config.agent.maxRetryAttempts + 1;
   for (let reviewerAttempt = 1; reviewerAttempt <= maxAttempts; reviewerAttempt += 1) {
-    const attemptStartedAtMs = Date.now();
+    const artifactBeforeAttempt = await reviewArtifactSnapshot(input.workspaceArtifactPath);
     const result = await input.runner.run({
       issue: input.issue,
       prompt: reviewerAttempt === 1 ? input.prompt : retryPrompt(input.prompt, input.artifactRelativePath, reviewerAttempt, failures[failures.length - 1]),
@@ -45,7 +45,21 @@ export async function runReviewerWithArtifactRetry(input: {
         void input.logger.write({ ...event, type: `review_${event.type}` });
       }
     });
-    const artifactResult = await readReviewArtifactResult(input.workspaceArtifactPath, input.reviewer, { notBeforeMs: attemptStartedAtMs });
+    const terminalRunnerFailure = nonMechanicalRunnerFailure(input, result, reviewerAttempt, maxAttempts);
+    if (terminalRunnerFailure) {
+      failures.push(terminalRunnerFailure);
+      await input.logger.write({
+        type: "review_runner_failed",
+        issueId: input.issue.id,
+        issueIdentifier: input.issue.identifier,
+        message: `${input.reviewer}: ${terminalRunnerFailure.reason}`,
+        payload: terminalRunnerFailure
+      });
+      await writeReviewArtifact(input.canonicalArtifactPath, reviewRunnerFailureArtifact(terminalRunnerFailure));
+      return { artifact: null, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: terminalRunnerFailure };
+    }
+
+    const artifactResult = await readReviewArtifactResult(input.workspaceArtifactPath, input.reviewer, { staleIfUnchangedFrom: artifactBeforeAttempt });
     if (artifactResult.ok) {
       await writeReviewArtifact(input.canonicalArtifactPath, artifactResult.artifact);
       if (result.status !== "succeeded") await logRunnerFailedWithArtifact(input, result, reviewerAttempt);
@@ -89,6 +103,32 @@ async function logRunnerFailedWithArtifact(input: Parameters<typeof runReviewerW
     message: `${input.reviewer}: ${result.error ?? result.status}`,
     payload: { reviewer: input.reviewer, iteration: input.iteration, attempt: reviewerAttempt, resultStatus: result.status }
   });
+}
+
+function nonMechanicalRunnerFailure(
+  input: Parameters<typeof runReviewerWithArtifactRetry>[0],
+  result: AgentRunResult,
+  reviewerAttempt: number,
+  maxAttempts: number
+): ReviewRunnerFailure | null {
+  const runnerMessage = result.error ?? result.status;
+  const runnerNeedsHuman = isHumanInputStop(runnerMessage);
+  if (!runnerNeedsHuman && result.status !== "canceled") return null;
+  return {
+    reviewer: input.reviewer,
+    iteration: input.iteration,
+    attempt: reviewerAttempt,
+    maxAttempts,
+    classification: "non_mechanical",
+    reason: runnerNeedsHuman ? "human_input_required" : "reviewer_canceled",
+    message: `Reviewer ${input.reviewer} returned ${result.status} before AgentOS could trust the review artifact. Runner result: ${runnerMessage}.`,
+    artifactPath: input.canonicalArtifactPath,
+    resultStatus: result.status,
+    ...(result.error ? { runnerError: result.error } : {}),
+    retryable: false,
+    exhausted: false,
+    recordedAt: new Date().toISOString()
+  };
 }
 
 function reviewerFailure(

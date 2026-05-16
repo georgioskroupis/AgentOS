@@ -26,6 +26,15 @@ export interface ReviewArtifactFailure {
 
 export type ReviewArtifactReadResult = { ok: true; artifact: ReviewerArtifact } | { ok: false; failure: ReviewArtifactFailure };
 
+export type ReviewArtifactSnapshot =
+  | { exists: false }
+  | {
+      exists: true;
+      mtimeMs: number;
+      size: number;
+      contentHash: string;
+    };
+
 export interface ReviewContext {
   issue: Issue;
   prUrl: string;
@@ -88,14 +97,45 @@ export async function readReviewArtifact(path: string, reviewer: string): Promis
   return result.ok ? result.artifact : humanRequiredReviewArtifact(reviewer, result.failure.summary, result.failure.body);
 }
 
-export async function readReviewArtifactResult(path: string, reviewer: string, options: { notBeforeMs?: number } = {}): Promise<ReviewArtifactReadResult> {
+export async function reviewArtifactSnapshot(path: string): Promise<ReviewArtifactSnapshot> {
+  if (!(await exists(path))) return { exists: false };
+  const artifactStat = await stat(path);
+  return {
+    exists: true,
+    mtimeMs: artifactStat.mtimeMs,
+    size: artifactStat.size,
+    contentHash: createHash("sha256").update(await readText(path)).digest("hex")
+  };
+}
+
+export async function readReviewArtifactResult(
+  path: string,
+  reviewer: string,
+  options: { notBeforeMs?: number; staleIfUnchangedFrom?: ReviewArtifactSnapshot } = {}
+): Promise<ReviewArtifactReadResult> {
   if (!(await exists(path))) {
     return {
       ok: false,
       failure: reviewArtifactFailure("missing_artifact", reviewer, path, "Reviewer did not produce the required machine-readable artifact.", `Reviewer ${reviewer} did not write ${path}.`)
     };
   }
-  if (options.notBeforeMs != null) {
+  const previousArtifact = options.staleIfUnchangedFrom;
+  if (previousArtifact?.exists) {
+    const artifactStat = await stat(path);
+    const contentHash = createHash("sha256").update(await readText(path)).digest("hex");
+    if (artifactStat.mtimeMs <= previousArtifact.mtimeMs && artifactStat.size === previousArtifact.size && contentHash === previousArtifact.contentHash) {
+      return {
+        ok: false,
+        failure: reviewArtifactFailure(
+          "stale_artifact",
+          reviewer,
+          path,
+          "Reviewer artifact was stale.",
+          `Reviewer ${reviewer} did not write a fresh review artifact at ${path}; the existing file was unchanged after this reviewer attempt.`
+        )
+      };
+    }
+  } else if (options.notBeforeMs != null) {
     const artifactStat = await stat(path);
     if (artifactStat.mtimeMs < options.notBeforeMs) {
       return {
