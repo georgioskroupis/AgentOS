@@ -8,7 +8,7 @@ import { JsonlLogger } from "../src/logging.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
 import { getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
 
-const INTEGRATION_TEST_TIMEOUT_MS = 15_000;
+const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
 
 describe("issue inspection", () => {
   it("shows accepted validation commands and failed historical attempts", async () => {

@@ -204,6 +204,36 @@ describe("review budget", () => {
     );
   });
 
+  it("does not treat narrow mechanical findings as broad because of status or workflow file paths", () => {
+    const result = evaluateReviewBudget({
+      issue: fakeIssue(),
+      config: config({ maxFixerIterations: 1, maxBlockingFindings: 1, maxP1P2Findings: 1, maxReviewIterations: 5 }),
+      iteration: 2,
+      reviewStartedAt: "2026-05-16T00:00:00.000Z",
+      now: "2026-05-16T00:00:02.000Z",
+      changedFiles: ["src/status.ts", "src/workflow.ts"],
+      previousFindings: [],
+      currentFindings: [
+        finding({ reviewer: "self", severity: "P1", file: "src/status.ts", line: 10, body: "Narrow null handling still fails.", findingHash: "mechanical-status-path" }),
+        finding({ reviewer: "tests", severity: "P2", file: "src/workflow.ts", line: 20, body: "Narrow assertion needs updating.", findingHash: "mechanical-workflow-path" })
+      ],
+      repeatedFindingHashes: [],
+      reviewTokenTotal: 1000,
+      fixerIterations: 1,
+      validation: undefined
+    });
+
+    expect(result.budget.status).toBe("exceeded");
+    expect(result.shouldRecommendSplit).toBe(false);
+    expect(result.budget.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "fixer_iteration_count", classification: "mechanical" }),
+        expect.objectContaining({ name: "blocking_finding_count", classification: "mechanical" }),
+        expect.objectContaining({ name: "p1_p2_finding_count", classification: "mechanical" })
+      ])
+    );
+  });
+
   it("emits broad fixer and finding-count signals as split work", () => {
     const result = evaluateReviewBudget({
       issue: fakeIssue(),

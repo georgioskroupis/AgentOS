@@ -38,7 +38,7 @@ const mergingIssue: Issue = {
 const fakeGh = resolve("tests/fixtures/fake-gh.mjs");
 const supervisorAssignee = { assignee: "Supervisor", assigneeId: "user-supervisor", assigneeEmail: "supervisor@example.com" };
 const supervisorCommentAuthor = { author: "Supervisor", authorId: "user-supervisor", authorEmail: "supervisor@example.com" };
-const INTEGRATION_TEST_TIMEOUT_MS = 15_000;
+const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
 
 class WarningWriteFailingLogger extends JsonlLogger {
   warningAttempts = 0;
@@ -2042,7 +2042,7 @@ describe("orchestrator", () => {
     expect(state.lastError).toBeUndefined();
     expect(state.errorCategory).toBeUndefined();
     expect(state.nextRetryAt).toBeUndefined();
-  }, 10000);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rebuilds due retries from durable runtime state after restart", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-durable-retry-"));

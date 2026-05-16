@@ -195,7 +195,7 @@ function blockingBroad(findings: ReviewFinding[], broadCategories: string[]): st
 }
 
 function broadCategoryForFinding(finding: ReviewFinding, broadCategories: string[]): string | null {
-  const text = `${finding.reviewer} ${finding.file ?? ""} ${finding.body}`.toLowerCase();
+  const text = `${finding.reviewer} ${finding.body}`.toLowerCase();
   return broadCategories.find((category) => text.includes(category.toLowerCase())) ?? null;
 }
 
