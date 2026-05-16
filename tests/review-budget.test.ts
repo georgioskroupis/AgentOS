@@ -204,18 +204,55 @@ describe("review budget", () => {
     );
   });
 
-  it("does not treat narrow mechanical findings as broad because of status or workflow file paths", () => {
+  it("does not treat narrow mechanical findings as broad because of status or workflow text", () => {
     const result = evaluateReviewBudget({
       issue: fakeIssue(),
-      config: config({ maxFixerIterations: 1, maxBlockingFindings: 1, maxP1P2Findings: 1, maxReviewIterations: 5 }),
+      config: config({ maxFixerIterations: 1, maxBlockingFindings: 1, maxP1P2Findings: 1, maxReviewIterations: 5, repeatedBroadCategoryThreshold: 2 }),
       iteration: 2,
       reviewStartedAt: "2026-05-16T00:00:00.000Z",
       now: "2026-05-16T00:00:02.000Z",
       changedFiles: ["src/status.ts", "src/workflow.ts"],
+      previousFindings: [finding({ reviewer: "self", severity: "P2", file: "src/status.ts", line: 8, body: "reviewStatus assertion failed in a narrow status formatter branch.", findingHash: "previous-mechanical-status-text" })],
+      currentFindings: [
+        finding({ reviewer: "self", severity: "P1", file: "src/status.ts", line: 10, body: "Status output omits reviewBudget.", findingHash: "mechanical-status-text" }),
+        finding({ reviewer: "tests", severity: "P2", file: "src/workflow.ts", line: 20, body: "WORKFLOW.md reviewStatus assertion failed for one narrow expectation.", findingHash: "mechanical-workflow-text" })
+      ],
+      repeatedFindingHashes: [],
+      reviewTokenTotal: 1000,
+      fixerIterations: 1,
+      validation: undefined
+    });
+
+    expect(result.budget.status).toBe("exceeded");
+    expect(result.shouldRecommendSplit).toBe(false);
+    expect(result.budget.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "fixer_iteration_count", classification: "mechanical" }),
+        expect.objectContaining({ name: "blocking_finding_count", classification: "mechanical" }),
+        expect.objectContaining({ name: "p1_p2_finding_count", classification: "mechanical" })
+      ])
+    );
+    expect(result.budget.signals.map((signal) => signal.name)).not.toContain("repeated_broad_categories");
+  });
+
+  it("keeps checks findings mechanical when CI text mentions workflow or status", () => {
+    const result = evaluateReviewBudget({
+      issue: fakeIssue(),
+      config: config({ maxFixerIterations: 1, maxBlockingFindings: 0, maxP1P2Findings: 0, maxReviewIterations: 5 }),
+      iteration: 2,
+      reviewStartedAt: "2026-05-16T00:00:00.000Z",
+      now: "2026-05-16T00:00:02.000Z",
+      changedFiles: [".github/workflows/ci.yml"],
       previousFindings: [],
       currentFindings: [
-        finding({ reviewer: "self", severity: "P1", file: "src/status.ts", line: 10, body: "Narrow null handling still fails.", findingHash: "mechanical-status-path" }),
-        finding({ reviewer: "tests", severity: "P2", file: "src/workflow.ts", line: 20, body: "Narrow assertion needs updating.", findingHash: "mechanical-workflow-path" })
+        finding({
+          reviewer: "checks",
+          severity: "P1",
+          file: ".github/workflows/ci.yml",
+          line: 12,
+          body: "GitHub workflow status check failed for npm run agent-check.",
+          findingHash: "mechanical-checks-workflow-status"
+        })
       ],
       repeatedFindingHashes: [],
       reviewTokenTotal: 1000,

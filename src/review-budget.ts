@@ -171,10 +171,10 @@ function elapsedSince(startedAt: string | undefined, now: string): number {
 }
 
 function classifyFinding(finding: ReviewFinding, broadCategories: string[]): ReviewBudgetSignal["classification"] {
-  if (broadCategoryForFinding(finding, broadCategories)) return "broad";
   if (finding.decision === "human_required") return "non_mechanical";
   if (finding.reviewer === "checks") return "mechanical";
-  if (finding.file && finding.line && finding.reviewer !== "architecture") return "mechanical";
+  if (finding.file && finding.line && finding.reviewer !== "architecture" && !explicitBroadCategoryForFinding(finding, broadCategories)) return "mechanical";
+  if (broadCategoryForFinding(finding, broadCategories)) return "broad";
   return "non_mechanical";
 }
 
@@ -195,8 +195,41 @@ function blockingBroad(findings: ReviewFinding[], broadCategories: string[]): st
 }
 
 function broadCategoryForFinding(finding: ReviewFinding, broadCategories: string[]): string | null {
-  const text = `${finding.reviewer} ${finding.body}`.toLowerCase();
-  return broadCategories.find((category) => text.includes(category.toLowerCase())) ?? null;
+  return categoryInText(finding.reviewer, broadCategories) ?? explicitBroadCategoryForFinding(finding, broadCategories);
+}
+
+function explicitBroadCategoryForFinding(finding: ReviewFinding, broadCategories: string[]): string | null {
+  const category = categoryInText(finding.body, broadCategories);
+  if (!category) return null;
+  return hasBroadScopeLanguage(finding.body) ? category : null;
+}
+
+function categoryInText(text: string, broadCategories: string[]): string | null {
+  return broadCategories.find((category) => new RegExp(`\\b${escapeRegExp(category.toLowerCase())}\\b`).test(text.toLowerCase())) ?? null;
+}
+
+function hasBroadScopeLanguage(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return [
+    /\bbroad\b/,
+    /\bscope\b/,
+    /\bscoped\b/,
+    /\bspans?\b/,
+    /\bacross\b/,
+    /\bcross[- ]cutting\b/,
+    /\bmultiple\b/,
+    /\bmany modules\b/,
+    /\bboundar(?:y|ies)\b/,
+    /\bownership\b/,
+    /\bdecompos(?:e|ition)\b/,
+    /\bsplit\b/,
+    /\bfollow[- ]up\b/,
+    /\brefactor\b/
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function lateNewP1P2Findings(input: ReviewBudgetEvaluationInput): number {
