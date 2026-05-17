@@ -119,6 +119,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.reviewRunnerFailures?.length ? `Review runner failures:\n${formatReviewRunnerFailures(state.reviewRunnerFailures)}` : "Review runner failures: none recorded",
     humanDecisionDetails(state),
     appProofDetails(state),
+    operatorRecoveryDetails(state),
     shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
     state ? `Next safe action: ${statusDiagnostics[0]?.nextAction ?? nextSafeAction(state, recovery)}` : null,
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
@@ -241,6 +242,22 @@ function appProofDetails(state: IssueState | null): string | null {
     `App proof: ${state.appProof.updatedAt}`,
     ...state.appProof.artifacts.map((artifact) => `- ${artifact.label}: ${artifact.value}`)
   ].join("\n");
+}
+
+function operatorRecoveryDetails(state: IssueState | null): string | null {
+  const recovery = state?.operatorRecovery;
+  if (!recovery) return null;
+  return [
+    `Operator recovery: ${recovery.recordedAt}`,
+    `- Branch: ${recovery.branch}`,
+    `- Head: ${shortSha(recovery.headSha)}`,
+    `- Handoff: ${recovery.handoffPath}`,
+    recovery.validationPath ? `- Validation: ${recovery.validationPath}` : null,
+    recovery.proofArtifacts.length ? `- Proof: ${recovery.proofArtifacts.map((artifact) => `${artifact.label}=${artifact.value}`).join(", ")}` : "- Proof: none recorded",
+    recovery.previousFailure?.lastError ? `- Previous failure: ${recovery.previousFailure.lastError}` : null
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
 }
 
 function commandLines(commands: ValidationCommandState[]): string {

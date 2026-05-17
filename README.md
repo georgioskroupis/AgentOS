@@ -165,6 +165,17 @@ state contradictions and post-merge cleanup drift are surfaced as status
 warnings so operators can reconcile durable state without starting duplicate
 work.
 
+### `recovery record <issue>`
+
+Records supervisor/operator recovery for clean partial work after a failed run.
+The command verifies the recovered worktree is clean and unambiguous, verifies
+the handoff's `Validation-JSON` evidence, records branch/head, handoff, and app
+proof artifacts in durable issue state, and clears stale retry/error metadata.
+
+```bash
+bin/agent-os recovery record VER-73 --repo .
+```
+
 ### `daemon status` and `daemon launch-command`
 
 Inspect durable daemon liveness and print the local dogfood launch command.

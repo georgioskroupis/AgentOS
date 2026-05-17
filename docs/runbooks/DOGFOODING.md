@@ -70,6 +70,16 @@ preserve the dirty or unpushed branch, rerun validation, and commit/push before
 updating the handoff or PR. Do not start a duplicate implementation until the
 existing workspace and PR state have been reconciled.
 
+When the recovered branch is clean and pushed, record the recovery locally:
+
+```bash
+bin/agent-os recovery record <issue> --repo .
+```
+
+The command refuses dirty, missing, detached, unpushed, or ambiguous worktree
+evidence and records the branch, handoff, validation, and proof artifacts so the
+old failure remains historical in `status` and `inspect`.
+
 If the output reports `planning_required`, create or attach a planning or
 decomposition artifact, or split the work into follow-up issues, before
 returning the issue to implementation. The orchestrator owns the pause and
