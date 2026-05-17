@@ -164,12 +164,15 @@ async function reviewArtifactFreshness(path: string, state: IssueState | null): 
 
   const labels: string[] = [];
   const stale: string[] = [];
+  const unknown: string[] = [];
   if (typeof parsed.iteration === "number" && Number.isInteger(parsed.iteration) && state?.reviewIteration != null) {
     const label = parsed.iteration === state.reviewIteration ? `iteration ${parsed.iteration} current` : `iteration ${parsed.iteration} stale; expected ${state.reviewIteration}`;
     labels.push(label);
     if (parsed.iteration !== state.reviewIteration) stale.push(label);
   } else if (state?.reviewIteration != null) {
     stale.push(`iteration missing; expected ${state.reviewIteration}`);
+  } else {
+    unknown.push("iteration comparison unavailable");
   }
   if (typeof parsed.runId === "string" && state?.lastRunId) {
     const label = parsed.runId === state.lastRunId ? `run ${parsed.runId} current` : `run ${parsed.runId} stale; expected ${state.lastRunId}`;
@@ -177,6 +180,8 @@ async function reviewArtifactFreshness(path: string, state: IssueState | null): 
     if (parsed.runId !== state.lastRunId) stale.push(label);
   } else if (state?.lastRunId) {
     stale.push(`run missing; expected ${state.lastRunId}`);
+  } else {
+    unknown.push("run comparison unavailable");
   }
   if (typeof parsed.headSha === "string" && state?.headSha) {
     const label = sameSha(parsed.headSha, state.headSha) ? `head ${shortSha(parsed.headSha)} current` : `head ${shortSha(parsed.headSha)} stale; expected ${shortSha(state.headSha)}`;
@@ -184,9 +189,12 @@ async function reviewArtifactFreshness(path: string, state: IssueState | null): 
     if (!sameSha(parsed.headSha, state.headSha)) stale.push(label);
   } else if (state?.headSha) {
     stale.push(`head missing; expected ${shortSha(state.headSha)}`);
+  } else {
+    unknown.push("head comparison unavailable");
   }
-  if (labels.length === 0 && stale.length === 0) return " [unknown: scope metadata missing]";
-  return stale.length ? ` [stale, non-authoritative: ${stale.join("; ")}]` : ` [current: ${labels.join("; ")}]`;
+  if (stale.length) return ` [stale, non-authoritative: ${[...stale, ...unknown].join("; ")}]`;
+  if (unknown.length) return ` [unknown, non-authoritative: ${[...labels, ...unknown].join("; ")}]`;
+  return ` [current: ${labels.join("; ")}]`;
 }
 
 function safeFileName(value: string): string {

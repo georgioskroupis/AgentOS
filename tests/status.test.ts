@@ -174,6 +174,42 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("iteration-2/architecture.json [stale, non-authoritative: run missing; expected run_current; head missing; expected current-head]");
   });
 
+  it("does not label partially scoped review artifacts current when run and head cannot be verified", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-partial-review-scope-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "review",
+          reviewStatus: "changes_requested",
+          reviewIteration: 2,
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeReviewArtifact(reviewArtifactPath(repo, "AG-1", 2, "self"), {
+      reviewer: "self",
+      decision: "approved",
+      iteration: 2,
+      findings: []
+    });
+
+    const output = await inspectIssue(repo, "AG-1");
+
+    expect(output).toContain("iteration-2/self.json [unknown, non-authoritative:");
+    expect(output).toContain("iteration 2 current");
+    expect(output).toContain("run comparison unavailable");
+    expect(output).toContain("head comparison unavailable");
+    expect(output).not.toContain("iteration-2/self.json [current:");
+  });
+
   it("does not label validation or CI heads current when no selected PR head is recorded", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-status-no-selected-head-"));
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
