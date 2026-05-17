@@ -126,47 +126,53 @@ describe("issue state handoff parsing", () => {
   it("keeps Linear human decisions authoritative only for trusted actors", () => {
     const comments = [
       {
-          id: "comment-1",
-          author: "Random User",
-          authorId: "user-random",
-          authorEmail: "random@example.com",
-          createdAt: "2026-05-05T00:00:00.000Z",
-          body: "AgentOS-Human-Decision: approve-as-is"
-        },
-        {
-          id: "comment-2",
-          author: "Supervisor",
-          authorId: "user-supervisor",
-          authorEmail: "supervisor@example.com",
-          createdAt: "2026-05-05T00:01:00.000Z",
-          body: "AgentOS-Human-Decision: fix-findings"
-        }
-      ];
+        id: "comment-1",
+        author: "Random User",
+        authorId: "user-random",
+        authorEmail: "random@example.com",
+        createdAt: "2026-05-05T00:00:00.000Z",
+        body: "AgentOS-Human-Decision: approve-as-is"
+      },
+      {
+        id: "comment-2",
+        author: "Supervisor",
+        authorId: "user-supervisor",
+        authorEmail: "supervisor@example.com",
+        createdAt: "2026-05-05T00:01:00.000Z",
+        body: "AgentOS-Human-Decision: fix-findings"
+      }
+    ];
 
-      expect(isTrustedHumanDecisionActor({ actor: "Supervisor", actorId: "user-supervisor" }, { trustedActors: ["user-supervisor"] })).toBe(true);
-      expect(isTrustedHumanDecisionActor("Supervisor", { trustedActors: ["Supervisor"] })).toBe(false);
-      expect(isTrustedHumanDecisionActor({ actor: "trusted@example.com", actorId: "user-random", actorEmail: "random@example.com" }, { trustedActors: ["trusted@example.com"] })).toBe(false);
-      expect(extractHumanDecisionsFromComments(comments, { trustedActors: ["user-supervisor"] }).map((decision) => decision.type)).toEqual([
-        "fix_findings"
-      ]);
-      expect(extractHumanDecisionsFromComments(comments, { issueAssigneeId: "user-random" }).map((decision) => decision.type)).toEqual([
-        "approve_as_is"
-      ]);
-      expect(
-        extractHumanDecisionsFromComments(
-          [
-            {
-              id: "comment-display-collision",
-              author: "trusted@example.com",
-              authorId: "user-random",
-              authorEmail: "random@example.com",
-              createdAt: "2026-05-05T00:02:00.000Z",
-              body: "AgentOS-Human-Decision: approve-as-is"
-            }
-          ],
-          { trustedActors: ["trusted@example.com"] }
-        )
-      ).toEqual([]);
+    expect(isTrustedHumanDecisionActor({ actor: "Supervisor", actorId: "user-supervisor" }, { trustedActors: ["user-supervisor"] })).toBe(true);
+    expect(isTrustedHumanDecisionActor("Supervisor", { trustedActors: ["Supervisor"] })).toBe(false);
+    expect(isTrustedHumanDecisionActor({ actor: "trusted@example.com", actorId: "user-random", actorEmail: "random@example.com" }, { trustedActors: ["trusted@example.com"] })).toBe(false);
+    const trustedActorDecisions = extractHumanDecisionsFromComments(comments, { trustedActors: ["user-supervisor"] });
+    expect(trustedActorDecisions.map((decision) => [decision.type, decision.trusted])).toEqual([
+      ["approve_as_is", false],
+      ["fix_findings", true]
+    ]);
+    expect(trustedActorDecisions.filter(isAuthoritativeHumanDecision).map((decision) => decision.type)).toEqual([
+      "fix_findings"
+    ]);
+    expect(extractHumanDecisionsFromComments(comments, { issueAssigneeId: "user-random" }).map((decision) => [decision.type, decision.trusted])).toEqual([
+      ["approve_as_is", true],
+      ["fix_findings", false]
+    ]);
+    expect(
+      extractHumanDecisionsFromComments(
+        [
+          {
+            id: "comment-display-collision",
+            author: "trusted@example.com",
+            authorId: "user-random",
+            authorEmail: "random@example.com",
+            createdAt: "2026-05-05T00:02:00.000Z",
+            body: "AgentOS-Human-Decision: approve-as-is"
+          }
+        ],
+        { trustedActors: ["trusted@example.com"] }
+      )
+    ).toMatchObject([{ type: "approve_as_is", trusted: false }]);
       expect(
         isAuthoritativeHumanDecision({
           type: "fix_findings",

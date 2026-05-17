@@ -217,6 +217,13 @@ behavior, fallback behavior, and the durable-recovery maturity acknowledgement
 are configured. `hybrid` splits safety bookkeeping from substantive workflow
 comments.
 
+VER-71 adds a dogfood fixture for the intended hybrid boundary: a worker can
+post substantive ticket updates and handoff content through repo-local Linear
+lifecycle tools, while scheduler-owned moves to running and review states remain
+authoritative. Structured decisions in that path retain actor, source, and
+authority metadata; unapproved authors are preserved as context-only evidence
+and do not drive lifecycle continuation.
+
 ## 6. Where AgentOS Is More PR-Centric Than Symphony
 
 AgentOS has corrected the most obvious PR-centric drift:

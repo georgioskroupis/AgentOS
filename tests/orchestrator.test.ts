@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
 import type { AgentRunResult, AgentRunner, Issue, IssueTracker } from "../src/types.js";
+import { commentWithAgentLifecycleTool, recordHandoffWithAgentLifecycleTool } from "../src/agent-lifecycle.js";
+import type { AgentLifecycleTracker } from "../src/agent-lifecycle.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RunArtifactStore } from "../src/runs.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
@@ -332,7 +334,7 @@ describe("orchestrator", () => {
             humanDecisions?: {
               present?: boolean;
               count?: number;
-              latest?: { type?: string; actor?: string | null; source?: string; commentId?: string; prHeadSha?: string | null };
+              latest?: { type?: string; actor?: string | null; source?: string; authority?: string; commentId?: string; prHeadSha?: string | null };
             };
           };
         }
@@ -358,6 +360,7 @@ describe("orchestrator", () => {
         type: "fix_findings",
         actor: "Supervisor",
         source: "linear-comment",
+        authority: "authoritative",
         commentId: "comment-decision",
         prHeadSha: "abc123"
       }
@@ -1091,8 +1094,15 @@ describe("orchestrator", () => {
     expect(prompt).toContain("Recent Linear comments:");
     expect(prompt).toContain("AgentOS-Human-Decision: approve-as-is");
     expect(prompt).toContain("Authoritative structured human decision: none recorded.");
+    expect(prompt).toContain("Context-only structured human decision:");
+    expect(prompt).toContain("- Authority: context-only");
     const state = await new IssueStateStore(repo).read("AG-1");
-    expect(state?.lastHumanDecision).toBeUndefined();
+    expect(state?.lastHumanDecision).toMatchObject({
+      type: "approve_as_is",
+      source: "linear-comment",
+      actor: "Random User",
+      trusted: false
+    });
     expect(state?.lifecycleStatus).toBeUndefined();
   });
 
@@ -1175,7 +1185,10 @@ describe("orchestrator", () => {
       actorEmail: "trusted@example.com",
       trusted: true
     });
-    expect(state?.humanDecisions?.map((decision) => decision.commentId)).toEqual(["comment-trusted"]);
+    expect(state?.humanDecisions?.map((decision) => [decision.commentId, decision.trusted])).toEqual([
+      ["comment-trusted", true],
+      ["comment-unlisted", false]
+    ]);
   });
 
   it("does not let handoff-sourced human decisions bypass human-required dispatch guardrails", async () => {
@@ -1956,6 +1969,165 @@ describe("orchestrator", () => {
     expect(comments[1]).toContain("lifecycle.mode: hybrid");
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.prUrl).toBe("https://github.com/o/r/pull/1");
+  });
+
+  it("lets hybrid workers write substantive ticket content while scheduler owns state moves", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-hybrid-worker-boundary-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "lifecycle:",
+        "  mode: hybrid",
+        "  allowed_tracker_tools:",
+        "    - scripts/agent-linear-comment.sh",
+        "    - scripts/agent-linear-handoff.sh",
+        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} -->\"",
+        "  duplicate_comment_behavior: upsert",
+        "  fallback_behavior: write handoff and stop human_required",
+        "tracker:",
+        "  kind: linear",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "  active_states: [Ready]",
+        "  running_state: In Progress",
+        "  review_state: Human Review",
+        "workspace:",
+        "  root: .agent-os/workspaces",
+        "review:",
+        "  enabled: false",
+        "---",
+        "Do {{ issue.identifier }}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const issue = { ...readyIssue, ...supervisorAssignee };
+    const moves: string[] = [];
+    const schedulerComments: string[] = [];
+    const agentComments: Array<{ issue: string; body: string; marker: string; duplicateBehavior?: string }> = [];
+    const tracker: IssueTracker & AgentLifecycleTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-context-only",
+            author: "Random User",
+            authorId: "user-random",
+            authorEmail: "random@example.com",
+            createdAt: "2026-05-10T00:01:00.000Z",
+            body: "AgentOS-Human-Decision: approve-as-is"
+          },
+          {
+            id: "comment-authoritative",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-10T00:02:00.000Z",
+            body: ["AgentOS-Human-Decision: fix-findings", "Decision-Summary: continue with the bounded hybrid fixture"].join("\n")
+          }
+        ];
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      },
+      async comment(_issueIdentifier, body) {
+        schedulerComments.push(body);
+      },
+      async findIssueReference() {
+        return {
+          id: issue.id,
+          identifier: issue.identifier,
+          state: issue.state,
+          team: { id: "team-1", key: "AG", name: "AgentOS" }
+        };
+      },
+      async upsertCommentWithMarker(issueIdentifier, body, marker, duplicateBehavior) {
+        agentComments.push({ issue: issueIdentifier, body, marker, duplicateBehavior });
+        return "created";
+      }
+    };
+    let prompt = "";
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        prompt = input.prompt;
+        await initGitRemote(input.workspace.path);
+        await commentWithAgentLifecycleTool(
+          { repoRoot: input.workspace.path, config: input.config, tracker },
+          {
+            issue: issue.identifier,
+            event: "worker_status",
+            tool: "scripts/agent-linear-comment.sh",
+            body: "Worker substantive update: validation is passing and the handoff is ready."
+          }
+        );
+        await writePassingHandoff(
+          input.workspace.path,
+          issue.identifier,
+          input.prompt,
+          "AgentOS-Outcome: implemented\n\nWorker-authored handoff content.\n\nPR: https://github.com/o/r/pull/1"
+        );
+        await recordHandoffWithAgentLifecycleTool(
+          { repoRoot: input.workspace.path, config: input.config, tracker },
+          {
+            issue: issue.identifier,
+            handoffPath: join(input.workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
+            tool: "scripts/agent-linear-handoff.sh"
+          }
+        );
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(prompt).toContain("- Authority: authoritative");
+    expect(prompt).toContain("- Source: linear-comment");
+    expect(prompt).toContain("- Actor: Supervisor");
+    expect(prompt).toContain("Context-only structured human decision:");
+    expect(prompt).toContain("Random User");
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect(schedulerComments[0]).toContain("AgentOS started");
+    expect(schedulerComments[1]).toContain("AgentOS handoff recorded");
+    expect(schedulerComments[1]).not.toContain("Worker-authored handoff content");
+    expect(agentComments).toEqual([
+      expect.objectContaining({
+        issue: "AG-1",
+        marker: "<!-- agentos:event=worker_status issue=AG-1 -->",
+        body: expect.stringContaining("Worker substantive update"),
+        duplicateBehavior: "upsert"
+      }),
+      expect.objectContaining({
+        issue: "AG-1",
+        marker: "<!-- agentos:event=run_handoff issue=AG-1 -->",
+        body: expect.stringContaining("Worker-authored handoff content"),
+        duplicateBehavior: "upsert"
+      })
+    ]);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.prUrl).toBe("https://github.com/o/r/pull/1");
+    expect(state?.lastHumanDecision).toMatchObject({
+      type: "fix_findings",
+      actor: "Supervisor",
+      source: "linear-comment",
+      trusted: true
+    });
+    expect(state?.humanDecisions?.map((decision) => [decision.commentId, decision.trusted])).toEqual([
+      ["comment-context-only", false],
+      ["comment-authoritative", true]
+    ]);
   });
 
   it("refuses unconfigured agent-owned lifecycle dispatch", async () => {
@@ -5643,6 +5815,10 @@ describe("orchestrator", () => {
           fixRuns += 1;
           const validationPath = ".agent-os/validation/AG-1.json";
           const runId = input.prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
+          const failedStartedAt = new Date(Date.now() - 180_000).toISOString();
+          const failedFinishedAt = new Date(Date.now() - 120_000).toISOString();
+          const passedStartedAt = new Date(Date.now() - 60_000).toISOString();
+          const passedFinishedAt = new Date(Date.now() - 1000).toISOString();
           await mkdir(join(input.workspace.path, ".agent-os", "validation"), { recursive: true });
           await writeFile(join(input.workspace.path, ".agent-os", "handoff-AG-1.md"), `AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1\n\nValidation-JSON: ${validationPath}`, "utf8");
           await writeValidationEvidence(join(input.workspace.path, validationPath), {
@@ -5650,10 +5826,10 @@ describe("orchestrator", () => {
             issueIdentifier: "AG-1",
             runId,
             status: "passed",
-            finalResult: { status: "passed", command: "npm run agent-check", exitCode: 0, startedAt: "2026-05-16T00:02:00.000Z", finishedAt: "2026-05-16T00:03:00.000Z" },
+            finalResult: { status: "passed", command: "npm run agent-check", exitCode: 0, startedAt: passedStartedAt, finishedAt: passedFinishedAt },
             commands: [
-              { name: "npm run agent-check", exitCode: 1, startedAt: "2026-05-16T00:00:00.000Z", finishedAt: "2026-05-16T00:01:00.000Z" },
-              { name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-16T00:02:00.000Z", finishedAt: "2026-05-16T00:03:00.000Z" }
+              { name: "npm run agent-check", exitCode: 1, startedAt: failedStartedAt, finishedAt: failedFinishedAt },
+              { name: "npm run agent-check", exitCode: 0, startedAt: passedStartedAt, finishedAt: passedFinishedAt }
             ]
           });
           return { status: "succeeded" };

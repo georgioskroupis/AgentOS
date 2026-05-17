@@ -1,4 +1,4 @@
-import { latestHumanDecision } from "./issue-state.js";
+import { isAuthoritativeHumanDecision, latestHumanDecision } from "./issue-state.js";
 import { redactText } from "./redaction.js";
 import type { HumanDecisionState, IssueComment, IssueState } from "./types.js";
 import type { ScopeEvidence } from "./scope-report.js";
@@ -34,6 +34,7 @@ export function buildHumanDecisionEvidence(state: IssueState | null): ScopeEvide
       ? {
           type: latest.type,
           source: latest.source,
+          authority: isAuthoritativeHumanDecision(latest) ? "authoritative" : "context-only",
           actor: latest.actor ?? null,
           decidedAt: latest.decidedAt,
           commentId: latest.commentId ?? null,
