@@ -49,7 +49,8 @@ export async function verifyValidationEvidence(input: {
   expectedCommands?: string[];
   now?: Date;
 }): Promise<ValidationEvidenceCheck> {
-  const checkedAt = new Date().toISOString();
+  const now = input.now ?? new Date();
+  const checkedAt = now.toISOString();
   const errors: string[] = [];
   const marker = input.handoff ? validationEvidencePath(input.handoff) : null;
   if (!marker) {
@@ -82,7 +83,6 @@ export async function verifyValidationEvidence(input: {
   if (evidence.issueIdentifier !== input.issue.identifier) errors.push(`issueIdentifier mismatch: expected ${input.issue.identifier}`);
   if (!Array.isArray(evidence.commands) || evidence.commands.length === 0) errors.push("commands must be a non-empty array");
 
-  const now = input.now ?? new Date();
   const rawFinalStatus = evidence.finalResult?.status ?? evidence.status;
   const finalStatus = rawFinalStatus === "passed" || rawFinalStatus === "failed" ? rawFinalStatus : "failed";
   if (rawFinalStatus !== "passed" && rawFinalStatus !== "failed") errors.push("validation status must be passed or failed");
@@ -116,8 +116,12 @@ export async function verifyValidationEvidence(input: {
     if (!started) errors.push(`${command.name}: invalid startedAt`);
     if (!finished) errors.push(`${command.name}: invalid finishedAt`);
     if (started && finished && started > finished) errors.push(`${command.name}: startedAt is after finishedAt`);
-    if (finished && finished.getTime() - now.getTime() > maxFutureSkewMs) errors.push(`${command.name}: finishedAt is in the future`);
-    if (finished && now.getTime() - finished.getTime() > maxEvidenceAgeMs) errors.push(`${command.name}: validation evidence is stale`);
+    if (finished && finished.getTime() - now.getTime() > maxFutureSkewMs) {
+      errors.push(`${command.name}: finishedAt is in the future (${finished.toISOString()} > ${now.toISOString()} + ${maxFutureSkewMs}ms skew)`);
+    }
+    if (finished && now.getTime() - finished.getTime() > maxEvidenceAgeMs) {
+      errors.push(`${command.name}: validation evidence is stale (${finished.toISOString()} is older than ${maxEvidenceAgeMs}ms relative to ${now.toISOString()})`);
+    }
   }
 
   const workspaceHead = await gitHead(input.workspacePath);
@@ -218,8 +222,12 @@ function validateFinalResult(finalResult: ValidationFinalResultEvidence, errors:
   const started = finalResult.startedAt ? parseTime(finalResult.startedAt) : null;
   const finished = finalResult.finishedAt ? parseTime(finalResult.finishedAt) : null;
   if (started && finished && started > finished) errors.push("finalResult.startedAt is after finalResult.finishedAt");
-  if (finished && finished.getTime() - now.getTime() > maxFutureSkewMs) errors.push("finalResult.finishedAt is in the future");
-  if (finished && now.getTime() - finished.getTime() > maxEvidenceAgeMs) errors.push("finalResult validation evidence is stale");
+  if (finished && finished.getTime() - now.getTime() > maxFutureSkewMs) {
+    errors.push(`finalResult.finishedAt is in the future (${finished.toISOString()} > ${now.toISOString()} + ${maxFutureSkewMs}ms skew)`);
+  }
+  if (finished && now.getTime() - finished.getTime() > maxEvidenceAgeMs) {
+    errors.push(`finalResult validation evidence is stale (${finished.toISOString()} is older than ${maxEvidenceAgeMs}ms relative to ${now.toISOString()})`);
+  }
 }
 
 function validateGithubCi(ci: NonNullable<ValidationState["githubCi"]>, errors: string[]): void {

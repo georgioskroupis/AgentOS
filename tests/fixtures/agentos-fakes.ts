@@ -149,16 +149,16 @@ export async function writeHandoff(workspace: Workspace, issueIdentifier: string
   await writeFile(join(workspace.path, ".agent-os", `handoff-${issueIdentifier}.md`), body, "utf8");
 }
 
-export async function writePassingHandoff(workspace: Workspace, issueIdentifier: string, prompt: string, body: string): Promise<void> {
+export async function writePassingHandoff(workspace: Workspace, issueIdentifier: string, prompt: string, body: string, now = new Date()): Promise<void> {
   const validationPath = `.agent-os/validation/${issueIdentifier}.json`;
   const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
   await writeHandoff(workspace, issueIdentifier, `${body}\n\nValidation-JSON: ${validationPath}`);
-  const now = new Date().toISOString();
+  const timestamp = now.toISOString();
   await writeValidationEvidence(join(workspace.path, validationPath), {
     schemaVersion: 1,
     issueIdentifier,
     runId,
     status: "passed",
-    commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+    commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: timestamp, finishedAt: timestamp }]
   });
 }
