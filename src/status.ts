@@ -7,7 +7,7 @@ import { JsonlLogger } from "./logging.js";
 import { loadRegistry, RegistryStateStore, resolveRegistryProjectPaths, type RegistryProjectSummary } from "./registry.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { formatReviewRunnerFailures } from "./review.js";
-import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationOpen } from "./review-budget.js";
+import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking } from "./review-budget.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
@@ -115,7 +115,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     prs.length ? `PRs:\n${prs.map((pr) => `- ${pr.url}${pr.role ? ` (${pr.role})` : ""}`).join("\n")}` : "PRs: none recorded",
     reviewDetails(state),
     formatReviewBudgetState(state?.reviewBudget),
-    formatSplitRecommendation(state?.splitRecommendation),
+    formatSplitRecommendation(state?.splitRecommendation, { advisory: state?.reviewStatus === "approved" }),
     state?.reviewRunnerFailures?.length ? `Review runner failures:\n${formatReviewRunnerFailures(state.reviewRunnerFailures)}` : "Review runner failures: none recorded",
     humanDecisionDetails(state),
     appProofDetails(state),
@@ -299,7 +299,7 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   const withEvidence = (line: string) => appendEvidenceStatus(issue, line);
   if (runtimeActive) return withEvidence(`running (${runtimeActive.phase ?? issue.phase ?? "active"})`);
   if (retry) return withEvidence(`retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`);
-  if (isReviewSplitRecommendationOpen(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
+  if (isReviewSplitRecommendationBlocking(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
   const latestRunnerFailure = latestReviewRunnerFailure(issue);
   if ((issue.reviewStatus === "human_required" || issue.phase === "human-required") && latestRunnerFailure) {
     return withEvidence(`waiting on Human Review - reviewer runner failure (${latestRunnerFailure.reviewer}: ${latestRunnerFailure.reason})`);
@@ -384,7 +384,7 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
   }
-  if (isReviewSplitRecommendationOpen(issue)) {
+  if (isReviewSplitRecommendationBlocking(issue)) {
     return "record a split-follow-up decision or create linked follow-up issue(s) before another broad review/fix iteration";
   }
   if (hasApprovedPullRequest(issue)) {

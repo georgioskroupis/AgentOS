@@ -292,6 +292,53 @@ describe("issue inspection", () => {
     expect(output).toContain("Next safe action: record a split-follow-up decision");
   });
 
+  it("labels approved review budget split recommendations as advisory", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-review-budget-advisory-"));
+    const stateRoot = join(repo, ".agent-os", "state", "issues");
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(
+      join(stateRoot, "AG-2.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-2",
+          issueIdentifier: "AG-2",
+          phase: "completed",
+          reviewStatus: "approved",
+          prs: [{ url: "https://github.com/o/r/pull/2", role: "primary", source: "handoff", discoveredAt: "2026-05-16T00:00:00.000Z" }],
+          reviewBudget: {
+            status: "exceeded",
+            mode: "recommend-only",
+            evaluatedAt: "2026-05-16T00:00:00.000Z",
+            summary: "1 review budget signal(s) exceeded.",
+            signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }]
+          },
+          splitRecommendation: {
+            recommended: true,
+            action: "recommend-only",
+            reason: "review budget exceeded for broad or non-mechanical signals",
+            summary: "Recommend split or follow-up work for AG-2: changed_file_count.",
+            signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }],
+            recordedAt: "2026-05-16T00:00:00.000Z"
+          },
+          updatedAt: "2026-05-16T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const statusOutput = await getStatus(repo);
+    const inspectOutput = await inspectIssue(repo, "AG-2");
+
+    expect(statusOutput).not.toContain("AG-2: split recommended");
+    expect(statusOutput).toContain("AG-2: waiting on merge");
+    expect(inspectOutput).toContain("Split recommendation: advisory (recommend-only)");
+    expect(inspectOutput).not.toContain("Next safe action: record a split-follow-up decision");
+    expect(inspectOutput).toContain("Next safe action: mark the PR ready only after fresh validation and green CI");
+  });
+
   it("does not keep asking for split follow-up after an authoritative split decision", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-status-review-budget-resolved-"));
     const stateRoot = join(repo, ".agent-os", "state", "issues");

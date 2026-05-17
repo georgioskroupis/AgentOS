@@ -22,7 +22,8 @@ import { allowsImplementationContinuation, formatHumanDecision, formatLinearComm
 import { alreadyMergedIssuePatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
-import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationOpen, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
+import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
+import { approvedReviewValidationBlockReason, formatApprovedReviewComment, reviewIterationLogMessage } from "./review-budget-orchestration.js";
 import { reviewerConcurrencyFor, runReviewerIteration } from "./reviewer-scheduler.js";
 import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
@@ -1774,32 +1775,29 @@ export class Orchestrator {
       });
 
       await this.logger.write({
-        type: status === "approved" && !budgetDecision.shouldRecommendSplit ? "review_approved" : "review_iteration_complete",
+        type: status === "approved" ? "review_approved" : "review_iteration_complete",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
-        message: `iteration ${iteration}: ${budgetDecision.shouldRecommendSplit ? "budget_exceeded" : status}`,
+        message: reviewIterationLogMessage(iteration, status, budgetDecision.shouldRecommendSplit),
         payload: { blocking: blocking.length, repeated }
       });
 
       if (status === "approved") {
+        let advisorySplitRecommendation = budgetDecision.splitRecommendation;
         if (budgetDecision.shouldRecommendSplit && budgetDecision.splitRecommendation) {
-          const splitRecommendation = await prepareReviewFollowUpProposal(repoRoot, issue, budgetDecision.splitRecommendation);
-          latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", reviewBudget: budgetDecision.budget, splitRecommendation, findings, reviewRunnerFailures });
-          await this.commentIssue(issue, ["### AgentOS review budget recommends split/follow-up", "", "The Wiggum loop stopped before approval because the configured review budget was exceeded.", "", reviewTargetList, `- Iteration: ${iteration}`, "", formatReviewBudgetState(budgetDecision.budget), "", formatSplitRecommendation(splitRecommendation)].join("\n"));
-          await this.logger.write({ type: "review_split_recommended", issueId: issue.id, issueIdentifier: issue.identifier, message: splitRecommendation.reason, payload: { splitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls } });
-          return latestState;
+          advisorySplitRecommendation = await prepareReviewFollowUpProposal(repoRoot, issue, budgetDecision.splitRecommendation);
+          latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "approved", reviewBudget: budgetDecision.budget, splitRecommendation: advisorySplitRecommendation, findings, reviewRunnerFailures });
+          await this.logger.write({
+            type: "review_split_recommended",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: `advisory: ${advisorySplitRecommendation.reason}`,
+            payload: { splitRecommendation: advisorySplitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls, advisory: true }
+          });
         }
         await this.commentIssue(
           issue,
-          [
-            "### AgentOS automated review approved",
-            "",
-            "Required Wiggum reviewers approved this PR.",
-            "",
-            reviewTargetList,
-            `- Iteration: ${iteration}`,
-            `- Reviewers: ${reviewerStates.map((reviewer) => `${reviewer.name}=${reviewer.decision}`).join(", ")}`
-          ].join("\n")
+          formatApprovedReviewComment({ reviewTargetList, iteration, reviewers: reviewerStates, budget: budgetDecision.budget, splitRecommendation: advisorySplitRecommendation })
         );
         return latestState;
       }
@@ -2022,7 +2020,7 @@ export class Orchestrator {
     await this.finishOpenRunPhase(state?.lastRunId, issue, "human-wait", "completed", timingStartNoLaterThan(issue.updated_at, timingStartedAt), { reason: "issue entered merge state" });
     if (this.config.review.enabled) {
       const needsSupervisorDecision = state?.reviewStatus !== "approved" && !reviewSupervisorMergeDecision(state);
-      const needsFreshSplitDecision = isReviewSplitRecommendationOpen(state);
+      const needsFreshSplitDecision = isReviewSplitRecommendationBlocking(state);
       if (needsSupervisorDecision || needsFreshSplitDecision) {
         state = (await this.ingestHumanDecisions(issue, state)) ?? state;
       }
@@ -2102,7 +2100,15 @@ export class Orchestrator {
           return;
         }
 
-        if (this.config.review.enabled && isReviewSplitRecommendationOpen(state)) {
+        const validationBlockReason = this.config.review.enabled ? approvedReviewValidationBlockReason(state) : null;
+        if (validationBlockReason) {
+          timingStatus = "failed";
+          timingLabel = "merge shepherding failed";
+          timingMetadata = { prUrl: mergePr, reason: validationBlockReason };
+          await this.markMergeFailed(issue, validationBlockReason, { prUrl: mergePr, runId: state.lastRunId });
+          return;
+        }
+        if (this.config.review.enabled && isReviewSplitRecommendationBlocking(state)) {
           const reason = `split/follow-up recommendation is still open (${state.splitRecommendation?.reason ?? "unknown reason"})`;
           timingStatus = "failed";
           timingLabel = "merge shepherding failed";
@@ -2743,24 +2749,18 @@ function completedDispatchStopReason(state: IssueState): string {
 }
 
 function isSupervisorContinuationPaused(state: IssueState | null): boolean {
-  if (!state?.lifecycleStatus) return false;
-  if (!["human_continuation", "supervisor_continuation", "externally_fixed"].includes(state.lifecycleStatus)) return false;
+  if (!state?.lifecycleStatus || !["human_continuation", "supervisor_continuation", "externally_fixed"].includes(state.lifecycleStatus)) return false;
   const decision = latestAuthoritativeDecision(state);
-  if (!decision) return false;
-  return decision?.type !== "fix_findings";
+  return Boolean(decision && decision.type !== "fix_findings");
 }
 
 function latestAuthoritativeDecision(state: IssueState | null | undefined): HumanDecisionState | null {
-  return latestAuthoritativeHumanDecision([
-    ...(state?.humanDecisions ?? []),
-    ...(state?.lastHumanDecision ? [state.lastHumanDecision] : [])
-  ]);
+  return latestAuthoritativeHumanDecision([...(state?.humanDecisions ?? []), ...(state?.lastHumanDecision ? [state.lastHumanDecision] : [])]);
 }
 
 function lifecycleStatusForHumanDecision(decision: HumanDecisionState): LifecycleStatus {
   if (decision.type === "fix_findings") return "human_continuation";
-  if (decision.type === "proceed_to_merge_after_supervisor_fix") return "externally_fixed";
-  return "supervisor_continuation";
+  return decision.type === "proceed_to_merge_after_supervisor_fix" ? "externally_fixed" : "supervisor_continuation";
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
