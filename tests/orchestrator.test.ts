@@ -4397,6 +4397,95 @@ describe("orchestrator", () => {
     expect(logs.filter((entry) => entry.type === "phase_timing_persistence_warning")).toEqual([]);
   });
 
+  it("does not warn repeatedly when an external supervisor fix records a run id without a summary artifact", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-supervisor-summary-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify(
+        {
+          view: {
+            url: "https://github.com/o/r/pull/1",
+            state: "OPEN",
+            isDraft: false,
+            mergeable: "MERGEABLE",
+            headRefOid: "supervisor-head",
+            statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+          }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "completed",
+      lifecycleStatus: "externally_fixed",
+      reviewStatus: "changes_requested",
+      lastRunId: "run_supervisor_external",
+      prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-05-17T02:00:00.000Z" }],
+      validation: {
+        status: "passed",
+        finalStatus: "passed",
+        runId: "run_supervisor_external",
+        checkedAt: "2026-05-17T02:00:00.000Z",
+        acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-17T02:00:00.000Z", finishedAt: "2026-05-17T02:01:00.000Z" }]
+      },
+      lastHumanDecision: {
+        type: "proceed_to_merge_after_supervisor_fix",
+        source: "linear-comment",
+        trusted: true,
+        actor: "Supervisor",
+        actorId: "user-supervisor",
+        actorEmail: "supervisor@example.com",
+        decidedAt: "2026-05-17T02:02:00.000Z",
+        commentId: "comment-supervisor-fixed"
+      },
+      updatedAt: "2026-05-17T02:02:00.000Z"
+    });
+    const moves: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[mergingIssue.id, mergingIssue]]);
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      },
+      async comment() {}
+    };
+    const logger = new JsonlLogger(repo);
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const logs = await logger.tail(500);
+    expect(moves).toEqual(["AG-1 -> Done"]);
+    expect(logs.filter((entry) => entry.type === "phase_timing_persistence_warning")).toEqual([]);
+  });
+
   it("keeps warning when non-recovery phase timing points at a missing run summary", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-missing-summary-"));
     const workflowPath = join(repo, "WORKFLOW.md");

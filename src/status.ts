@@ -113,7 +113,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.lifecycleStatus ? `Lifecycle: ${state.lifecycleStatus}` : null,
     state?.terminalState ? `Terminal state: ${state.terminalState}${state.terminalReason ? ` (${state.terminalReason})` : ""}` : null,
     prs.length ? `PRs:\n${prs.map((pr) => `- ${pr.url}${pr.role ? ` (${pr.role})` : ""}`).join("\n")}` : "PRs: none recorded",
-    state?.reviewStatus ? `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}` : "Review: none recorded",
+    reviewDetails(state),
     formatReviewBudgetState(state?.reviewBudget),
     formatSplitRecommendation(state?.splitRecommendation),
     state?.reviewRunnerFailures?.length ? `Review runner failures:\n${formatReviewRunnerFailures(state.reviewRunnerFailures)}` : "Review runner failures: none recorded",
@@ -258,6 +258,12 @@ function operatorRecoveryDetails(state: IssueState | null): string | null {
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
+}
+
+function reviewDetails(state: IssueState | null): string {
+  if (!state?.reviewStatus) return "Review: none recorded";
+  if (state.reviewStatus === "pending" && isAuthoritativeTerminalIssueState(state)) return "Review: none recorded";
+  return `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}`;
 }
 
 function commandLines(commands: ValidationCommandState[]): string {
@@ -501,6 +507,12 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
       nextAction: "explain the missing workspace from run artifacts before redispatching or cleaning durable state"
     });
   }
+  if (!terminal && recovery && !recovery.exists && issue.workspaceMissingAt) {
+    diagnostics.push({
+      message: `missing workspace warning: workspacePath points to missing workspace ${recovery.workspacePath}`,
+      nextAction: recovery.nextSafeAction
+    });
+  }
   if (terminal && recovery?.recoverable) {
     diagnostics.push({
       message: `terminal workspace drift: terminal issue still points to recoverable workspace ${recovery.workspacePath} (${recovery.reasons.join("; ")})`,
@@ -587,6 +599,7 @@ function isExpectedTerminalWorkspaceCleanup(issue: IssueState): boolean {
       issue.lifecycleStatus === "post_merge_cleanup_warning" ||
       issue.lifecycleStatus === "already_merged_pr" ||
       issue.lifecycleStatus === "terminal_linear" ||
+      issue.lifecycleStatus === "terminal_missing_workspace" ||
       (issue.phase === "completed" && Boolean(issue.terminalState))
   );
 }
