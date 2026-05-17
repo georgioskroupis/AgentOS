@@ -142,6 +142,43 @@ describe("validation evidence", () => {
     expect(validationEvidenceFinding(result.state)).toMatchObject({ reviewer: "validation", severity: "P1" });
   });
 
+  it("reuses previous-run validation evidence when repoHead matches the current code", async () => {
+    const workspace = await gitWorkspace();
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace });
+    const repoHead = stdout.trim();
+    const now = new Date().toISOString();
+    await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
+      schemaVersion: 1,
+      issueIdentifier: "AG-1",
+      runId: "run_previous",
+      repoHead,
+      status: "passed",
+      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+    });
+
+    const strictResult = await verifyValidationEvidence({
+      issue: fakeIssue(),
+      handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
+      workspacePath: workspace,
+      runId: "run_current"
+    });
+    expect(strictResult.state.status).toBe("failed");
+    expect(strictResult.state.errors?.join("\n")).toContain("runId mismatch");
+
+    const reusableResult = await verifyValidationEvidence({
+      issue: fakeIssue(),
+      handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
+      workspacePath: workspace,
+      runId: "run_current",
+      allowReusableRunEvidence: true
+    });
+    expect(reusableResult.state).toMatchObject({
+      status: "passed",
+      runId: "run_previous",
+      repoHead
+    });
+  });
+
   it("rejects final failed evidence even when an earlier command passed", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "agent-os-validation-final-failed-"));
     const now = new Date().toISOString();

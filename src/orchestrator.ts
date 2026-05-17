@@ -1112,7 +1112,7 @@ export class Orchestrator {
         if (handoff) {
           const validationVerificationStartedAt = new Date().toISOString();
           try {
-            validation = await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId });
+            validation = await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId, allowReusableRunEvidence: true });
             await this.writePhaseTimingEvent(issue, {
               phase: "validation",
               status: validation.state.status === "passed" ? "completed" : "failed",
@@ -1332,7 +1332,7 @@ export class Orchestrator {
       "",
       feedback || "No recent feedback was found.",
       "",
-      "Update the existing branch and PR, rerun validation, and refresh the handoff file."
+      "Update the existing branch and PR. Reuse existing validation evidence when it already matches the current code head; rerun validation only when code changed or the evidence is stale, failing, or for another head."
     ].join("\n");
   }
 
@@ -1945,7 +1945,7 @@ export class Orchestrator {
           });
           return latestState;
         }
-        const validation = await verifyValidationEvidence({ issue, handoff: updatedHandoff, workspacePath: workspace.path, runId });
+        const validation = await verifyValidationEvidence({ issue, handoff: updatedHandoff, workspacePath: workspace.path, runId, selectedHeadSha: joinedHeadShas(githubContext.entries), allowReusableRunEvidence: true });
         const updated = issueStateFromHandoff(issue, updatedHandoff);
         const fixPatch = { phase: "fix" as const, reviewIteration: iteration, lastFixedSha: joinedHeadShas(githubContext.entries), reviewTargetMode, validation: validation.state };
         if (updated) {

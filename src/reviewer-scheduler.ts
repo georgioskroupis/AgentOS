@@ -3,6 +3,7 @@ import { buildTargetedContextPack } from "./context-pack.js";
 import { ensureDir } from "./fs-utils.js";
 import type { GitHubReviewContext } from "./github-context.js";
 import type { JsonlLogger } from "./logging.js";
+import { joinedHeadShas } from "./orchestrator-review-helpers.js";
 import { blockingFindings, reviewArtifactPath, reviewArtifactRelativePath, reviewerPrompt } from "./review.js";
 import { runReviewerWithArtifactRetry, type ReviewerRunOutcome } from "./reviewer-runner.js";
 import type { AgentRunner, Issue, IssueState, ReviewRunnerFailure, ReviewStateReviewer, ServiceConfig, Workspace } from "./types.js";
@@ -41,6 +42,7 @@ export async function runReviewerIteration(input: {
 }): Promise<ReviewerIterationResult> {
   const reviewerConcurrency = reviewerConcurrencyFor(input.config, input.reviewers.length);
   const parallelReviewers = reviewerConcurrency > 1;
+  const headSha = joinedHeadShas(input.githubContext.entries);
   const runReviewerBatch = async (batchReviewers: string[], stopOnTerminal: boolean): Promise<OrderedReviewerOutcome[]> => {
     const runReviewer = async (reviewer: string): Promise<OrderedReviewerOutcome> => {
       const canonicalArtifactRelativePath = reviewArtifactRelativePath(input.issue.identifier, input.iteration, reviewer);
@@ -56,6 +58,8 @@ export async function runReviewerIteration(input: {
         iteration: input.iteration,
         reviewer,
         artifactPath: artifactRelativePath,
+        runId: input.runId,
+        headSha,
         githubSummary: input.githubContext.summary,
         feedbackSummary: input.githubContext.feedback,
         contextPack: buildTargetedContextPack({
@@ -83,6 +87,8 @@ export async function runReviewerIteration(input: {
         artifactRelativePath,
         reviewer,
         iteration: input.iteration,
+        runId: input.runId,
+        headSha,
         signal: input.signal,
         config: input.config,
         runner: input.runner,
@@ -188,7 +194,18 @@ function hasBlockingRequiredReviewerSignal(outcomes: OrderedReviewerOutcome[], c
 
 function reviewerStatesFor(outcomes: OrderedReviewerOutcome[], iteration: number): ReviewStateReviewer[] {
   return outcomes.flatMap((outcome) => {
-    if (outcome.artifact) return [{ name: outcome.artifact.reviewer, decision: outcome.artifact.decision, iteration, artifactPath: outcome.canonicalArtifactPath }];
+    if (outcome.artifact) {
+      return [
+        {
+          name: outcome.artifact.reviewer,
+          decision: outcome.artifact.decision,
+          iteration,
+          artifactPath: outcome.canonicalArtifactPath,
+          ...(outcome.artifact.runId ? { runId: outcome.artifact.runId } : {}),
+          ...(outcome.artifact.headSha !== undefined ? { headSha: outcome.artifact.headSha } : {})
+        }
+      ];
+    }
     if (outcome.terminalFailure) return [{ name: outcome.terminalFailure.reviewer, decision: "human_required", iteration, artifactPath: outcome.terminalFailure.artifactPath ?? outcome.canonicalArtifactPath }];
     return [];
   });

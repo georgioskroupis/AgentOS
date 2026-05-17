@@ -309,6 +309,8 @@ export interface HumanDecisionState {
 export interface ValidationState {
   status: "passed" | "failed" | "missing";
   path?: string;
+  runId?: string;
+  repoHead?: string | null;
   errors?: string[];
   checkedAt: string;
   finalStatus?: "passed" | "failed";
@@ -430,6 +432,8 @@ export interface ReviewStateReviewer {
   decision: ReviewStatus;
   iteration: number;
   artifactPath?: string;
+  runId?: string;
+  headSha?: string | null;
 }
 
 export type ReviewRunnerFailureClassification = "mechanical" | "non_mechanical";

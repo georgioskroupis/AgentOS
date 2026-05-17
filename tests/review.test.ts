@@ -26,6 +26,9 @@ describe("review artifacts", () => {
     await writeReviewArtifact(path, {
       reviewer: "correctness",
       decision: "changes_requested",
+      runId: "run_1",
+      headSha: "abc123",
+      iteration: 1,
       findings: [
         {
           reviewer: "correctness",
@@ -49,8 +52,12 @@ describe("review artifacts", () => {
     const raw = JSON.parse(await readFile(path, "utf8"));
     expect(raw.schemaVersion).toBe(1);
     expect(raw.reviewer).toBe("correctness");
+    expect(raw.runId).toBe("run_1");
+    expect(raw.headSha).toBe("abc123");
+    expect(raw.iteration).toBe(1);
     const artifact = await readReviewArtifact(path, "correctness");
     expect(artifact.schemaVersion).toBe(1);
+    expect(artifact).toMatchObject({ runId: "run_1", headSha: "abc123", iteration: 1 });
     expect(artifact.findings[0].findingHash).toHaveLength(16);
   });
 
@@ -133,6 +140,33 @@ describe("review artifacts", () => {
     await expect(readReviewArtifactResult(path, "self", { staleIfUnchangedFrom: previous })).resolves.toMatchObject({
       ok: true,
       artifact: { decision: "changes_requested" }
+    });
+  });
+
+  it("treats head, run, or iteration mismatches as stale non-authoritative artifacts", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-review-scope-"));
+    const path = reviewArtifactPath(repo, "AG-1", 2, "self");
+    await writeReviewArtifact(path, {
+      reviewer: "self",
+      decision: "approved",
+      runId: "run_old",
+      headSha: "old-head",
+      iteration: 1,
+      findings: []
+    });
+
+    await expect(
+      readReviewArtifactResult(path, "self", {
+        expectedRunId: "run_current",
+        expectedHeadSha: "new-head",
+        expectedIteration: 2
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      failure: {
+        kind: "stale_artifact",
+        body: expect.stringContaining("not authoritative")
+      }
     });
   });
 });
