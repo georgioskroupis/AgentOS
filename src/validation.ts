@@ -44,6 +44,8 @@ export async function verifyValidationEvidence(input: {
   handoff: string | null;
   workspacePath: string;
   runId?: string;
+  selectedHeadSha?: string | null;
+  allowReusableRunEvidence?: boolean;
   expectedCommands?: string[];
   now?: Date;
 }): Promise<ValidationEvidenceCheck> {
@@ -78,7 +80,6 @@ export async function verifyValidationEvidence(input: {
 
   if (evidence.schemaVersion !== 1) errors.push("schemaVersion must be 1");
   if (evidence.issueIdentifier !== input.issue.identifier) errors.push(`issueIdentifier mismatch: expected ${input.issue.identifier}`);
-  if (input.runId && evidence.runId !== input.runId) errors.push(`runId mismatch: expected ${input.runId}`);
   if (!Array.isArray(evidence.commands) || evidence.commands.length === 0) errors.push("commands must be a non-empty array");
 
   const now = input.now ?? new Date();
@@ -120,12 +121,19 @@ export async function verifyValidationEvidence(input: {
   }
 
   const workspaceHead = await gitHead(input.workspacePath);
+  const selectedHeadSha = input.selectedHeadSha ?? null;
+  const reusableHead = workspaceHead ?? selectedHeadSha;
+  if (input.runId && evidence.runId !== input.runId && !isReusableRunEvidence(evidence, reusableHead, input.allowReusableRunEvidence === true)) {
+    errors.push(`runId mismatch: expected ${input.runId}`);
+  }
   if (workspaceHead && evidence.repoHead !== workspaceHead) errors.push(`repoHead mismatch: expected ${workspaceHead}`);
 
   return {
     state: {
       status: errors.length === 0 ? "passed" : "failed",
       path,
+      ...(evidence.runId ? { runId: evidence.runId } : {}),
+      repoHead: evidence.repoHead ?? null,
       finalStatus,
       acceptedCommands,
       additionalPassingCommands: additionalPassingCommands.length ? additionalPassingCommands : undefined,
@@ -136,6 +144,16 @@ export async function verifyValidationEvidence(input: {
     },
     evidence
   };
+}
+
+function isReusableRunEvidence(evidence: ValidationEvidence, expectedHeadSha: string | null, enabled: boolean): boolean {
+  if (!enabled) return false;
+  if (!evidence.repoHead || !expectedHeadSha) return false;
+  return sameSha(evidence.repoHead, expectedHeadSha);
+}
+
+function sameSha(left: string | null | undefined, right: string | null | undefined): boolean {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 }
 
 export function validationEvidenceFinding(validation: ValidationState | undefined): ReviewFinding | null {

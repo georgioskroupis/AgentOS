@@ -24,6 +24,8 @@ export async function runReviewerWithArtifactRetry(input: {
   artifactRelativePath: string;
   reviewer: string;
   iteration: number;
+  runId?: string | null;
+  headSha?: string | null;
   signal?: AbortSignal;
   config: ServiceConfig;
   runner: AgentRunner;
@@ -62,7 +64,12 @@ export async function runReviewerWithArtifactRetry(input: {
       return { artifact: null, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: terminalRunnerFailure, tokenTotal };
     }
 
-    const artifactResult = await readReviewArtifactResult(input.workspaceArtifactPath, input.reviewer, { staleIfUnchangedFrom: artifactBeforeAttempt });
+    const artifactResult = await readReviewArtifactResult(input.workspaceArtifactPath, input.reviewer, {
+      staleIfUnchangedFrom: artifactBeforeAttempt,
+      expectedRunId: input.runId,
+      expectedHeadSha: input.headSha,
+      expectedIteration: input.iteration
+    });
     if (artifactResult.ok) {
       await writeReviewArtifact(input.canonicalArtifactPath, artifactResult.artifact);
       if (result.status !== "succeeded") await logRunnerFailedWithArtifact(input, result, reviewerAttempt);

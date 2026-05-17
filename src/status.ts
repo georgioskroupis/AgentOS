@@ -17,9 +17,16 @@ export async function getStatus(repo = process.cwd(), limit = 20): Promise<strin
   const logger = new JsonlLogger(root);
   const entries = await logger.tail(limit);
   const daemon = await inspectDaemonHealth(root);
+  const runtime = await new RuntimeStateStore(root).read();
+  const issues = await new IssueStateStore(root).list();
+  const recoveries = await Promise.all(issues.map((issue) => inspectWorkspaceRecovery(root, issue).catch(() => null)));
+  const issueLines = issues.map((issue, index) => `- ${issue.issueIdentifier}: ${issueStatusLine(issue, runtime, entries, recoveries[index] ?? null)}`);
   const lines = [
     `Daemon: ${daemon.status} - ${daemon.message}`,
     `Next safe action: ${daemon.nextSafeAction}`,
+    "",
+    "Issues:",
+    issueLines.length ? issueLines.join("\n") : "No issues recorded.",
     "",
     "Recent events:",
     entries.length
@@ -99,7 +106,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
   const statusDiagnostics = state ? issueStatusDiagnostics(state, recovery, retry, active) : [];
   const prs = state?.prs ?? [];
   const reviewRoot = join(root, ".agent-os", "reviews", safeFileName(identifier));
-  const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot) : [];
+  const reviewArtifacts = (await exists(reviewRoot)) ? await listReviewArtifacts(reviewRoot, state) : [];
   const lines = [
     `Issue: ${identifier}`,
     state ? `Phase: ${state.phase ?? "unknown"}` : "Phase: unknown",
@@ -117,11 +124,11 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
     state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
     statusDiagnostics.length ? `Status warnings:\n${statusDiagnostics.map(formatIssueStatusDiagnostic).join("\n")}` : "Status warnings: none",
-    validationDetails(state?.validation),
+    validationDetails(state),
     state?.lastError ? `Last error: ${state.lastError}` : null,
     state?.stopReason ? `Stop reason: ${state.stopReason}` : null,
     state?.nextRetryAt ? `Next retry: ${state.nextRetryAt}` : null,
-    reviewArtifacts.length ? `Review artifacts:\n${reviewArtifacts.map((path) => `- ${path}`).join("\n")}` : "Review artifacts: none",
+    reviewArtifacts.length ? `Review artifacts:\n${reviewArtifacts.join("\n")}` : "Review artifacts: none",
     "",
     "Recent events:",
     entries.length
@@ -131,7 +138,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
   return lines.join("\n");
 }
 
-async function listReviewArtifacts(root: string): Promise<string[]> {
+async function listReviewArtifacts(root: string, state: IssueState | null): Promise<string[]> {
   const out: string[] = [];
   async function walk(dir: string): Promise<void> {
     const entries = await readdir(dir, { withFileTypes: true });
@@ -142,20 +149,69 @@ async function listReviewArtifacts(root: string): Promise<string[]> {
     }
   }
   await walk(root);
-  return out.sort();
+  return Promise.all(out.sort().map(async (path) => `- ${path}${await reviewArtifactFreshness(path, state)}`));
+}
+
+async function reviewArtifactFreshness(path: string, state: IssueState | null): Promise<string> {
+  let parsed: Record<string, unknown>;
+  try {
+    const raw = JSON.parse(await readText(path)) as unknown;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return " [unknown: artifact metadata unreadable]";
+    parsed = raw as Record<string, unknown>;
+  } catch {
+    return " [unknown: artifact metadata unreadable]";
+  }
+
+  const labels: string[] = [];
+  const stale: string[] = [];
+  const unknown: string[] = [];
+  if (typeof parsed.iteration === "number" && Number.isInteger(parsed.iteration) && state?.reviewIteration != null) {
+    const label = parsed.iteration === state.reviewIteration ? `iteration ${parsed.iteration} current` : `iteration ${parsed.iteration} stale; expected ${state.reviewIteration}`;
+    labels.push(label);
+    if (parsed.iteration !== state.reviewIteration) stale.push(label);
+  } else if (state?.reviewIteration != null) {
+    stale.push(`iteration missing; expected ${state.reviewIteration}`);
+  } else {
+    unknown.push("iteration comparison unavailable");
+  }
+  if (typeof parsed.runId === "string" && state?.lastRunId) {
+    const label = parsed.runId === state.lastRunId ? `run ${parsed.runId} current` : `run ${parsed.runId} stale; expected ${state.lastRunId}`;
+    labels.push(label);
+    if (parsed.runId !== state.lastRunId) stale.push(label);
+  } else if (state?.lastRunId) {
+    stale.push(`run missing; expected ${state.lastRunId}`);
+  } else {
+    unknown.push("run comparison unavailable");
+  }
+  if (typeof parsed.headSha === "string" && state?.headSha) {
+    const label = sameSha(parsed.headSha, state.headSha) ? `head ${shortSha(parsed.headSha)} current` : `head ${shortSha(parsed.headSha)} stale; expected ${shortSha(state.headSha)}`;
+    labels.push(label);
+    if (!sameSha(parsed.headSha, state.headSha)) stale.push(label);
+  } else if (state?.headSha) {
+    stale.push(`head missing; expected ${shortSha(state.headSha)}`);
+  } else {
+    unknown.push("head comparison unavailable");
+  }
+  if (stale.length) return ` [stale, non-authoritative: ${[...stale, ...unknown].join("; ")}]`;
+  if (unknown.length) return ` [unknown, non-authoritative: ${[...labels, ...unknown].join("; ")}]`;
+  return ` [current: ${labels.join("; ")}]`;
 }
 
 function safeFileName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
-function validationDetails(validation: ValidationState | undefined): string {
+function validationDetails(state: IssueState | null): string {
+  const validation = state?.validation;
   if (!validation) return "Validation: none recorded";
+  const headLines = validationHeadDetails(state);
   const lines = [
     `Validation: ${validation.status}${validation.finalStatus ? ` (final: ${validation.finalStatus})` : ""}`,
+    validation.runId ? `Validation run: ${validation.runId}` : null,
     validation.acceptedCommands?.length ? `Accepted validation commands:\n${commandLines(validation.acceptedCommands)}` : null,
     validation.additionalPassingCommands?.length ? `Additional passing commands:\n${commandLines(validation.additionalPassingCommands)}` : null,
     validation.failedHistoricalAttempts?.length ? `Failed historical attempts:\n${commandLines(validation.failedHistoricalAttempts)}` : null,
+    headLines.length ? `Evidence heads:\n${headLines.join("\n")}` : null,
     validation.githubCi ? `GitHub CI: ${validation.githubCi.status}${validation.githubCi.headSha ? ` (${validation.githubCi.headSha})` : ""}` : null,
     validation.errors?.length ? `Validation errors:\n${validation.errors.map((error) => `- ${error}`).join("\n")}` : null
   ].filter((line): line is string => line !== null);
@@ -217,40 +273,75 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   const retry = findRuntimeRetry(runtime.retryQueue, issue);
   const statusDiagnostics = issueStatusDiagnostics(issue, recovery, retry, runtimeActive);
   if (statusDiagnostics.length) return `status warning - ${statusDiagnostics[0].message}; next: ${statusDiagnostics[0].nextAction}`;
-  if (runtimeActive) return `running (${runtimeActive.phase ?? issue.phase ?? "active"})`;
-  if (retry) return `retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`;
-  if (isReviewSplitRecommendationOpen(issue)) return `split recommended - ${issue.splitRecommendation?.summary}`;
+  const withEvidence = (line: string) => appendEvidenceStatus(issue, line);
+  if (runtimeActive) return withEvidence(`running (${runtimeActive.phase ?? issue.phase ?? "active"})`);
+  if (retry) return withEvidence(`retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`);
+  if (isReviewSplitRecommendationOpen(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
   const latestRunnerFailure = latestReviewRunnerFailure(issue);
   if ((issue.reviewStatus === "human_required" || issue.phase === "human-required") && latestRunnerFailure) {
-    return `waiting on Human Review - reviewer runner failure (${latestRunnerFailure.reviewer}: ${latestRunnerFailure.reason})`;
+    return withEvidence(`waiting on Human Review - reviewer runner failure (${latestRunnerFailure.reviewer}: ${latestRunnerFailure.reason})`);
   }
-  if (recovery?.recoverable) return `recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`;
+  if (recovery?.recoverable) return withEvidence(`recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`);
   const terminalStatus = cleanTerminalStatusLine(issue);
-  if (terminalStatus) return terminalStatus;
+  if (terminalStatus) return withEvidence(terminalStatus);
   const mergeWaiting = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_waiting");
-  if (mergeWaiting) return `waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`;
+  if (mergeWaiting) return withEvidence(`waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`);
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
-  if (mergeFailed && issue.phase !== "completed") return `tracker/local disagreement or merge review needed - ${mergeFailed.message ?? "merge failed"}`;
-  if (isCommentReadDispatchStop(issue)) return `dispatch guardrail paused - ${nextSafeAction(issue, recovery)}`;
+  if (mergeFailed && issue.phase !== "completed") return withEvidence(`tracker/local disagreement or merge review needed - ${mergeFailed.message ?? "merge failed"}`);
+  if (isCommentReadDispatchStop(issue)) return withEvidence(`dispatch guardrail paused - ${nextSafeAction(issue, recovery)}`);
   if (issue.lifecycleStatus === "planning_required") {
-    return `planning required - ${nextSafeAction(issue, recovery)}`;
+    return withEvidence(`planning required - ${nextSafeAction(issue, recovery)}`);
   }
-  if (hasApprovedPullRequest(issue) && issue.phase === "completed") return "waiting on merge";
+  if (hasApprovedPullRequest(issue) && issue.phase === "completed") return withEvidence("waiting on merge");
   if (issue.lifecycleStatus === "human_continuation" || issue.lifecycleStatus === "supervisor_continuation" || issue.lifecycleStatus === "externally_fixed") {
-    return `${issue.lifecycleStatus} - ${nextSafeAction(issue, recovery)}`;
+    return withEvidence(`${issue.lifecycleStatus} - ${nextSafeAction(issue, recovery)}`);
   }
-  if (issue.reviewStatus === "pending" || issue.phase === "review") return `waiting on review (${issue.reviewStatus ?? "pending"})`;
+  if (issue.reviewStatus === "pending" || issue.phase === "review") return withEvidence(`waiting on review (${issue.reviewStatus ?? "pending"})`);
   if (issue.reviewStatus === "human_required" || issue.phase === "human-required") {
-    return `waiting on Human Review${issue.lastError ? ` - ${issue.lastError}` : ""}`;
+    return withEvidence(`waiting on Human Review${issue.lastError ? ` - ${issue.lastError}` : ""}`);
   }
-  if (issue.phase === "merge") return "waiting on merge";
-  if (issue.nextRetryAt) return `retrying after ${issue.lastError ?? "unknown error"}; next retry ${issue.nextRetryAt}`;
+  if (issue.phase === "merge") return withEvidence("waiting on merge");
+  if (issue.nextRetryAt) return withEvidence(`retrying after ${issue.lastError ?? "unknown error"}; next retry ${issue.nextRetryAt}`);
   if (issue.validation) {
     const validation = validationStatusPhrase(issue.validation);
-    if (validation) return validation;
+    if (validation) return withEvidence(validation);
   }
-  if (issue.phase === "completed") return "completed locally";
-  return `${issue.phase ?? "recorded"}${issue.lastError ? ` - ${issue.lastError}` : ""}`;
+  if (issue.phase === "completed") return withEvidence("completed locally");
+  return withEvidence(`${issue.phase ?? "recorded"}${issue.lastError ? ` - ${issue.lastError}` : ""}`);
+}
+
+function appendEvidenceStatus(issue: IssueState, line: string): string {
+  const summary = validationHeadSummary(issue);
+  return summary ? `${line}; ${summary}` : line;
+}
+
+function validationHeadSummary(issue: IssueState): string | null {
+  const details = validationHeadDetails(issue);
+  if (details.length === 0) return null;
+  return `evidence heads: ${details.map((line) => line.replace(/^- /, "")).join("; ")}`;
+}
+
+function validationHeadDetails(issue: IssueState | null): string[] {
+  if (!issue?.validation && !issue?.headSha) return [];
+  const selectedHead = issue?.headSha ?? null;
+  const validationHead = issue?.validation?.repoHead ?? null;
+  const ciHead = issue?.validation?.githubCi?.headSha ?? null;
+  const details = [
+    `- Selected PR head: ${formatComparedHead(selectedHead, selectedHead, { selected: true })}`,
+    `- Validation repoHead: ${formatComparedHead(validationHead, selectedHead)}`,
+    `- CI/check head: ${formatComparedHead(ciHead, selectedHead)}`
+  ];
+  return details;
+}
+
+function formatComparedHead(value: string | null | undefined, selectedHead: string | null | undefined, options: { selected?: boolean } = {}): string {
+  if (!value) return "unknown";
+  const label = options.selected ? "current" : !selectedHead ? "unknown: no selected PR head" : sameSha(value, selectedHead) ? "current" : `stale; expected ${shortSha(selectedHead)}`;
+  return `${shortSha(value)} (${label})`;
+}
+
+function sameSha(left: string | null | undefined, right: string | null | undefined): boolean {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 }
 
 function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null = null): string {
@@ -354,6 +445,13 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
     });
   }
   const ciHeadSha = issue.validation?.githubCi?.headSha ?? null;
+  const validationRepoHead = issue.validation?.repoHead ?? null;
+  if (terminal && issue.headSha && validationRepoHead && issue.headSha !== validationRepoHead) {
+    diagnostics.push({
+      message: `contradictory terminal state: stale validation repoHead ${shortSha(validationRepoHead)} differs from recorded head ${shortSha(issue.headSha)}`,
+      nextAction: "rerun or verify validation against the selected terminal head before relying on the stale evidence"
+    });
+  }
   if (terminal && issue.headSha && ciHeadSha && issue.headSha !== ciHeadSha) {
     diagnostics.push({
       message: `contradictory terminal state: stale validation/CI head SHA ${shortSha(ciHeadSha)} differs from recorded head ${shortSha(issue.headSha)}`,

@@ -175,6 +175,8 @@ function formatValidation(validation: ValidationState | null): string[] {
   return [
     `- Status: ${validation.status}${validation.finalStatus ? ` final=${validation.finalStatus}` : ""}`,
     validation.path ? `- Evidence: ${validation.path}` : null,
+    validation.runId ? `- Evidence run: ${validation.runId}` : null,
+    validation.repoHead ? `- Evidence repoHead: ${validation.repoHead}` : null,
     validation.acceptedCommands?.length ? `- Passing required commands: ${validation.acceptedCommands.map((command) => command.name).join(", ")}` : null,
     validation.additionalPassingCommands?.length ? `- Additional passing commands: ${validation.additionalPassingCommands.map((command) => command.name).join(", ")}` : null,
     validation.failedHistoricalAttempts?.length ? `- Failed historical attempts: ${validation.failedHistoricalAttempts.map((command) => `${command.name} exit ${command.exitCode}`).join(", ")}` : null,

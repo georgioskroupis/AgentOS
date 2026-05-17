@@ -10,6 +10,9 @@ export interface ReviewerArtifact {
   schemaVersion?: 1;
   reviewer: string;
   decision: ReviewStatus;
+  runId?: string;
+  headSha?: string | null;
+  iteration?: number;
   findings: ReviewFinding[];
   summary?: string;
 }
@@ -42,6 +45,8 @@ export interface ReviewContext {
   iteration: number;
   reviewer: string;
   artifactPath: string;
+  runId?: string | null;
+  headSha?: string | null;
   githubSummary: string;
   feedbackSummary?: string;
   contextPack?: string;
@@ -111,7 +116,13 @@ export async function reviewArtifactSnapshot(path: string): Promise<ReviewArtifa
 export async function readReviewArtifactResult(
   path: string,
   reviewer: string,
-  options: { notBeforeMs?: number; staleIfUnchangedFrom?: ReviewArtifactSnapshot } = {}
+  options: {
+    notBeforeMs?: number;
+    staleIfUnchangedFrom?: ReviewArtifactSnapshot;
+    expectedRunId?: string | null;
+    expectedHeadSha?: string | null;
+    expectedIteration?: number | null;
+  } = {}
 ): Promise<ReviewArtifactReadResult> {
   if (!(await exists(path))) {
     return {
@@ -190,6 +201,8 @@ export async function readReviewArtifactResult(
       )
     };
   }
+  const scopeFailure = scopedReviewArtifactFailure(path, reviewer, parsed, options);
+  if (scopeFailure) return { ok: false, failure: scopeFailure };
   if (parsed.decision !== "approved" && parsed.decision !== "changes_requested" && parsed.decision !== "human_required") {
     return {
       ok: false,
@@ -216,6 +229,9 @@ export async function readReviewArtifactResult(
     schemaVersion: REVIEW_ARTIFACT_SCHEMA_VERSION,
     reviewer,
     decision,
+    ...(typeof parsed.runId === "string" ? { runId: parsed.runId } : {}),
+    ...(typeof parsed.headSha === "string" || parsed.headSha === null ? { headSha: parsed.headSha as string | null } : {}),
+    ...(typeof parsed.iteration === "number" && Number.isInteger(parsed.iteration) ? { iteration: parsed.iteration } : {}),
     findings: findings as ReviewFinding[],
     summary: typeof parsed.summary === "string" ? parsed.summary : undefined
     }
@@ -256,6 +272,8 @@ export function reviewerPrompt(context: ReviewContext): string {
       ? [`- PRs: ${context.reviewTargets.join(", ")}`]
       : [`- PR: ${context.prUrl}`]),
     `- Iteration: ${context.iteration}`,
+    context.runId ? `- Run: ${context.runId}` : null,
+    context.headSha ? `- Head SHA: ${context.headSha}` : null,
     "",
     "GitHub context:",
     context.contextPack ?? context.githubSummary,
@@ -272,6 +290,9 @@ export function reviewerPrompt(context: ReviewContext): string {
       "{",
       '  "schemaVersion": 1,',
       '  "reviewer": "self|correctness|tests|architecture|security",',
+      `  "runId": ${JSON.stringify(context.runId ?? "")},`,
+      `  "headSha": ${JSON.stringify(context.headSha ?? null)},`,
+      `  "iteration": ${context.iteration},`,
       '  "decision": "approved|changes_requested|human_required",',
       '  "summary": "short summary",',
       '  "findings": [',
@@ -341,7 +362,9 @@ export function summarizeReviewArtifacts(artifacts: ReviewerArtifact[], config: 
     reviewers: artifacts.map((artifact, index) => ({
       name: artifact.reviewer,
       decision: artifact.decision,
-      iteration: index
+      iteration: artifact.iteration ?? index,
+      ...(artifact.runId ? { runId: artifact.runId } : {}),
+      ...(artifact.headSha !== undefined ? { headSha: artifact.headSha } : {})
     }))
   };
 }
@@ -424,6 +447,44 @@ function humanRequiredReviewArtifact(reviewer: string, summary: string, body: st
       }
     ]
   };
+}
+
+function scopedReviewArtifactFailure(
+  path: string,
+  reviewer: string,
+  parsed: Record<string, unknown>,
+  options: { expectedRunId?: string | null; expectedHeadSha?: string | null; expectedIteration?: number | null }
+): ReviewArtifactFailure | null {
+  const mismatches: string[] = [];
+  if (options.expectedRunId) {
+    if (typeof parsed.runId !== "string" || !parsed.runId) {
+      mismatches.push(`runId missing; expected ${options.expectedRunId}`);
+    } else if (parsed.runId !== options.expectedRunId) {
+      mismatches.push(`runId=${parsed.runId} expected ${options.expectedRunId}`);
+    }
+  }
+  if (options.expectedHeadSha) {
+    if (typeof parsed.headSha !== "string" || !parsed.headSha) {
+      mismatches.push(`headSha missing; expected ${options.expectedHeadSha}`);
+    } else if (parsed.headSha.toLowerCase() !== options.expectedHeadSha.toLowerCase()) {
+      mismatches.push(`headSha=${parsed.headSha} expected ${options.expectedHeadSha}`);
+    }
+  }
+  if (options.expectedIteration != null) {
+    if (typeof parsed.iteration !== "number" || !Number.isInteger(parsed.iteration)) {
+      mismatches.push(`iteration missing; expected ${options.expectedIteration}`);
+    } else if (parsed.iteration !== options.expectedIteration) {
+      mismatches.push(`iteration=${parsed.iteration} expected ${options.expectedIteration}`);
+    }
+  }
+  if (mismatches.length === 0) return null;
+  return reviewArtifactFailure(
+    "stale_artifact",
+    reviewer,
+    path,
+    "Reviewer artifact scope did not match the current review.",
+    `Reviewer ${reviewer} wrote a review artifact at ${path} for stale scope: ${mismatches.join("; ")}. The artifact remains visible but is not authoritative for the current review.`
+  );
 }
 
 function reviewArtifactFailure(kind: ReviewArtifactFailureKind, reviewer: string, artifactPath: string, summary: string, body: string): ReviewArtifactFailure {

@@ -5094,6 +5094,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer,
           decision: "approved",
+          ...reviewArtifactScope(input),
           summary: "approved",
           findings: []
         });
@@ -5370,6 +5371,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: iteration === 1 ? "changes_requested" : "approved",
+          ...reviewArtifactScope(input),
           summary: iteration === 1 ? "fix required" : "approved",
           findings:
             iteration === 1
@@ -5480,6 +5482,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: iteration === 1 ? "changes_requested" : "approved",
+          ...reviewArtifactScope(input),
           summary: iteration === 1 ? "fix required" : "approved",
           findings:
             iteration === 1
@@ -5575,6 +5578,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: "changes_requested",
+          ...reviewArtifactScope(input),
           summary: "same finding",
           findings: [
             {
@@ -5665,6 +5669,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "architecture",
           decision: "changes_requested",
+          ...reviewArtifactScope(input),
           summary: "broad architecture",
           findings: [
             {
@@ -5746,6 +5751,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: "approved",
+          ...reviewArtifactScope(input),
           summary: "approved",
           findings: []
         });
@@ -5840,6 +5846,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: iteration === 1 ? "changes_requested" : "approved",
+          ...reviewArtifactScope(input),
           summary: iteration === 1 ? "fix required" : "approved",
           findings:
             iteration === 1
@@ -5945,6 +5952,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: "approved",
+          ...reviewArtifactScope(input),
           summary: "approved",
           findings: []
         });
@@ -6036,6 +6044,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: "approved",
+          ...reviewArtifactScope(input),
           summary: "approved",
           findings: []
         });
@@ -6143,6 +6152,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: "approved",
+          ...reviewArtifactScope(input),
           summary: "approved",
           findings: []
         });
@@ -6233,6 +6243,7 @@ describe("orchestrator", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer: "self",
           decision: "approved",
+          ...reviewArtifactScope(input),
           summary: "approved",
           findings: []
         });
@@ -7334,6 +7345,18 @@ async function writePassingHandoff(
       }
     ]
   });
+}
+
+function reviewArtifactScope(input: Parameters<AgentRunner["run"]>[0]): { runId?: string; headSha?: string; iteration?: number } {
+  const runId = input.prompt.match(/^- Run:\s*(.+)$/m)?.[1]?.trim();
+  const headSha = input.prompt.match(/^- Head SHA:\s*(.+)$/m)?.[1]?.trim();
+  const iterationText = input.prompt.match(/^- Iteration:\s*(\d+)$/m)?.[1];
+  const iteration = iterationText ? Number(iterationText) : undefined;
+  return {
+    ...(runId ? { runId } : {}),
+    ...(headSha ? { headSha } : {}),
+    ...(Number.isInteger(iteration) ? { iteration } : {})
+  };
 }
 
 function run(command: string, args: string[], cwd: string): Promise<string> {
