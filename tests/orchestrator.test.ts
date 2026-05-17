@@ -4459,7 +4459,7 @@ describe("orchestrator", () => {
       lastRunId: "run_future_missing_summary",
       validation: {
         status: "passed",
-        runId: "run_operator_recovered",
+        runId: "run_future_missing_summary",
         checkedAt: "2026-05-17T02:00:00.000Z"
       },
       operatorRecovery: {

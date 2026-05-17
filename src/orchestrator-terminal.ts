@@ -28,8 +28,8 @@ export function terminalWorkspaceWarning(issue: Issue, state: IssueState | null,
 
 export async function isOperatorRecoveryTimingRunMissingSummary(repoRoot: string, state: IssueState | null, runId: string): Promise<boolean> {
   if (!state?.operatorRecovery) return false;
-  const recoveredRunIds = new Set([state.operatorRecovery.runId, state.validation?.runId].filter((value): value is string => Boolean(value)));
-  return recoveredRunIds.has(runId) && !(await exists(join(repoRoot, ".agent-os", "runs", runId, "summary.json")));
+  const recoveredRunId = state.operatorRecovery.runId ?? state.validation?.runId;
+  return recoveredRunId === runId && !(await exists(join(repoRoot, ".agent-os", "runs", runId, "summary.json")));
 }
 
 export function alreadyMergedIssuePatch(
