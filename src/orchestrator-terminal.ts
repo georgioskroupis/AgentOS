@@ -1,4 +1,6 @@
+import { join } from "node:path";
 import type { PullRequestStatus } from "./github.js";
+import { exists } from "./fs-utils.js";
 import type { RunTimingPhase } from "./runs.js";
 import type { Issue, IssueState } from "./types.js";
 
@@ -22,6 +24,12 @@ export function terminalWaitPhaseFinishes(issue: Issue, state: IssueState | null
 
 export function terminalWorkspaceWarning(issue: Issue, state: IssueState | null, missingWorkspace: boolean): boolean {
   return Boolean(missingWorkspace && !(state?.lifecycleStatus === "terminal_linear" && state.terminalState === issue.state && !state.workspaceMissingAt));
+}
+
+export async function isOperatorRecoveryTimingRunMissingSummary(repoRoot: string, state: IssueState | null, runId: string): Promise<boolean> {
+  if (!state?.operatorRecovery) return false;
+  const recoveredRunId = state.operatorRecovery.runId ?? state.validation?.runId;
+  return recoveredRunId === runId && !(await exists(join(repoRoot, ".agent-os", "runs", runId, "summary.json")));
 }
 
 export function alreadyMergedIssuePatch(

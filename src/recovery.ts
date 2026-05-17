@@ -234,6 +234,7 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
       };
   const operatorRecovery: OperatorRecoveryState = {
     recordedAt,
+    runId: acceptedRunId,
     branch,
     headSha,
     workspacePath: workspaceRelativePath,

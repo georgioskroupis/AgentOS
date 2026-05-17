@@ -489,7 +489,7 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
       nextAction: terminalReconciliationAction()
     });
   }
-  if (terminal && hasTerminalWorkspaceWarning(issue)) {
+  if (terminal && shouldReportTerminalWorkspaceWarning(issue)) {
     diagnostics.push({
       message: `terminal workspace warning: workspace was missing during terminal reconciliation${issue.workspaceMissingAt ? ` at ${issue.workspaceMissingAt}` : ""}`,
       nextAction: "inspect the last handoff and run artifacts; do not start duplicate work solely to recreate the workspace"
@@ -528,7 +528,7 @@ function findRuntimeRetry(retryQueue: RuntimeRetryEntry[], issue: Pick<IssueStat
 function shouldFormatRecoveryDiagnostics(issue: IssueState | null, recovery: WorkspaceRecoveryDiagnostics | null): recovery is WorkspaceRecoveryDiagnostics {
   if (!recovery) return false;
   if (issue && isTerminalIssueState(issue) && recovery.recoverable) return false;
-  if (issue && !recovery.exists && isExpectedPostMergeWorkspaceCleanup(issue) && !hasTerminalWorkspaceWarning(issue)) return false;
+  if (issue && !recovery.exists && isExpectedTerminalWorkspaceCleanup(issue) && !shouldReportTerminalWorkspaceWarning(issue)) return false;
   return true;
 }
 
@@ -570,19 +570,25 @@ function hasTerminalWorkspaceWarning(issue: IssueState): boolean {
   return Boolean(issue.workspaceMissingAt || issue.lifecycleStatus === "terminal_missing_workspace");
 }
 
-function shouldReportMissingTerminalWorkspace(issue: IssueState): boolean {
-  if (hasTerminalWorkspaceWarning(issue)) return false;
-  return !isExpectedPostMergeWorkspaceCleanup(issue);
+function shouldReportTerminalWorkspaceWarning(issue: IssueState): boolean {
+  if (!hasTerminalWorkspaceWarning(issue)) return false;
+  return !isExpectedTerminalWorkspaceCleanup(issue);
 }
 
-function isExpectedPostMergeWorkspaceCleanup(issue: IssueState): boolean {
+function shouldReportMissingTerminalWorkspace(issue: IssueState): boolean {
+  if (hasTerminalWorkspaceWarning(issue)) return false;
+  return !isExpectedTerminalWorkspaceCleanup(issue);
+}
+
+function isExpectedTerminalWorkspaceCleanup(issue: IssueState): boolean {
   return Boolean(
     issue.mergedAt ||
-	      issue.lifecycleStatus === "merge_success" ||
-	      issue.lifecycleStatus === "post_merge_cleanup_warning" ||
-	      issue.lifecycleStatus === "already_merged_pr" ||
-	      issue.lifecycleStatus === "terminal_linear"
-	  );
+      issue.lifecycleStatus === "merge_success" ||
+      issue.lifecycleStatus === "post_merge_cleanup_warning" ||
+      issue.lifecycleStatus === "already_merged_pr" ||
+      issue.lifecycleStatus === "terminal_linear" ||
+      (issue.phase === "completed" && Boolean(issue.terminalState))
+  );
 }
 
 function cleanupDriftWarning(issue: IssueState): string | null {
