@@ -7,8 +7,10 @@ import {
   issueStateFromHandoff,
   IssueStateStore,
   mergeTargetAmbiguityReason,
+  mergeTargetPullRequest,
   normalizeIssueState,
-  previousFailureFromIssueState
+  previousFailureFromIssueState,
+  reviewTargetPullRequests
 } from "./issue-state.js";
 import { RuntimeStateStore } from "./runtime-state.js";
 import { validationEvidencePath, verifyValidationEvidence } from "./validation.js";
@@ -25,6 +27,7 @@ export interface WorkspaceRecoveryDiagnostics {
   dirty: boolean;
   upstreamMissing: boolean;
   aheadCount: number;
+  behindCount: number;
   stalePrHead: boolean;
   staleCiHead: boolean;
   recoverable: boolean;
@@ -75,6 +78,7 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
       dirty: false,
       upstreamMissing: false,
       aheadCount: 0,
+      behindCount: 0,
       stalePrHead: false,
       staleCiHead: false,
       recoverable: false,
@@ -89,17 +93,27 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
   const upstreamSha = await gitOutput(workspacePath, ["rev-parse", "--verify", "@{u}"]);
   const baseSha = await gitOutput(workspacePath, ["rev-parse", "--verify", "origin/main"]).then((sha) => sha ?? gitOutput(workspacePath, ["rev-parse", "--verify", "main"]));
   const aheadRaw = upstreamSha ? await gitOutput(workspacePath, ["rev-list", "--count", "@{u}..HEAD"]) : null;
+  const behindRaw = upstreamSha ? await gitOutput(workspacePath, ["rev-list", "--count", "HEAD..@{u}"]) : null;
   const dirty = Boolean(status?.trim());
   const upstreamMissing = Boolean(branch && branch !== "HEAD" && !upstreamSha);
   const aheadCount = Number.parseInt(aheadRaw ?? "0", 10) || 0;
+  const behindCount = Number.parseInt(behindRaw ?? "0", 10) || 0;
   const stalePrHead = Boolean(issue.headSha && headSha && issue.headSha !== headSha);
   const ciHeadSha = issue.validation?.githubCi?.headSha ?? null;
   const staleCiHead = Boolean(ciHeadSha && headSha && ciHeadSha !== headSha);
   const cleanBaseWithoutUpstream = Boolean(upstreamMissing && !dirty && headSha && baseSha && headSha === baseSha);
+  const branchSyncReason =
+    aheadCount > 0 && behindCount > 0
+      ? `branch has diverged from upstream (${aheadCount} commit(s) ahead, ${behindCount} commit(s) behind)`
+      : aheadCount > 0
+        ? `branch is ${aheadCount} commit(s) ahead of upstream`
+        : behindCount > 0
+          ? `branch is ${behindCount} commit(s) behind upstream`
+          : null;
   const reasons = [
     dirty ? "workspace has uncommitted changes" : null,
     upstreamMissing && !cleanBaseWithoutUpstream ? "branch has no upstream" : null,
-    aheadCount > 0 ? `branch is ${aheadCount} commit(s) ahead of upstream` : null,
+    branchSyncReason,
     stalePrHead ? `local HEAD ${headSha} differs from recorded PR head ${issue.headSha}` : null,
     staleCiHead ? `local HEAD ${headSha} differs from recorded CI head ${ciHeadSha}` : null
   ].filter((item): item is string => item !== null);
@@ -113,6 +127,7 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
     dirty,
     upstreamMissing,
     aheadCount,
+    behindCount,
     stalePrHead,
     staleCiHead,
     recoverable,
@@ -162,6 +177,12 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
       `add AgentOS-Outcome and Validation-JSON lines to ${relativeToRepo(repoRoot, handoffPath)} before recording recovery`
     );
   }
+  if (handoffState.outcome === "partially_satisfied") {
+    throw new OperatorRecoveryRefusal(
+      "handoff outcome is partially-satisfied and cannot be recorded as successful recovery",
+      `finish the recovered work, write an implemented or already-satisfied handoff, rerun validation, and record recovery again`
+    );
+  }
   const mergeAmbiguity = mergeTargetAmbiguityReason(handoffState);
   if (mergeAmbiguity) {
     throw new OperatorRecoveryRefusal(
@@ -186,10 +207,31 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
   }
 
   const recordedAt = input.now ?? new Date().toISOString();
+  const acceptedRunId = input.runId ?? validation.state.runId;
   const workspaceRelativePath = relativeToRepo(repoRoot, workspacePath);
   const handoffRelativePath = relativeToRepo(repoRoot, handoffPath);
   const validationRelativePath = validation.state.path ? relativeToRepo(repoRoot, validation.state.path) : validationMarker;
   const previousFailure = previousFailureFromIssueState(current);
+  const handoffPrs = handoffState.prs ?? [];
+  const reviewTargetMode = current?.reviewTargetMode ?? "merge-eligible";
+  const mergeTarget = handoffPrs.length ? mergeTargetPullRequest(handoffState) : null;
+  const prState: Partial<IssueState> = handoffPrs.length
+    ? {
+        prs: handoffPrs,
+        prUrl: handoffState.prUrl,
+        reviewTargetMode,
+        reviewTargetUrls: reviewTargetPullRequests(handoffState, reviewTargetMode).map((pr) => pr.url),
+        mergeTargetUrl: mergeTarget?.url,
+        mergeTargetRole: mergeTarget?.role
+      }
+    : {
+        prs: undefined,
+        prUrl: undefined,
+        reviewTargetMode: undefined,
+        reviewTargetUrls: undefined,
+        mergeTargetUrl: undefined,
+        mergeTargetRole: undefined
+      };
   const operatorRecovery: OperatorRecoveryState = {
     recordedAt,
     branch,
@@ -208,9 +250,11 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
       updatedAt: recordedAt
     }),
     ...handoffState,
+    ...prState,
     issueId: current?.issueId ?? issue.id,
     issueIdentifier,
     phase: "completed",
+    lastRunId: acceptedRunId,
     workspacePath: workspaceRelativePath,
     workspaceKey: workspaceKey(issueIdentifier),
     headSha,
@@ -313,16 +357,28 @@ function assertRecoveryEvidenceCanBeRecorded(diagnostics: WorkspaceRecoveryDiagn
       "commit or stash the recovered changes, rerun validation, and record recovery from a clean worktree"
     );
   }
-  if (diagnostics.upstreamMissing && diagnostics.reasons.includes("branch has no upstream")) {
+  if (diagnostics.upstreamMissing) {
     throw new OperatorRecoveryRefusal(
       `branch ${diagnostics.branch} has no upstream`,
       `push ${diagnostics.branch} with an upstream, rerun validation if the head changes, and record recovery again`
+    );
+  }
+  if (diagnostics.aheadCount > 0 && diagnostics.behindCount > 0) {
+    throw new OperatorRecoveryRefusal(
+      `branch ${diagnostics.branch} has diverged from upstream (${diagnostics.aheadCount} commit(s) ahead, ${diagnostics.behindCount} commit(s) behind)`,
+      "reconcile the local and upstream branch heads, rerun validation on the final pushed head, and record recovery again"
     );
   }
   if (diagnostics.aheadCount > 0) {
     throw new OperatorRecoveryRefusal(
       `branch ${diagnostics.branch} is ${diagnostics.aheadCount} commit(s) ahead of upstream`,
       "push the recovered branch, confirm the pushed head matches validation evidence, and record recovery again"
+    );
+  }
+  if (diagnostics.behindCount > 0) {
+    throw new OperatorRecoveryRefusal(
+      `branch ${diagnostics.branch} is ${diagnostics.behindCount} commit(s) behind upstream`,
+      "pull or reset to the intended upstream head, rerun validation, and record recovery again"
     );
   }
 }

@@ -34,6 +34,8 @@ describe("operator recovery", () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-recovery-record-"));
     const { workspace, headSha } = await createWorkspace(repo, { pushBranch: true });
     const now = new Date().toISOString();
+    const recoveredRunId = "run_recovered";
+    const stalePrUrl = "https://github.com/o/r/pull/1";
     await mkdir(join(workspace, ".agent-os"), { recursive: true });
     await writeFile(
       join(workspace, ".agent-os", `handoff-${issue.identifier}.md`),
@@ -47,6 +49,7 @@ describe("operator recovery", () => {
     await writeValidationEvidence(join(workspace, ".agent-os", "validation", `${issue.identifier}.json`), {
       schemaVersion: 1,
       issueIdentifier: issue.identifier,
+      runId: recoveredRunId,
       repoHead: headSha,
       status: "passed",
       commands: [
@@ -59,12 +62,18 @@ describe("operator recovery", () => {
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       phase: "needs-input",
+      lastRunId: "run_failed",
       lifecycleStatus: "implementation_failure",
       lastError: "codex_stall_timeout",
       stopReason: "codex_stall_timeout",
       retryAttempt: 2,
       nextRetryAt: "2026-05-17T01:00:00.000Z",
       workspacePath: workspace,
+      prs: [{ url: stalePrUrl, discoveredAt: "2026-05-17T00:00:00.000Z", source: "handoff", role: "primary" }],
+      prUrl: stalePrUrl,
+      mergeTargetUrl: stalePrUrl,
+      mergeTargetRole: "primary",
+      reviewTargetUrls: [stalePrUrl],
       updatedAt: "2026-05-17T00:00:00.000Z"
     });
     await new RuntimeStateStore(repo).upsertRetry({
@@ -82,6 +91,7 @@ describe("operator recovery", () => {
     const result = await recordOperatorRecovery({
       repoRoot: repo,
       issueIdentifier: issue.identifier,
+      runId: recoveredRunId,
       now: "2026-05-17T02:00:00.000Z"
     });
 
@@ -95,6 +105,7 @@ describe("operator recovery", () => {
     expect(state).toMatchObject({
       phase: "completed",
       outcome: "implemented",
+      lastRunId: recoveredRunId,
       headSha,
       validation: {
         status: "passed",
@@ -117,6 +128,11 @@ describe("operator recovery", () => {
     expect(state?.retryAttempt).toBeUndefined();
     expect(state?.nextRetryAt).toBeUndefined();
     expect(state?.lifecycleStatus).toBeUndefined();
+    expect(state?.prs).toBeUndefined();
+    expect(state?.prUrl).toBeUndefined();
+    expect(state?.mergeTargetUrl).toBeUndefined();
+    expect(state?.mergeTargetRole).toBeUndefined();
+    expect(state?.reviewTargetUrls).toBeUndefined();
     expect((await new RuntimeStateStore(repo).read()).retryQueue).toEqual([]);
 
     const status = await getStatus(repo);
@@ -130,6 +146,75 @@ describe("operator recovery", () => {
     expect(inspect).toContain("Failed historical attempts:");
     expect(inspect).not.toContain("Last error: codex_stall_timeout");
     expect(inspect).not.toContain("Stop reason: codex_stall_timeout");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("replaces stale PR output with recovered handoff PR metadata", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-recovery-prs-"));
+    const { workspace, headSha } = await createWorkspace(repo, { pushBranch: true });
+    const now = new Date().toISOString();
+    const stalePrUrl = "https://github.com/o/r/pull/1";
+    const recoveredPrUrl = "https://github.com/o/r/pull/2";
+    await mkdir(join(workspace, ".agent-os"), { recursive: true });
+    await writeFile(
+      join(workspace, ".agent-os", `handoff-${issue.identifier}.md`),
+      [
+        "AgentOS-Outcome: implemented",
+        `Validation-JSON: .agent-os/validation/${issue.identifier}.json`,
+        `Primary PR: ${recoveredPrUrl}`
+      ].join("\n"),
+      "utf8"
+    );
+    await writeValidationEvidence(join(workspace, ".agent-os", "validation", `${issue.identifier}.json`), {
+      schemaVersion: 1,
+      issueIdentifier: issue.identifier,
+      runId: "run_recovered_pr",
+      repoHead: headSha,
+      status: "passed",
+      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+    });
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "human-required",
+      lastRunId: "run_failed",
+      workspacePath: workspace,
+      prs: [{ url: stalePrUrl, discoveredAt: "2026-05-17T00:00:00.000Z", source: "handoff", role: "primary" }],
+      prUrl: stalePrUrl,
+      mergeTargetUrl: stalePrUrl,
+      mergeTargetRole: "primary",
+      reviewTargetUrls: [stalePrUrl],
+      updatedAt: "2026-05-17T00:00:00.000Z"
+    });
+
+    const result = await recordOperatorRecovery({
+      repoRoot: repo,
+      issueIdentifier: issue.identifier,
+      runId: "run_recovered_pr",
+      now: "2026-05-17T02:00:00.000Z"
+    });
+
+    expect(result.state.prs?.map((pr) => pr.url)).toEqual([recoveredPrUrl]);
+    expect(result.state.prUrl).toBe(recoveredPrUrl);
+    expect(result.state.mergeTargetUrl).toBe(recoveredPrUrl);
+    expect(result.state.mergeTargetRole).toBe("primary");
+    expect(result.state.reviewTargetUrls).toEqual([recoveredPrUrl]);
+    expect(result.state.lastRunId).toBe("run_recovered_pr");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses partially satisfied handoffs as successful recovery evidence", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-recovery-partial-"));
+    const { workspace } = await createWorkspace(repo, { pushBranch: true });
+    await mkdir(join(workspace, ".agent-os"), { recursive: true });
+    await writeFile(
+      join(workspace, ".agent-os", `handoff-${issue.identifier}.md`),
+      ["AgentOS-Outcome: partially-satisfied", `Validation-JSON: .agent-os/validation/${issue.identifier}.json`].join("\n"),
+      "utf8"
+    );
+
+    await expect(recordOperatorRecovery({ repoRoot: repo, issueIdentifier: issue.identifier })).rejects.toThrow(
+      /partially-satisfied[\s\S]*Next safe action: finish/
+    );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("refuses dirty, missing, and ambiguous worktree evidence with next actions", async () => {
@@ -150,10 +235,40 @@ describe("operator recovery", () => {
     await expect(recordOperatorRecovery({ repoRoot: ambiguousRepo, issueIdentifier: issue.identifier })).rejects.toThrow(
       /branch agent\/AG-1 has no upstream[\s\S]*Next safe action: push agent\/AG-1/
     );
+
+    const cleanNoUpstreamRepo = await mkdtemp(join(tmpdir(), "agent-os-recovery-no-upstream-base-"));
+    await createWorkspace(cleanNoUpstreamRepo, { pushBranch: false, commitChange: false });
+    await expect(recordOperatorRecovery({ repoRoot: cleanNoUpstreamRepo, issueIdentifier: issue.identifier })).rejects.toThrow(
+      /branch agent\/AG-1 has no upstream[\s\S]*Next safe action: push agent\/AG-1/
+    );
+
+    const aheadRepo = await mkdtemp(join(tmpdir(), "agent-os-recovery-ahead-"));
+    const ahead = await createWorkspace(aheadRepo, { pushBranch: true });
+    await commitReadme(ahead.workspace, "local ahead work\n", "local ahead");
+    await expect(recordOperatorRecovery({ repoRoot: aheadRepo, issueIdentifier: issue.identifier })).rejects.toThrow(
+      /branch agent\/AG-1 is 1 commit\(s\) ahead of upstream[\s\S]*Next safe action: push/
+    );
+
+    const behindRepo = await mkdtemp(join(tmpdir(), "agent-os-recovery-behind-"));
+    const behind = await createWorkspace(behindRepo, { pushBranch: true });
+    await advanceUpstreamBranch(behindRepo, "upstream work\n");
+    await run("git", ["fetch", "origin"], behind.workspace);
+    await expect(recordOperatorRecovery({ repoRoot: behindRepo, issueIdentifier: issue.identifier })).rejects.toThrow(
+      /branch agent\/AG-1 is 1 commit\(s\) behind upstream[\s\S]*Next safe action: pull or reset/
+    );
+
+    const divergedRepo = await mkdtemp(join(tmpdir(), "agent-os-recovery-diverged-"));
+    const diverged = await createWorkspace(divergedRepo, { pushBranch: true });
+    await advanceUpstreamBranch(divergedRepo, "upstream diverged work\n");
+    await run("git", ["fetch", "origin"], diverged.workspace);
+    await commitReadme(diverged.workspace, "local diverged work\n", "local diverged");
+    await expect(recordOperatorRecovery({ repoRoot: divergedRepo, issueIdentifier: issue.identifier })).rejects.toThrow(
+      /branch agent\/AG-1 has diverged from upstream[\s\S]*Next safe action: reconcile/
+    );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
-async function createWorkspace(repo: string, options: { pushBranch: boolean }): Promise<{ workspace: string; headSha: string }> {
+async function createWorkspace(repo: string, options: { pushBranch: boolean; commitChange?: boolean }): Promise<{ workspace: string; headSha: string }> {
   const workspace = join(repo, ".agent-os", "workspaces", issue.identifier);
   const remote = join(repo, "remote.git");
   await mkdir(workspace, { recursive: true });
@@ -168,12 +283,26 @@ async function createWorkspace(repo: string, options: { pushBranch: boolean }): 
   await run("git", ["remote", "add", "origin", remote], workspace);
   await run("git", ["push", "-u", "origin", "main"], workspace);
   await run("git", ["checkout", "-b", `agent/${issue.identifier}`], workspace);
-  await writeFile(join(workspace, "README.md"), "recovered work\n", "utf8");
-  await run("git", ["add", "README.md"], workspace);
-  await run("git", ["commit", "-m", "recover issue"], workspace);
+  if (options.commitChange !== false) await commitReadme(workspace, "recovered work\n", "recover issue");
   if (options.pushBranch) await run("git", ["push", "-u", "origin", `agent/${issue.identifier}`], workspace);
   const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace });
   return { workspace, headSha: stdout.trim() };
+}
+
+async function commitReadme(workspace: string, content: string, message: string): Promise<void> {
+  await writeFile(join(workspace, "README.md"), content, "utf8");
+  await run("git", ["add", "README.md"], workspace);
+  await run("git", ["commit", "-m", message], workspace);
+}
+
+async function advanceUpstreamBranch(repo: string, content: string): Promise<void> {
+  const clone = join(repo, `upstream-${content.replace(/[^a-z]/g, "-")}`);
+  await run("git", ["clone", join(repo, "remote.git"), clone], repo);
+  await run("git", ["config", "user.email", "agentos@example.test"], clone);
+  await run("git", ["config", "user.name", "AgentOS Test"], clone);
+  await run("git", ["checkout", "-B", `agent/${issue.identifier}`, `origin/agent/${issue.identifier}`], clone);
+  await commitReadme(clone, content, "advance upstream");
+  await run("git", ["push", "origin", `agent/${issue.identifier}`], clone);
 }
 
 async function run(command: string, args: string[], cwd: string): Promise<void> {
