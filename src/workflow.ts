@@ -6,7 +6,7 @@ import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, readText } from "./fs-utils.js";
 import { parseLifecycleConfig, validateLifecycleConfig } from "./lifecycle.js";
 import { defaultThreadSandboxForTrustMode, defaultTurnSandboxPolicyForTrustMode, parseGitHubMergeMode, parseTrustMode, trustCapabilities, validateTrustCompatibility } from "./trust.js";
-import type { CodexEventPolicy, Issue, ServiceConfig, WorkflowDefinition } from "./types.js";
+import type { CodexEventPolicy, Issue, ReviewBudgetConfig, ServiceConfig, WorkflowDefinition } from "./types.js";
 
 const defaultActiveStates = ["Todo", "In Progress"];
 const defaultTerminalStates = ["Closed", "Canceled", "Duplicate", "Done"];
@@ -136,7 +136,8 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       blockingSeverities: blockingSeveritiesAt(objectAt(cfg, "review"), "blocking_severities", ["P0", "P1", "P2"]),
       parallelReviewers: booleanAt(objectAt(cfg, "review"), "parallel_reviewers", false),
       maxConcurrentReviewers: positiveIntAt(objectAt(cfg, "review"), "max_concurrent_reviewers", 1),
-      skipOptionalReviewersAfterBlockingRequired: booleanAt(objectAt(cfg, "review"), "skip_optional_reviewers_after_blocking_required", false)
+      skipOptionalReviewersAfterBlockingRequired: booleanAt(objectAt(cfg, "review"), "skip_optional_reviewers_after_blocking_required", false),
+      budget: reviewBudgetConfigAt(objectAt(objectAt(cfg, "review"), "budget"), positiveIntAt(objectAt(cfg, "review"), "max_iterations", 3))
     }
   };
 }
@@ -250,6 +251,12 @@ function positiveIntAt(value: Record<string, unknown>, key: string, fallback: nu
   return Number.isInteger(num) && num > 0 ? num : fallback;
 }
 
+function nonNegativeIntAt(value: Record<string, unknown>, key: string, fallback: number): number {
+  const raw = value[key];
+  const num = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
+  return Number.isInteger(num) && num >= 0 ? num : fallback;
+}
+
 function intAt(value: Record<string, unknown>, key: string, fallback: number): number {
   const raw = value[key];
   const num = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
@@ -259,6 +266,31 @@ function intAt(value: Record<string, unknown>, key: string, fallback: number): n
 function booleanAt(value: Record<string, unknown>, key: string, fallback: boolean): boolean {
   const found = value[key];
   return typeof found === "boolean" ? found : fallback;
+}
+
+function reviewBudgetConfigAt(value: Record<string, unknown>, maxIterations: number): ReviewBudgetConfig {
+  return {
+    enabled: booleanAt(value, "enabled", true),
+    mode: reviewBudgetModeAt(value, "mode", "recommend-only"),
+    maxReviewElapsedMs: nonNegativeIntAt(value, "max_review_elapsed_ms", 30 * 60 * 1000),
+    maxReviewIterations: nonNegativeIntAt(value, "max_review_iterations", maxIterations),
+    maxFixerIterations: nonNegativeIntAt(value, "max_fixer_iterations", Math.max(0, maxIterations - 1)),
+    maxBlockingFindings: nonNegativeIntAt(value, "max_blocking_findings", 10),
+    maxP1P2Findings: nonNegativeIntAt(value, "max_p1_p2_findings", 5),
+    maxChangedFiles: nonNegativeIntAt(value, "max_changed_files", 40),
+    maxValidationReruns: nonNegativeIntAt(value, "max_validation_reruns", 2),
+    maxReviewTokens: nonNegativeIntAt(value, "max_review_tokens", 200_000),
+    repeatedBroadCategoryThreshold: nonNegativeIntAt(value, "repeated_broad_category_threshold", 2),
+    lateNewBlockingFindingAfterApproval: booleanAt(value, "late_new_blocking_finding_after_approval", true),
+    broadCategories: stringListAt(value, "broad_categories", ["architecture", "lifecycle", "orchestration", "status", "workflow"])
+  };
+}
+
+function reviewBudgetModeAt(value: Record<string, unknown>, key: string, fallback: ReviewBudgetConfig["mode"]): ReviewBudgetConfig["mode"] {
+  const raw = value[key];
+  if (raw == null) return fallback;
+  if (raw === "recommend-only" || raw === "prepare-draft") return raw;
+  throw new Error(`unsupported_review_budget_mode: ${String(raw)}`);
 }
 
 function reviewTargetModeAt(value: Record<string, unknown>, key: string, fallback: "merge-eligible" | "primary"): "merge-eligible" | "primary" {

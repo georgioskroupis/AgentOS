@@ -56,7 +56,7 @@ function checkWorkflow(path) {
   for (const snippet of ["scripts/agent-start-app.sh", "scripts/agent-smoke-test.sh", "scripts/agent-capture-logs.sh", "scripts/agent-capture-proof.sh", "App-Proof:", "Proof-Artifact:"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing application legibility contract ${snippet}`);
   }
-  for (const snippet of ["review:", "target_mode:", "merge-eligible", "max_iterations", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
+  for (const snippet of ["review:", "target_mode:", "merge-eligible", "max_iterations", "budget:", "max_changed_files", "repeated_broad_category_threshold", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
     if (!text.includes(snippet)) failures.push(`${path} missing Wiggum review config ${snippet}`);
   }
   for (const snippet of [

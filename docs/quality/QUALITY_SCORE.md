@@ -67,8 +67,9 @@ Use this as a lightweight rubric for harnessed repositories.
 - PR-producing implemented issues run automated review before `Human Review`;
   blocking findings create focused fixer turns, review artifacts are persisted,
   missing/malformed/stale/incomplete reviewer artifacts are retried narrowly per
-  reviewer, and repeated or unresolved findings or exhausted runner failures
-  escalate with `reviewStatus: human_required`.
+  reviewer, review budget signals recommend split/follow-up work for broad or
+  non-mechanical exhaustion, and repeated or unresolved findings or exhausted
+  runner failures escalate with `reviewStatus: human_required`.
 - Implementation re-entry, automated review, fixer, and mechanical CI repair
   turns receive targeted context packs with bounded issue text, selected PR
   metadata, diff excerpts, current findings, validation summaries, sanitized

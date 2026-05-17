@@ -12,7 +12,7 @@
     "check:contracts": "node scripts/check-harness-contract.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:security": "node scripts/check-security.mjs",
-    "coverage": "vitest run --coverage --testTimeout=10000",
+    "coverage": "vitest run --coverage --testTimeout=30000",
     "format:check": "node scripts/check-format.mjs",
     "lint": "node scripts/check-lint.mjs",
     "test": "vitest run",

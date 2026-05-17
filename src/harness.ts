@@ -111,7 +111,7 @@ async function contractChecks(targetRoot: string, workflowPath = "WORKFLOW.md"):
         changes.push({ action: "invalid", path: workflowPath, message: `missing handoff outcome contract: AgentOS-Outcome: ${outcome}` });
       }
     }
-    for (const snippet of ["review:", "max_iterations", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
+    for (const snippet of ["review:", "max_iterations", "budget:", "max_changed_files", "repeated_broad_category_threshold", "required_reviewers", "self", "correctness", "tests", "architecture"]) {
       if (!text.includes(snippet)) {
         changes.push({ action: "invalid", path: workflowPath, message: `missing Wiggum review contract snippet: ${snippet}` });
       }

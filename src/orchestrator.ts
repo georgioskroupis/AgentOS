@@ -22,6 +22,7 @@ import { allowsImplementationContinuation, formatHumanDecision, formatLinearComm
 import { alreadyMergedIssuePatch, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
+import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationOpen, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
 import { reviewerConcurrencyFor, runReviewerIteration } from "./reviewer-scheduler.js";
 import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
@@ -1615,6 +1616,8 @@ export class Orchestrator {
     const repoRoot = resolve(this.options.repoRoot);
     let previousFindings = state.findings ?? [];
     let reviewRunnerFailures: ReviewRunnerFailure[] = [];
+    let reviewTokenTotal = 0;
+    const initialReviewStatus = state.reviewStatus ?? null;
     latestState = await this.recordIssueState(issue, {
       phase: "review",
       reviewStatus: "pending",
@@ -1698,6 +1701,7 @@ export class Orchestrator {
         onActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
       });
       reviewRunnerFailures = [...reviewRunnerFailures, ...reviewerResult.reviewRunnerFailures];
+      reviewTokenTotal += reviewerResult.tokenTotal;
       const artifacts = reviewerResult.artifacts;
       const terminalReviewerFailure = reviewerResult.terminalReviewerFailure;
       const reviewerStates = reviewerResult.reviewerStates;
@@ -1734,6 +1738,20 @@ export class Orchestrator {
       );
       const repeated = repeatedBlockingHashes(previousFindings, findings, this.config);
       const status: ReviewStatus = humanRequired ? "human_required" : blocking.length > 0 || !allRequiredApproved ? "changes_requested" : "approved";
+      const budgetDecision = evaluateReviewBudget({
+        issue,
+        config: this.config,
+        iteration,
+        reviewStartedAt: reviewTiming?.startedAt,
+        changedFiles: githubContext.entries.flatMap((entry) => entry.status.changedFiles),
+        previousFindings,
+        currentFindings: findings,
+        repeatedFindingHashes: repeated,
+        reviewTokenTotal,
+        fixerIterations: iteration - 1,
+        validation: latestState?.validation,
+        initialReviewStatus
+      });
 
       latestState = await this.recordIssueState(issue, {
         phase: "review",
@@ -1746,18 +1764,27 @@ export class Orchestrator {
         lastReviewedSha: joinedHeadShas(githubContext.entries),
         reviewTargetMode,
         reviewTargetUrls,
-        reviewRunnerFailures
+        reviewRunnerFailures,
+        reviewBudget: budgetDecision.budget,
+        splitRecommendation: budgetDecision.splitRecommendation ?? undefined
       });
 
       await this.logger.write({
-        type: status === "approved" ? "review_approved" : "review_iteration_complete",
+        type: status === "approved" && !budgetDecision.shouldRecommendSplit ? "review_approved" : "review_iteration_complete",
         issueId: issue.id,
         issueIdentifier: issue.identifier,
-        message: `iteration ${iteration}: ${status}`,
+        message: `iteration ${iteration}: ${budgetDecision.shouldRecommendSplit ? "budget_exceeded" : status}`,
         payload: { blocking: blocking.length, repeated }
       });
 
       if (status === "approved") {
+        if (budgetDecision.shouldRecommendSplit && budgetDecision.splitRecommendation) {
+          const splitRecommendation = await prepareReviewFollowUpProposal(repoRoot, issue, budgetDecision.splitRecommendation);
+          latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", reviewBudget: budgetDecision.budget, splitRecommendation, findings, reviewRunnerFailures });
+          await this.commentIssue(issue, ["### AgentOS review budget recommends split/follow-up", "", "The Wiggum loop stopped before approval because the configured review budget was exceeded.", "", reviewTargetList, `- Iteration: ${iteration}`, "", formatReviewBudgetState(budgetDecision.budget), "", formatSplitRecommendation(splitRecommendation)].join("\n"));
+          await this.logger.write({ type: "review_split_recommended", issueId: issue.id, issueIdentifier: issue.identifier, message: splitRecommendation.reason, payload: { splitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls } });
+          return latestState;
+        }
         await this.commentIssue(
           issue,
           [
@@ -1770,6 +1797,14 @@ export class Orchestrator {
             `- Reviewers: ${reviewerStates.map((reviewer) => `${reviewer.name}=${reviewer.decision}`).join(", ")}`
           ].join("\n")
         );
+        return latestState;
+      }
+
+      if (budgetDecision.shouldRecommendSplit && budgetDecision.splitRecommendation) {
+        const splitRecommendation = await prepareReviewFollowUpProposal(repoRoot, issue, budgetDecision.splitRecommendation);
+        latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", reviewBudget: budgetDecision.budget, splitRecommendation, findings, reviewRunnerFailures });
+        await this.commentIssue(issue, ["### AgentOS review budget recommends split/follow-up", "", "The Wiggum loop stopped because the configured review budget was exceeded for broad or non-mechanical signals.", "", reviewTargetList, `- Iteration: ${iteration}`, "", formatReviewBudgetState(budgetDecision.budget), "", formatSplitRecommendation(splitRecommendation)].join("\n"));
+        await this.logger.write({ type: "review_split_recommended", issueId: issue.id, issueIdentifier: issue.identifier, message: splitRecommendation.reason, payload: { splitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls } });
         return latestState;
       }
 
@@ -1862,6 +1897,7 @@ export class Orchestrator {
         throw error;
       }
       if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, timingStatusForRunResult(fixResult), { iteration, resultStatus: fixResult.status });
+      reviewTokenTotal += fixResult.totalTokens ?? 0;
       if (fixResult.status !== "succeeded") {
         latestState = await this.recordIssueState(issue, {
           phase: "fix",
@@ -1909,15 +1945,13 @@ export class Orchestrator {
           });
           return latestState;
         }
+        const validation = await verifyValidationEvidence({ issue, handoff: updatedHandoff, workspacePath: workspace.path, runId });
         const updated = issueStateFromHandoff(issue, updatedHandoff);
+        const fixPatch = { phase: "fix" as const, reviewIteration: iteration, lastFixedSha: joinedHeadShas(githubContext.entries), reviewTargetMode, validation: validation.state };
         if (updated) {
-          latestState = await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
-            ...updated,
-            phase: "fix",
-            reviewIteration: iteration,
-            lastFixedSha: joinedHeadShas(githubContext.entries),
-            reviewTargetMode
-          });
+          latestState = await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, { ...updated, ...fixPatch });
+        } else {
+          latestState = await this.recordIssueState(issue, fixPatch);
         }
       }
       previousFindings = findings;
@@ -1980,8 +2014,15 @@ export class Orchestrator {
     let timingLabel = "merge shepherding completed";
     let timingMetadata: Record<string, unknown> = {};
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
-    const state = await stateStore.read(issue.identifier);
+    let state = await stateStore.read(issue.identifier);
     await this.finishOpenRunPhase(state?.lastRunId, issue, "human-wait", "completed", timingStartNoLaterThan(issue.updated_at, timingStartedAt), { reason: "issue entered merge state" });
+    if (this.config.review.enabled) {
+      const needsSupervisorDecision = state?.reviewStatus !== "approved" && !reviewSupervisorMergeDecision(state);
+      const needsFreshSplitDecision = isReviewSplitRecommendationOpen(state);
+      if (needsSupervisorDecision || needsFreshSplitDecision) {
+        state = (await this.ingestHumanDecisions(issue, state)) ?? state;
+      }
+    }
     const mergeTarget = mergeTargetPullRequest(state);
     const mergePr = mergeTarget?.url ?? null;
     const mergeEligiblePrs = mergeEligiblePullRequests(state);
@@ -2057,8 +2098,17 @@ export class Orchestrator {
           return;
         }
 
+        if (this.config.review.enabled && isReviewSplitRecommendationOpen(state)) {
+          const reason = `split/follow-up recommendation is still open (${state.splitRecommendation?.reason ?? "unknown reason"})`;
+          timingStatus = "failed";
+          timingLabel = "merge shepherding failed";
+          timingMetadata = { prUrl: mergePr, reason };
+          await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
+          return;
+        }
         if (this.config.review.enabled && state.reviewStatus !== "approved") {
-          if (!this.config.github.allowHumanMergeOverride) {
+          const supervisorMergeDecision = reviewSupervisorMergeDecision(state);
+          if (!supervisorMergeDecision && !this.config.github.allowHumanMergeOverride) {
             const reason = `automated review is not approved (reviewStatus=${state.reviewStatus ?? "missing"})`;
             timingStatus = "failed";
             timingLabel = "merge shepherding failed";
@@ -2066,7 +2116,7 @@ export class Orchestrator {
             await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
             return;
           }
-          if (!state.humanOverrideAt) {
+          if (!supervisorMergeDecision && !state.humanOverrideAt) {
             const overrideAt = new Date().toISOString();
             await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
               ...state,

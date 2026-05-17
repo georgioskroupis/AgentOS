@@ -75,7 +75,13 @@ describe("workflow", () => {
       blockingSeverities: ["P0", "P1", "P2"],
       parallelReviewers: false,
       maxConcurrentReviewers: 1,
-      skipOptionalReviewersAfterBlockingRequired: false
+      skipOptionalReviewersAfterBlockingRequired: false,
+      budget: expect.objectContaining({
+        enabled: true,
+        mode: "recommend-only",
+        maxChangedFiles: 40,
+        repeatedBroadCategoryThreshold: 2
+      })
     });
     expect(config.workspace.root).toContain(".agent-os/workspaces");
   });
@@ -230,6 +236,42 @@ describe("workflow", () => {
     });
   });
 
+  it("parses review budget controls", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-review-budget-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "review:",
+        "  max_iterations: 4",
+        "  budget:",
+        "    mode: prepare-draft",
+        "    max_review_elapsed_ms: 1000",
+        "    max_changed_files: 8",
+        "    max_fixer_iterations: 1",
+        "    broad_categories: [architecture, lifecycle]",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const workflow = await loadWorkflow(workflowPath);
+    const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+    expect(config.review.budget).toMatchObject({
+      mode: "prepare-draft",
+      maxReviewElapsedMs: 1000,
+      maxChangedFiles: 8,
+      maxFixerIterations: 1,
+      maxReviewIterations: 4,
+      broadCategories: ["architecture", "lifecycle"]
+    });
+  });
+
   it("rejects invalid automation configs", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-automation-invalid-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -287,6 +329,25 @@ describe("workflow", () => {
     );
     expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
       "unsupported_review_target_mode: primay"
+    );
+
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "review:",
+        "  budget:",
+        "    mode: auto-create",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
+      "unsupported_review_budget_mode: auto-create"
     );
 
     await writeFile(

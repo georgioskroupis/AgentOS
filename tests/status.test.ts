@@ -8,6 +8,8 @@ import { JsonlLogger } from "../src/logging.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
 import { getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
 
+const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
+
 describe("issue inspection", () => {
   it("shows accepted validation commands and failed historical attempts", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-status-"));
@@ -80,6 +82,106 @@ describe("issue inspection", () => {
     expect(output).toContain("npm run agent-check: exitCode 0");
     expect(output).toContain("Failed historical attempts:");
     expect(output).toContain("npm run agent-check: exitCode 1");
+  });
+
+  it("shows review budget split recommendations in inspect output", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-review-budget-"));
+    const stateRoot = join(repo, ".agent-os", "state", "issues");
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(
+      join(stateRoot, "AG-2.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-2",
+          issueIdentifier: "AG-2",
+          phase: "review",
+          reviewStatus: "human_required",
+          reviewBudget: {
+            status: "exceeded",
+            mode: "recommend-only",
+            evaluatedAt: "2026-05-16T00:00:00.000Z",
+            summary: "1 review budget signal(s) exceeded.",
+            signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }]
+          },
+          splitRecommendation: {
+            recommended: true,
+            action: "recommend-only",
+            reason: "review budget exceeded for broad or non-mechanical signals",
+            summary: "Recommend split or follow-up work for AG-2: changed_file_count.",
+            signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }],
+            recordedAt: "2026-05-16T00:00:00.000Z"
+          },
+          updatedAt: "2026-05-16T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-2");
+
+    expect(output).toContain("Review budget: exceeded (recommend-only)");
+    expect(output).toContain("Split recommendation: recommend-only");
+    expect(output).toContain("Next safe action: record a split-follow-up decision");
+  });
+
+  it("does not keep asking for split follow-up after an authoritative split decision", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-review-budget-resolved-"));
+    const stateRoot = join(repo, ".agent-os", "state", "issues");
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(
+      join(stateRoot, "AG-3.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-3",
+          issueIdentifier: "AG-3",
+          phase: "review",
+          reviewStatus: "human_required",
+          lifecycleStatus: "supervisor_continuation",
+          splitRecommendation: {
+            recommended: true,
+            action: "recommend-only",
+            reason: "review budget exceeded for broad or non-mechanical signals",
+            summary: "Recommend split or follow-up work for AG-3: changed_file_count.",
+            signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }],
+            recordedAt: "2026-05-16T00:00:00.000Z"
+          },
+          lastHumanDecision: {
+            type: "split_follow_up",
+            source: "linear-comment",
+            trusted: true,
+            actor: "Supervisor",
+            actorId: "user-supervisor",
+            actorEmail: "supervisor@example.com",
+            commentId: "comment-split",
+            decidedAt: "2026-05-16T00:05:00.000Z",
+            validationEvidence: ".agent-os/validation/AG-3.json",
+            ciState: "passed",
+            findings: "accepted",
+            summary: "follow-up issue linked"
+          },
+          validation: {
+            status: "passed",
+            finalStatus: "passed",
+            checkedAt: "2026-05-16T00:04:00.000Z",
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-16T00:03:00.000Z", finishedAt: "2026-05-16T00:04:00.000Z" }]
+          },
+          updatedAt: "2026-05-16T00:05:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-3");
+
+    expect(output).toContain("Human decision: split_follow_up");
+    expect(output).toContain("Next safe action: keep Codex paused; move to Merging only when remaining risk is accepted and required validation/CI evidence is fresh");
+    expect(output).not.toContain("Next safe action: record a split-follow-up decision");
   });
 
   it("shows registry project health, CI wait state, daemon freshness, and validation timing splits", async () => {
@@ -464,7 +566,7 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("Next safe action: verify the terminal PR/Linear evidence");
     expect(inspectOutput).not.toContain(`Next safe action: resume ${workspace}`);
     expect(inspectOutput).not.toContain("Workspace recovery: recoverable partial work");
-  });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("reports terminal-state contradictions and post-merge cleanup drift as status warnings", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-drift-"));

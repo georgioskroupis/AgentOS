@@ -41,6 +41,22 @@ const issue: Issue = {
   updated_at: null
 };
 
+const defaultReviewBudget: ServiceConfig["review"]["budget"] = {
+  enabled: true,
+  mode: "recommend-only",
+  maxReviewElapsedMs: 30 * 60 * 1000,
+  maxReviewIterations: 3,
+  maxFixerIterations: 2,
+  maxBlockingFindings: 10,
+  maxP1P2Findings: 5,
+  maxChangedFiles: 40,
+  maxValidationReruns: 2,
+  maxReviewTokens: 200_000,
+  repeatedBroadCategoryThreshold: 2,
+  lateNewBlockingFindingAfterApproval: true,
+  broadCategories: ["architecture", "lifecycle", "orchestration", "status", "workflow"]
+};
+
 describe("CodexAppServerRunner", () => {
   it("verifies app server support", async () => {
     await expect(verifyCodexAppServer(fixtureCommand)).resolves.toMatchObject({ ok: true });
@@ -79,7 +95,7 @@ describe("CodexAppServerRunner", () => {
         passThrough: {}
       },
       github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
-      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false }
+      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, budget: defaultReviewBudget }
     };
 
     const events: string[] = [];
@@ -141,7 +157,7 @@ describe("CodexAppServerRunner", () => {
         passThrough: {}
       },
       github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
-      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false }
+      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, budget: defaultReviewBudget }
     };
 
     const runner = new CodexAppServerRunner();
@@ -291,7 +307,7 @@ describe("CodexAppServerRunner", () => {
         passThrough: {}
       },
       github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
-      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false }
+      review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, budget: defaultReviewBudget }
     };
 
     const runner = new CodexAppServerRunner();
@@ -618,6 +634,6 @@ function runnerConfig(workspacePath: string, command: string): ServiceConfig {
       passThrough: {}
     },
     github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
-    review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false }
+    review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, budget: defaultReviewBudget }
   };
 }

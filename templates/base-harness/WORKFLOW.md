@@ -69,6 +69,25 @@ review:
     - P0
     - P1
     - P2
+  budget:
+    enabled: true
+    mode: recommend-only
+    max_review_elapsed_ms: 1800000
+    max_review_iterations: 3
+    max_fixer_iterations: 2
+    max_blocking_findings: 10
+    max_p1_p2_findings: 5
+    max_changed_files: 40
+    max_validation_reruns: 2
+    max_review_tokens: 200000
+    repeated_broad_category_threshold: 2
+    late_new_blocking_finding_after_approval: true
+    broad_categories:
+      - architecture
+      - lifecycle
+      - orchestration
+      - status
+      - workflow
 ---
 
 # WORKFLOW.md
@@ -323,6 +342,15 @@ After a PR-producing run opens or updates a PR, AgentOS keeps the issue in
   selected merge-eligible PR and exclude review-only/supporting PRs.
 - If blocking findings remain, AgentOS runs a focused fixer turn on the same PR
   and repeats review up to `review.max_iterations`.
+- `review.budget` records split signals for long review/fix time, review token
+  volume, validation reruns, review and fixer iteration count, finding
+  count/severity, changed-file count, repeated broad categories, and late new
+  P1/P2 findings after a prior approved state. `recommend-only` records a
+  structured split/follow-up recommendation; `prepare-draft` also writes a
+  local proposal under `.agent-os/follow-ups/`.
+- Broad or non-mechanical budget exhaustion recommends split/follow-up work
+  instead of another generic review escalation. Narrow mechanical findings
+  continue through the bounded fixer path while within budget.
 - If review cannot converge, AgentOS moves to `Human Review` with
   `reviewStatus: human_required` and a Linear comment explaining why.
 
