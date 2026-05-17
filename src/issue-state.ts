@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ensureDir, exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
-import type { AppProofState, HumanDecisionState, HumanDecisionType, Issue, IssueComment, IssueState, PullRequestRef, PullRequestRole, ReviewTargetMode } from "./types.js";
+import type { AppProofState, HumanDecisionState, HumanDecisionType, Issue, IssueComment, IssueState, OperatorRecoveryState, PullRequestRef, PullRequestRole, ReviewTargetMode } from "./types.js";
 
 type IssueOutcome = NonNullable<IssueState["outcome"]>;
 export const ISSUE_STATE_SCHEMA_VERSION = 1;
@@ -189,6 +189,30 @@ export function normalizeIssueState(raw: Partial<IssueState>): IssueState {
     issueIdentifier: raw.issueIdentifier ?? "",
     ...(prs.length ? { prs, prUrl: prs[0].url } : { prs: undefined, prUrl: undefined }),
     updatedAt
+  };
+}
+
+export function previousFailureFromIssueState(state: IssueState | null): OperatorRecoveryState["previousFailure"] | null {
+  if (!state) return null;
+  const previous = {
+    ...(state.lastError ? { lastError: state.lastError } : {}),
+    ...(state.stopReason ? { stopReason: state.stopReason } : {}),
+    ...(state.retryAttempt != null ? { retryAttempt: state.retryAttempt } : {}),
+    ...(state.nextRetryAt ? { nextRetryAt: state.nextRetryAt } : {}),
+    ...(state.lifecycleStatus ? { lifecycleStatus: state.lifecycleStatus } : {})
+  };
+  return Object.keys(previous).length ? previous : null;
+}
+
+export function clearedFailureMetadataPatch(): Partial<IssueState> {
+  return {
+    activeRunId: undefined,
+    lifecycleStatus: undefined,
+    lastError: undefined,
+    errorCategory: undefined,
+    stopReason: undefined,
+    retryAttempt: undefined,
+    nextRetryAt: undefined
   };
 }
 

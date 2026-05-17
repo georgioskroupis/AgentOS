@@ -266,6 +266,7 @@ export interface IssueState {
   mergeTargetUrl?: string | null;
   mergeTargetRole?: PullRequestRole | null;
   mergeCleanupWarnings?: string[];
+  operatorRecovery?: OperatorRecoveryState;
   appProof?: AppProofState;
   validation?: ValidationState;
   updatedAt: string;
@@ -287,6 +288,23 @@ export interface AppProofArtifact {
   label: string;
   value: string;
   source: "handoff" | "manual";
+}
+
+export interface OperatorRecoveryState {
+  recordedAt: string;
+  branch: string;
+  headSha: string;
+  workspacePath: string;
+  handoffPath: string;
+  validationPath?: string;
+  proofArtifacts: AppProofArtifact[];
+  previousFailure?: {
+    lastError?: string;
+    stopReason?: string;
+    retryAttempt?: number;
+    nextRetryAt?: string;
+    lifecycleStatus?: LifecycleStatus;
+  };
 }
 
 export interface HumanDecisionState {

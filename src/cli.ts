@@ -17,6 +17,7 @@ import { daemonLaunchCommand, getRegistryStatus, getStatus, inspectDaemonHealth,
 import { LinearClient } from "./linear.js";
 import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
+import { formatOperatorRecoveryRecord, recordOperatorRecovery } from "./recovery.js";
 import { RegistryOrchestrator } from "./registry-orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
@@ -252,6 +253,26 @@ program
   .option("--limit <number>", "number of recent issue events", "30")
   .action(async (issue, options) => {
     console.log(await inspectIssue(options.repo, issue, Number.parseInt(options.limit, 10)));
+  });
+
+const recovery = program.command("recovery").description("Record operator recovery evidence for partial AgentOS work");
+
+recovery
+  .command("record")
+  .argument("<issue>", "Linear issue identifier, for example VER-28")
+  .option("--repo <path>", "repository path", process.cwd())
+  .option("--workspace <path>", "recovered workspace path")
+  .option("--handoff <path>", "recovered handoff path inside the workspace")
+  .option("--run-id <run-id>", "successful run id associated with the recovered validation evidence")
+  .action(async (issue, options) => {
+    const result = await recordOperatorRecovery({
+      repoRoot: options.repo,
+      issueIdentifier: issue,
+      workspacePath: options.workspace,
+      handoffPath: options.handoff,
+      runId: options.runId
+    });
+    console.log(formatOperatorRecoveryRecord(result));
   });
 
 const daemon = program.command("daemon").description("Inspect local AgentOS daemon liveness and launch guidance");

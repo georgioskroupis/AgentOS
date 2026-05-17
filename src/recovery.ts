@@ -1,8 +1,19 @@
 import { execFile } from "node:child_process";
-import { access } from "node:fs/promises";
-import { resolve } from "node:path";
+import { access, readFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { IssueState } from "./types.js";
+import {
+  clearedFailureMetadataPatch,
+  issueStateFromHandoff,
+  IssueStateStore,
+  mergeTargetAmbiguityReason,
+  normalizeIssueState,
+  previousFailureFromIssueState
+} from "./issue-state.js";
+import { RuntimeStateStore } from "./runtime-state.js";
+import { validationEvidencePath, verifyValidationEvidence } from "./validation.js";
+import { workspaceKey } from "./workspace.js";
+import type { Issue, IssueState, OperatorRecoveryState } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,6 +30,36 @@ export interface WorkspaceRecoveryDiagnostics {
   recoverable: boolean;
   reasons: string[];
   nextSafeAction: string;
+}
+
+export interface RecordOperatorRecoveryInput {
+  repoRoot: string;
+  issueIdentifier: string;
+  workspacePath?: string;
+  handoffPath?: string;
+  runId?: string;
+  now?: string;
+}
+
+export interface OperatorRecoveryRecordResult {
+  issueIdentifier: string;
+  branch: string;
+  headSha: string;
+  workspacePath: string;
+  handoffPath: string;
+  validationPath: string | null;
+  proofArtifacts: OperatorRecoveryState["proofArtifacts"];
+  state: IssueState;
+}
+
+export class OperatorRecoveryRefusal extends Error {
+  constructor(
+    message: string,
+    readonly nextSafeAction: string
+  ) {
+    super(`recovery refused: ${message}\nNext safe action: ${nextSafeAction}`);
+    this.name = "OperatorRecoveryRefusal";
+  }
 }
 
 export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<IssueState, "workspacePath" | "headSha" | "validation" | "issueIdentifier"> | null | undefined): Promise<WorkspaceRecoveryDiagnostics | null> {
@@ -82,6 +123,142 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
   };
 }
 
+export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput): Promise<OperatorRecoveryRecordResult> {
+  const repoRoot = resolve(input.repoRoot);
+  const issueIdentifier = input.issueIdentifier;
+  const stateStore = new IssueStateStore(repoRoot);
+  const current = await stateStore.read(issueIdentifier);
+  const workspacePath = await resolveRecoveryWorkspace(repoRoot, issueIdentifier, current, input.workspacePath);
+  const diagnostics = await inspectWorkspaceRecovery(repoRoot, {
+    issueIdentifier,
+    workspacePath,
+    headSha: current?.headSha ?? null,
+    validation: current?.validation
+  });
+  assertRecoveryEvidenceCanBeRecorded(diagnostics, workspacePath);
+
+  const branch = diagnostics.branch;
+  const headSha = diagnostics.headSha;
+  const handoffPath = resolveRecoveryHandoff(repoRoot, workspacePath, issueIdentifier, input.handoffPath);
+  if (!(await pathExists(handoffPath))) {
+    throw new OperatorRecoveryRefusal(
+      `handoff evidence is missing at ${handoffPath}`,
+      `write the recovered handoff to ${join(workspacePath, ".agent-os", `handoff-${issueIdentifier}.md`)} or pass --handoff with the recovered handoff path`
+    );
+  }
+  if (!pathInside(workspacePath, handoffPath)) {
+    throw new OperatorRecoveryRefusal(
+      `handoff evidence ${handoffPath} is outside selected workspace ${workspacePath}`,
+      "place the recovered handoff in the selected workspace or pass --workspace for the worktree that owns this handoff"
+    );
+  }
+
+  const handoff = await readFile(handoffPath, "utf8");
+  const issue = issueForRecovery(issueIdentifier, current);
+  const handoffState = issueStateFromHandoff(issue, handoff);
+  if (!handoffState?.outcome) {
+    throw new OperatorRecoveryRefusal(
+      "handoff evidence does not record AgentOS-Outcome",
+      `add AgentOS-Outcome and Validation-JSON lines to ${relativeToRepo(repoRoot, handoffPath)} before recording recovery`
+    );
+  }
+  const mergeAmbiguity = mergeTargetAmbiguityReason(handoffState);
+  if (mergeAmbiguity) {
+    throw new OperatorRecoveryRefusal(
+      `handoff pull request evidence is ambiguous: ${mergeAmbiguity}`,
+      "mark exactly one merge-eligible pull request as Primary PR or remove ambiguous PR roles from the handoff"
+    );
+  }
+
+  const validationMarker = validationEvidencePath(handoff);
+  const validation = await verifyValidationEvidence({
+    issue,
+    handoff,
+    workspacePath,
+    runId: input.runId,
+    allowReusableRunEvidence: true
+  });
+  if (validation.state.status !== "passed") {
+    throw new OperatorRecoveryRefusal(
+      validation.state.errors?.join("; ") ?? `validation evidence is ${validation.state.status}`,
+      `rerun validation in ${workspacePath}, update ${validationMarker ?? `.agent-os/validation/${issueIdentifier}.json`}, and record recovery again`
+    );
+  }
+
+  const recordedAt = input.now ?? new Date().toISOString();
+  const workspaceRelativePath = relativeToRepo(repoRoot, workspacePath);
+  const handoffRelativePath = relativeToRepo(repoRoot, handoffPath);
+  const validationRelativePath = validation.state.path ? relativeToRepo(repoRoot, validation.state.path) : validationMarker;
+  const previousFailure = previousFailureFromIssueState(current);
+  const operatorRecovery: OperatorRecoveryState = {
+    recordedAt,
+    branch,
+    headSha,
+    workspacePath: workspaceRelativePath,
+    handoffPath: handoffRelativePath,
+    ...(validationRelativePath ? { validationPath: validationRelativePath } : {}),
+    proofArtifacts: handoffState.appProof?.artifacts ?? [],
+    ...(previousFailure ? { previousFailure } : {})
+  };
+  const next = normalizeIssueState({
+    ...(current ?? {
+      schemaVersion: 1 as const,
+      issueId: issue.id,
+      issueIdentifier,
+      updatedAt: recordedAt
+    }),
+    ...handoffState,
+    issueId: current?.issueId ?? issue.id,
+    issueIdentifier,
+    phase: "completed",
+    workspacePath: workspaceRelativePath,
+    workspaceKey: workspaceKey(issueIdentifier),
+    headSha,
+    validation: {
+      ...validation.state,
+      ...(validationRelativePath ? { path: validationRelativePath } : {})
+    },
+    operatorRecovery,
+    ...clearedFailureMetadataPatch(),
+    reviewStatus: handoffState.reviewStatus,
+    reviewIteration: handoffState.reviewIteration,
+    reviewers: undefined,
+    findings: undefined,
+    reviewRunnerFailures: undefined,
+    reviewBudget: undefined,
+    splitRecommendation: undefined,
+    mergeCleanupWarnings: undefined,
+    appProof: handoffState.appProof,
+    updatedAt: recordedAt
+  });
+  await stateStore.write(next);
+  await new RuntimeStateStore(repoRoot).clearIssue(next.issueId);
+  return {
+    issueIdentifier,
+    branch,
+    headSha,
+    workspacePath: workspaceRelativePath,
+    handoffPath: handoffRelativePath,
+    validationPath: validationRelativePath ?? null,
+    proofArtifacts: operatorRecovery.proofArtifacts,
+    state: next
+  };
+}
+
+export function formatOperatorRecoveryRecord(result: OperatorRecoveryRecordResult): string {
+  return [
+    `recorded: ${result.issueIdentifier}`,
+    `branch: ${result.branch}`,
+    `head: ${result.headSha}`,
+    `workspace: ${result.workspacePath}`,
+    `handoff: ${result.handoffPath}`,
+    result.validationPath ? `validation: ${result.validationPath}` : null,
+    result.proofArtifacts.length ? `proof: ${result.proofArtifacts.map((artifact) => `${artifact.label}=${artifact.value}`).join(", ")}` : "proof: none recorded"
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
 export function formatRecoveryDiagnostics(diagnostics: WorkspaceRecoveryDiagnostics): string[] {
   return [
     `Workspace recovery: ${diagnostics.recoverable ? "recoverable partial work" : diagnostics.exists ? "workspace clean" : "workspace missing"}`,
@@ -91,6 +268,103 @@ export function formatRecoveryDiagnostics(diagnostics: WorkspaceRecoveryDiagnost
     diagnostics.reasons.length ? `Recovery reasons: ${diagnostics.reasons.join("; ")}` : null,
     `Next safe action: ${diagnostics.nextSafeAction}`
   ].filter((line): line is string => line !== null);
+}
+
+async function resolveRecoveryWorkspace(repoRoot: string, issueIdentifier: string, state: IssueState | null, explicitWorkspacePath?: string): Promise<string> {
+  if (explicitWorkspacePath) return resolveFromRepo(repoRoot, explicitWorkspacePath);
+  const defaultWorkspace = resolve(repoRoot, ".agent-os", "workspaces", workspaceKey(issueIdentifier));
+  const stateWorkspace = state?.workspacePath ? resolveFromRepo(repoRoot, state.workspacePath) : null;
+  const candidates = uniquePaths([stateWorkspace, defaultWorkspace]);
+  const existing: string[] = [];
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) existing.push(candidate);
+  }
+  if (existing.length > 1) {
+    throw new OperatorRecoveryRefusal(
+      `multiple workspace candidates exist: ${existing.join(", ")}`,
+      "rerun recovery with --workspace pointing at the clean worktree that owns the recovered handoff and validation evidence"
+    );
+  }
+  return existing[0] ?? stateWorkspace ?? defaultWorkspace;
+}
+
+function assertRecoveryEvidenceCanBeRecorded(diagnostics: WorkspaceRecoveryDiagnostics | null, workspacePath: string): asserts diagnostics is WorkspaceRecoveryDiagnostics & { branch: string; headSha: string } {
+  if (!diagnostics || !diagnostics.exists) {
+    throw new OperatorRecoveryRefusal(
+      `workspace evidence is missing at ${workspacePath}`,
+      "restore the partial-work workspace, or pass --workspace pointing at the recovered clean worktree before recording recovery"
+    );
+  }
+  if (!diagnostics.branch || diagnostics.branch === "HEAD") {
+    throw new OperatorRecoveryRefusal(
+      "worktree is detached or branch evidence is unavailable",
+      "checkout the recovered branch in the worktree before recording recovery"
+    );
+  }
+  if (!diagnostics.headSha) {
+    throw new OperatorRecoveryRefusal(
+      "worktree HEAD evidence is unavailable",
+      "repair the git worktree so `git rev-parse HEAD` succeeds before recording recovery"
+    );
+  }
+  if (diagnostics.dirty) {
+    throw new OperatorRecoveryRefusal(
+      "worktree has uncommitted changes",
+      "commit or stash the recovered changes, rerun validation, and record recovery from a clean worktree"
+    );
+  }
+  if (diagnostics.upstreamMissing && diagnostics.reasons.includes("branch has no upstream")) {
+    throw new OperatorRecoveryRefusal(
+      `branch ${diagnostics.branch} has no upstream`,
+      `push ${diagnostics.branch} with an upstream, rerun validation if the head changes, and record recovery again`
+    );
+  }
+  if (diagnostics.aheadCount > 0) {
+    throw new OperatorRecoveryRefusal(
+      `branch ${diagnostics.branch} is ${diagnostics.aheadCount} commit(s) ahead of upstream`,
+      "push the recovered branch, confirm the pushed head matches validation evidence, and record recovery again"
+    );
+  }
+}
+
+function resolveRecoveryHandoff(repoRoot: string, workspacePath: string, issueIdentifier: string, explicitHandoffPath?: string): string {
+  if (explicitHandoffPath) return resolveFromRepo(repoRoot, explicitHandoffPath);
+  return join(workspacePath, ".agent-os", `handoff-${issueIdentifier}.md`);
+}
+
+function issueForRecovery(issueIdentifier: string, state: IssueState | null): Issue {
+  return {
+    id: state?.issueId || `issue-${issueIdentifier}`,
+    identifier: issueIdentifier,
+    title: issueIdentifier,
+    description: null,
+    priority: null,
+    state: "",
+    branch_name: null,
+    url: null,
+    labels: [],
+    blocked_by: [],
+    created_at: null,
+    updated_at: null
+  };
+}
+
+function resolveFromRepo(repoRoot: string, path: string): string {
+  return isAbsolute(path) ? resolve(path) : resolve(repoRoot, path);
+}
+
+function relativeToRepo(repoRoot: string, path: string): string {
+  const rel = relative(repoRoot, path);
+  return rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : path;
+}
+
+function pathInside(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function uniquePaths(paths: Array<string | null>): string[] {
+  return [...new Set(paths.filter((path): path is string => Boolean(path)).map((path) => resolve(path)))];
 }
 
 async function pathExists(path: string): Promise<boolean> {
