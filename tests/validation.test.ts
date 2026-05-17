@@ -8,25 +8,37 @@ import { fakeIssue } from "./fixtures/agentos-fakes.js";
 import { validationEvidenceFinding, verifyValidationEvidence, writeValidationEvidence } from "../src/validation.js";
 
 const execFileAsync = promisify(execFile);
+const VALIDATION_NOW = new Date("2026-05-01T00:00:00.000Z");
+const VALIDATION_NOW_ISO = VALIDATION_NOW.toISOString();
+const INTENTIONALLY_STALE_COMMAND = {
+  name: "npm run test",
+  exitCode: 1,
+  startedAt: "2020-01-01T00:00:00.000Z",
+  finishedAt: "2020-01-01T00:00:01.000Z"
+};
+
+function freshCommand(name = "npm run agent-check", exitCode = 0) {
+  return { name, exitCode, startedAt: VALIDATION_NOW_ISO, finishedAt: VALIDATION_NOW_ISO };
+}
 
 describe("validation evidence", () => {
   it("accepts fresh matching JSON evidence", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "agent-os-validation-"));
-    const now = new Date().toISOString();
     await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
       schemaVersion: 1,
       issueIdentifier: "AG-1",
       status: "passed",
-      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+      commands: [freshCommand()]
     });
 
     const result = await verifyValidationEvidence({
       issue: fakeIssue(),
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
-      workspacePath: workspace
+      workspacePath: workspace,
+      now: VALIDATION_NOW
     });
 
-    expect(result.state).toMatchObject({ status: "passed" });
+    expect(result.state).toMatchObject({ status: "passed", checkedAt: VALIDATION_NOW_ISO });
     expect(validationEvidenceFinding(result.state)).toBeNull();
   });
 
@@ -36,105 +48,104 @@ describe("validation evidence", () => {
       schemaVersion: 1,
       issueIdentifier: "OTHER-1",
       status: "failed",
-      commands: [{ name: "npm run test", exitCode: 1, startedAt: "2020-01-01T00:00:00.000Z", finishedAt: "2020-01-01T00:00:01.000Z" }]
+      commands: [INTENTIONALLY_STALE_COMMAND]
     });
 
     const result = await verifyValidationEvidence({
       issue: fakeIssue(),
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
       workspacePath: workspace,
-      now: new Date("2026-05-01T00:00:00.000Z")
+      now: VALIDATION_NOW
     });
 
     expect(result.state.status).toBe("failed");
     expect(result.state.errors?.join("\n")).toContain("issueIdentifier mismatch");
     expect(result.state.errors?.join("\n")).toContain("missing passing command evidence: npm run agent-check");
-    expect(result.state.failedHistoricalAttempts).toEqual([
-      { name: "npm run test", exitCode: 1, startedAt: "2020-01-01T00:00:00.000Z", finishedAt: "2020-01-01T00:00:01.000Z" }
-    ]);
+    expect(result.state.errors?.join("\n")).toContain("npm run test: validation evidence is stale");
+    expect(result.state.failedHistoricalAttempts).toEqual([INTENTIONALLY_STALE_COMMAND]);
     expect(validationEvidenceFinding(result.state)).toMatchObject({ reviewer: "validation", severity: "P1" });
   });
 
   it("accepts final passed evidence with earlier failed historical attempts", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "agent-os-validation-final-pass-"));
-    const now = new Date().toISOString();
     await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
       schemaVersion: 1,
       issueIdentifier: "AG-1",
       status: "passed",
       commands: [
-        { name: "npm run agent-check", exitCode: 1, startedAt: now, finishedAt: now },
-        { name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }
+        freshCommand("npm run agent-check", 1),
+        freshCommand()
       ]
     });
 
     const result = await verifyValidationEvidence({
       issue: fakeIssue(),
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
-      workspacePath: workspace
+      workspacePath: workspace,
+      now: VALIDATION_NOW
     });
 
     expect(result.state.status).toBe("passed");
     expect(result.state.acceptedCommands).toEqual([
-      { name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }
+      freshCommand()
     ]);
     expect(result.state.failedHistoricalAttempts).toEqual([
-      { name: "npm run agent-check", exitCode: 1, startedAt: now, finishedAt: now }
+      freshCommand("npm run agent-check", 1)
     ]);
     expect(validationEvidenceFinding(result.state)).toBeNull();
   });
 
   it("preserves additional passing command and GitHub CI evidence", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "agent-os-validation-ci-"));
-    const now = new Date().toISOString();
     await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
       schemaVersion: 1,
       issueIdentifier: "AG-1",
       status: "passed",
       commands: [
-        { name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now },
-        { name: "npm test -- tests/registry-orchestrator.test.ts", exitCode: 0, startedAt: now, finishedAt: now }
+        freshCommand(),
+        freshCommand("npm test -- tests/registry-orchestrator.test.ts")
       ],
       githubCi: {
         status: "passed",
         headSha: "abc123",
         source: "github-actions",
-        checkedAt: now
+        checkedAt: VALIDATION_NOW_ISO
       }
     });
 
     const result = await verifyValidationEvidence({
       issue: fakeIssue(),
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
-      workspacePath: workspace
+      workspacePath: workspace,
+      now: VALIDATION_NOW
     });
 
     expect(result.state.status).toBe("passed");
-    expect(result.state.additionalPassingCommands).toEqual([{ name: "npm test -- tests/registry-orchestrator.test.ts", exitCode: 0, startedAt: now, finishedAt: now }]);
+    expect(result.state.additionalPassingCommands).toEqual([freshCommand("npm test -- tests/registry-orchestrator.test.ts")]);
     expect(result.state.githubCi).toEqual({
       status: "passed",
       headSha: "abc123",
       source: "github-actions",
-      checkedAt: now
+      checkedAt: VALIDATION_NOW_ISO
     });
     expect(validationEvidenceFinding(result.state)).toBeNull();
   });
 
   it("rejects final passed evidence when the repo head does not match", async () => {
     const workspace = await gitWorkspace();
-    const now = new Date().toISOString();
     await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
       schemaVersion: 1,
       issueIdentifier: "AG-1",
       repoHead: "0000000000000000000000000000000000000000",
       status: "passed",
-      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+      commands: [freshCommand()]
     });
 
     const result = await verifyValidationEvidence({
       issue: fakeIssue(),
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
-      workspacePath: workspace
+      workspacePath: workspace,
+      now: VALIDATION_NOW
     });
 
     expect(result.state.status).toBe("failed");
@@ -146,21 +157,21 @@ describe("validation evidence", () => {
     const workspace = await gitWorkspace();
     const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace });
     const repoHead = stdout.trim();
-    const now = new Date().toISOString();
     await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
       schemaVersion: 1,
       issueIdentifier: "AG-1",
       runId: "run_previous",
       repoHead,
       status: "passed",
-      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+      commands: [freshCommand()]
     });
 
     const strictResult = await verifyValidationEvidence({
       issue: fakeIssue(),
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
       workspacePath: workspace,
-      runId: "run_current"
+      runId: "run_current",
+      now: VALIDATION_NOW
     });
     expect(strictResult.state.status).toBe("failed");
     expect(strictResult.state.errors?.join("\n")).toContain("runId mismatch");
@@ -170,7 +181,8 @@ describe("validation evidence", () => {
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
       workspacePath: workspace,
       runId: "run_current",
-      allowReusableRunEvidence: true
+      allowReusableRunEvidence: true,
+      now: VALIDATION_NOW
     });
     expect(reusableResult.state).toMatchObject({
       status: "passed",
@@ -183,13 +195,12 @@ describe("validation evidence", () => {
     const workspace = await gitWorkspace();
     const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace });
     const repoHead = stdout.trim();
-    const now = new Date().toISOString();
     await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
       schemaVersion: 1,
       issueIdentifier: "AG-1",
       repoHead,
       status: "passed",
-      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+      commands: [freshCommand()]
     });
 
     const result = await verifyValidationEvidence({
@@ -197,7 +208,8 @@ describe("validation evidence", () => {
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
       workspacePath: workspace,
       runId: "run_current",
-      allowReusableRunEvidence: true
+      allowReusableRunEvidence: true,
+      now: VALIDATION_NOW
     });
 
     expect(result.state).toMatchObject({
@@ -209,21 +221,21 @@ describe("validation evidence", () => {
 
   it("rejects final failed evidence even when an earlier command passed", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "agent-os-validation-final-failed-"));
-    const now = new Date().toISOString();
     await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
       schemaVersion: 1,
       issueIdentifier: "AG-1",
       status: "failed",
       commands: [
-        { name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now },
-        { name: "npm run agent-check", exitCode: 1, startedAt: now, finishedAt: now }
+        freshCommand(),
+        freshCommand("npm run agent-check", 1)
       ]
     });
 
     const result = await verifyValidationEvidence({
       issue: fakeIssue(),
       handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
-      workspacePath: workspace
+      workspacePath: workspace,
+      now: VALIDATION_NOW
     });
 
     expect(result.state.status).toBe("failed");
