@@ -5,6 +5,7 @@ import type { AppProofState, HumanDecisionState, HumanDecisionType, Issue, Issue
 
 type IssueOutcome = NonNullable<IssueState["outcome"]>;
 export const ISSUE_STATE_SCHEMA_VERSION = 1;
+export const HUMAN_DECISION_BODY_PREVIEW_LIMIT = 2000;
 export const MERGE_ELIGIBLE_PR_ROLES: PullRequestRole[] = ["primary", "docs"];
 
 export class IssueStateStore {
@@ -273,6 +274,7 @@ export function extractHumanDecision(
   const type = normalizeHumanDecisionType(rawType);
   if (!type) return null;
   const decidedAt = metadata.createdAt && !Number.isNaN(Date.parse(metadata.createdAt)) ? metadata.createdAt : new Date().toISOString();
+  const trimmed = text.trim();
   return {
     type,
     decidedAt,
@@ -282,7 +284,8 @@ export function extractHumanDecision(
     ...(metadata.actorEmail !== undefined ? { actorEmail: metadata.actorEmail } : {}),
     ...(metadata.trusted !== undefined ? { trusted: metadata.trusted } : {}),
     ...(metadata.commentId ? { commentId: metadata.commentId } : {}),
-    body: text.trim().slice(0, 2000),
+    body: trimmed.slice(0, HUMAN_DECISION_BODY_PREVIEW_LIMIT),
+    bodyTruncated: trimmed.length > HUMAN_DECISION_BODY_PREVIEW_LIMIT,
     prHeadSha: fields.get("pr-head-sha") ?? fields.get("head-sha") ?? null,
     validationEvidence: fields.get("validation-json") ?? fields.get("validation-evidence") ?? null,
     ciState: normalizeCiState(fields.get("ci-state") ?? fields.get("ci")),
@@ -405,6 +408,7 @@ function humanDecisionContentKey(decision: HumanDecisionState): string {
     actorEmail: decision.actorEmail ?? null,
     trusted: decision.trusted ?? false,
     body: decision.body ?? null,
+    bodyTruncated: decision.bodyTruncated ?? null,
     prHeadSha: decision.prHeadSha ?? null,
     validationEvidence: decision.validationEvidence ?? null,
     ciState: decision.ciState ?? null,

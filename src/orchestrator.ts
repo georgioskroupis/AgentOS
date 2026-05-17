@@ -16,6 +16,7 @@ import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceReco
 import { redactText } from "./redaction.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
+import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
@@ -29,7 +30,7 @@ import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
-import { logPreDispatchScopeReport, type PreDispatchScopeReport } from "./scope-report.js";
+import { logPreDispatchScopeReport, scopeReportStateFromReport, type PreDispatchScopeReport } from "./scope-report.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
@@ -609,8 +610,7 @@ export class Orchestrator {
     });
     if (linearComments === "failed") return null;
     state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined, { authoritativeCommentSet: Boolean(linearComments) });
-    const recentLinearComments = linearComments ? latestIssueComments(linearComments, RECENT_LINEAR_COMMENT_LIMIT) : linearComments;
-    const scopeReport = await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments: recentLinearComments, logger: this.logger });
+    const scopeReport = await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments, logger: this.logger });
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
       return null;
     }
@@ -738,12 +738,13 @@ export class Orchestrator {
 
     if (!allowImplementationContinuation && scopeReport?.dispatchAdvice.shouldBlock) {
       const message = scopeReport.dispatchAdvice.reason ?? "pre-dispatch scope guardrail blocked implementation dispatch";
-      if (scopeReport.likelyLarge) {
+      if (scopeReport.likelyLarge || scopeReport.evidence.planningReentry.status === "missing") {
         await this.markLinearPlanningRecommended(issue, scopeReport);
       } else {
         await this.recordDispatchGuardrailStop(issue, message, {
           phase: "needs-input",
-          stopReason: message
+          stopReason: message,
+          scopeReport: scopeReportStateFromReport(scopeReport)
         });
       }
       await this.logger.write({
@@ -821,23 +822,10 @@ export class Orchestrator {
       lifecycleStatus: "planning_required",
       lastError: message,
       errorCategory: "prompt",
-      stopReason: message
+      stopReason: message,
+      scopeReport: scopeReportStateFromReport(report)
     });
-    await this.commentIssue(
-      issue,
-      [
-        "### AgentOS planning recommended",
-        "",
-        "AgentOS refused to start a fresh implementation turn because the pre-dispatch scope report classified this issue as likely large.",
-        "",
-        `- Scope: ${report.scopeSize}`,
-        report.scopeReasons.length ? `- Scope reasons: ${report.scopeReasons.join("; ")}` : null,
-        `- Next safe action: ${report.dispatchAdvice.nextSafeAction}`
-      ]
-        .filter((line): line is string => line !== null)
-        .join("\n"),
-      "planning_recommended"
-    );
+    await this.commentIssue(issue, planningRecommendedCommentBody(report), "planning_recommended");
     await this.moveIssue(issue, this.config.tracker.needsInputState);
     await this.writePhaseTimingEvent(issue, {
       phase: "needs-input",

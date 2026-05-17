@@ -266,6 +266,258 @@ describe("orchestrator", () => {
     expect(state?.stopReason).toBe("work is already satisfied by prior AgentOS handoff");
   });
 
+  it("allows planning re-entry when a trusted comment provides bounded active scope", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-planning-reentry-resolved-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  review_state: Human Review\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue: Issue = {
+      ...readyIssue,
+      state: "Todo",
+      ...supervisorAssignee,
+      title: "MVP roadmap orchestration work",
+      description: [
+        "Bootstrap a compact slice.",
+        "",
+        "Background:",
+        "- Roadmap orchestration across Linear, GitHub, runtime, validation, docs, and workspaces.",
+        "- Migrate every workflow and architecture guardrail.",
+        "- Decompose dependencies across all projects.",
+        "- Update every runbook."
+      ].join("\n")
+    };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      updatedAt: "2026-05-08T00:00:00.000Z"
+    });
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-active-scope",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-08T00:01:00.000Z",
+            body: planningReentryDecisionBody()
+          }
+        ];
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          runnerCalled = true;
+          await writePassingHandoff(input.workspace.path, issue.identifier, input.prompt, "AgentOS-Outcome: implemented");
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(true);
+    expect(comments.join("\n")).not.toContain("planning recommended");
+  });
+
+  it("allows planning re-entry when the trusted active-scope comment is older than the recent comment slice", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-planning-reentry-full-comments-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  review_state: Human Review\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue: Issue = {
+      ...readyIssue,
+      state: "Todo",
+      ...supervisorAssignee,
+      title: "MVP roadmap orchestration work",
+      description: [
+        "Bootstrap a compact slice.",
+        "",
+        "Background:",
+        "- Roadmap orchestration across Linear, GitHub, runtime, validation, docs, and workspaces.",
+        "- Migrate every workflow and architecture guardrail.",
+        "- Decompose dependencies across all projects.",
+        "- Update every runbook."
+      ].join("\n")
+    };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      updatedAt: "2026-05-08T00:00:00.000Z"
+    });
+    const oldTrustedDecision = {
+      id: "comment-active-scope",
+      ...supervisorCommentAuthor,
+      createdAt: "2026-05-08T00:01:00.000Z",
+      body: longPlanningReentryDecisionBody()
+    };
+    const laterComments = Array.from({ length: 21 }, (_, index) => ({
+      id: `comment-noise-${index + 1}`,
+      author: "Teammate",
+      authorId: `user-${index + 1}`,
+      authorEmail: `user${index + 1}@example.com`,
+      createdAt: `2026-05-08T00:${String(index + 2).padStart(2, "0")}:00.000Z`,
+      body: `Later unstructured follow-up ${index + 1}`
+    }));
+    const allComments = [oldTrustedDecision, ...laterComments];
+    const seenCommentLimits: Array<number | undefined> = [];
+    const comments: string[] = [];
+    const logger = new JsonlLogger(repo);
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments(_issue, limit) {
+        seenCommentLimits.push(limit);
+        return Number.isFinite(limit) ? allComments.slice(-Math.floor(limit ?? allComments.length)) : allComments;
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          runnerCalled = true;
+          await writePassingHandoff(input.workspace.path, issue.identifier, input.prompt, "AgentOS-Outcome: implemented");
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(true);
+    expect(seenCommentLimits).toContain(Number.MAX_SAFE_INTEGER);
+    expect(comments.join("\n")).not.toContain("planning recommended");
+    const reportEvent = (await logger.tail(50)).find((entry) => entry.type === "pre_dispatch_scope_report");
+    const report = reportEvent?.payload as
+      | {
+          scopeScoring?: { textSource?: string };
+          evidence?: {
+            linearComments?: { count?: number; recent?: Array<{ bodyPreview?: string }> };
+            planningReentry?: { status?: string; activeScopeBounded?: boolean };
+          };
+        }
+      | undefined;
+    expect(report?.scopeScoring?.textSource).toBe("trusted_active_scope");
+    expect(report?.evidence?.planningReentry).toMatchObject({
+      status: "satisfied",
+      activeScopeBounded: true
+    });
+    expect(report?.evidence?.linearComments?.count).toBe(22);
+    expect(report?.evidence?.linearComments?.recent).toHaveLength(5);
+    expect(JSON.stringify(report)).not.toContain("background-details-that-must-not-leak");
+  });
+
+  it("keeps planning re-entry blocked when the trusted comment lacks bounded active scope", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-planning-reentry-unresolved-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  review_state: Human Review\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      updatedAt: "2026-05-08T00:00:00.000Z"
+    });
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-unbounded",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-08T00:01:00.000Z",
+            body: "AgentOS-Human-Decision: fix-findings\nDecision-Summary: please continue"
+          }
+        ];
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(comments.join("\n")).toContain("prior planning pause still needs bounded Active-Scope");
+    expect(comments.join("\n")).toContain("Scope scoring reasons:");
+    const state = await new IssueStateStore(repo).read(issue.identifier);
+    expect(state?.scopeReport).toMatchObject({
+      planningReentry: { status: "missing" },
+      dispatchAdvice: { shouldBlock: true, reason: "planning re-entry needs bounded active scope or linked decomposition evidence" }
+    });
+  });
+
   it("includes fetched Linear comments and trusted human decisions in the pre-dispatch scope report", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-scope-comments-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -7878,6 +8130,44 @@ async function writePassingHandoff(
       }
     ]
   });
+}
+
+function planningReentryDecisionBody(): string {
+  return [
+    "AgentOS-Human-Decision: fix-findings",
+    "Decision-Summary: continue with a compact active implementation slice.",
+    "",
+    "Active-Scope:",
+    "Make planning re-entry artifacts machine-readable.",
+    "",
+    "Done when:",
+    "* Pre-dispatch scope reports expose exact scoring reasons.",
+    "* Trusted planning re-entry evidence can clear a prior planning pause.",
+    "* Scope scoring ignores background text.",
+    "* Broad unsplit work still pauses.",
+    "* npm run agent-check passes.",
+    "",
+    "Out of scope:",
+    "Dependency DAG execution and high-throughput merge behavior."
+  ].join("\n");
+}
+
+function longPlanningReentryDecisionBody(): string {
+  return [
+    "AgentOS-Human-Decision: fix-findings",
+    "Decision-Summary: continue with a compact active implementation slice.",
+    "",
+    "Active-Scope:",
+    "Fix only the raw trusted decision body lookup for planning re-entry.",
+    "",
+    "Done when:",
+    "* A bounded Active-Scope comment older than the recent slice clears the prior planning pause.",
+    "* Evidence rendering remains bounded.",
+    "* npm run agent-check passes.",
+    "",
+    "Background:",
+    `background-details-that-must-not-leak ${"x".repeat(2400)}`
+  ].join("\n");
 }
 
 function reviewArtifactScope(input: Parameters<AgentRunner["run"]>[0]): { runId?: string; headSha?: string; iteration?: number } {

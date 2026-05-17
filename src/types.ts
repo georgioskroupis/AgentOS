@@ -220,6 +220,40 @@ export interface IssueComment {
   updatedAt?: string | null;
 }
 
+export type ScopeTextSource = "trusted_active_scope" | "issue_active_sections" | "issue_without_background" | "issue_full_text";
+
+export interface ScopeScoreReasonState {
+  reason: string;
+  score: number;
+}
+
+export interface ScopePlanningReentryState {
+  status: "not_required" | "satisfied" | "missing";
+  reason: string;
+  decisionCommentId?: string | null;
+  activeScopePresent: boolean;
+  activeScopeBounded: boolean;
+  decompositionEvidencePresent: boolean;
+}
+
+export interface ScopeReportState {
+  recordedAt: string;
+  scopeSize: "small" | "medium" | "large" | "unclear";
+  likelyLarge: boolean;
+  score: number | null;
+  largeThreshold: number;
+  mediumThreshold: number;
+  scoringTextSource: ScopeTextSource;
+  scoringReasons: ScopeScoreReasonState[];
+  ignoredSections: string[];
+  planningReentry: ScopePlanningReentryState;
+  dispatchAdvice: {
+    shouldBlock: boolean;
+    reason: string | null;
+    nextSafeAction: string;
+  };
+}
+
 export interface IssueState {
   schemaVersion: 1;
   issueId: string;
@@ -268,6 +302,7 @@ export interface IssueState {
   mergeCleanupWarnings?: string[];
   operatorRecovery?: OperatorRecoveryState;
   appProof?: AppProofState;
+  scopeReport?: ScopeReportState;
   validation?: ValidationState;
   updatedAt: string;
 }
@@ -318,6 +353,7 @@ export interface HumanDecisionState {
   trusted?: boolean;
   commentId?: string;
   body?: string;
+  bodyTruncated?: boolean;
   prHeadSha?: string | null;
   validationEvidence?: string | null;
   ciState?: "passed" | "failed" | "pending" | "unknown" | null;

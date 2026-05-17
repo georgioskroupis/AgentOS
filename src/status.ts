@@ -10,7 +10,7 @@ import { formatReviewRunnerFailures } from "./review.js";
 import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking } from "./review-budget.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
-import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
+import type { IssueState, ScopeReportState, ValidationCommandState, ValidationState } from "./types.js";
 
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
   const root = resolve(repo);
@@ -118,6 +118,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     formatSplitRecommendation(state?.splitRecommendation, { advisory: state?.reviewStatus === "approved" }),
     state?.reviewRunnerFailures?.length ? `Review runner failures:\n${formatReviewRunnerFailures(state.reviewRunnerFailures)}` : "Review runner failures: none recorded",
     humanDecisionDetails(state),
+    scopeReportDetails(state?.scopeReport),
     appProofDetails(state),
     operatorRecoveryDetails(state),
     shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
@@ -236,6 +237,32 @@ function humanDecisionDetails(state: IssueState | null): string | null {
   return lines.join("\n");
 }
 
+function scopeReportDetails(report: ScopeReportState | null | undefined): string {
+  if (!report) return "Scope report: none recorded";
+  const lines = [
+    `Scope report: ${report.scopeSize}${report.likelyLarge ? " (likely large)" : ""}`,
+    `Scope score: ${report.score == null ? "unclear" : `${report.score}/${report.largeThreshold}`} (medium threshold ${report.mediumThreshold}, large threshold ${report.largeThreshold})`,
+    `Scope scoring source: ${report.scoringTextSource}`,
+    report.scoringReasons.length ? `Scope scoring reasons:\n${formatScopeScoreReasons(report.scoringReasons)}` : "Scope scoring reasons: none",
+    report.ignoredSections.length ? `Ignored scope sections: ${report.ignoredSections.join(", ")}` : null,
+    `Planning re-entry: ${report.planningReentry.status} - ${report.planningReentry.reason}`,
+    `Scope dispatch advice: ${report.dispatchAdvice.shouldBlock ? "blocked" : "allowed"}${report.dispatchAdvice.reason ? ` - ${report.dispatchAdvice.reason}` : ""}`,
+    `Scope next safe action: ${report.dispatchAdvice.nextSafeAction}`
+  ].filter((line): line is string => line !== null);
+  return lines.join("\n");
+}
+
+function scopeReportStatusSuffix(report: ScopeReportState | null | undefined): string {
+  if (!report) return "";
+  const score = report.score == null ? "unclear" : `${report.score}/${report.largeThreshold}`;
+  const reasons = report.scoringReasons.length ? `; reasons ${report.scoringReasons.map((reason) => `+${reason.score} ${reason.reason}`).join("; ")}` : "";
+  return `; scope score ${score}; source ${report.scoringTextSource}${reasons}`;
+}
+
+function formatScopeScoreReasons(reasons: ScopeReportState["scoringReasons"]): string {
+  return reasons.map((reason) => `- +${reason.score} ${reason.reason}`).join("\n");
+}
+
 function appProofDetails(state: IssueState | null): string | null {
   if (!state?.appProof?.artifacts.length) return "App proof: none recorded";
   return [
@@ -313,7 +340,7 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (mergeFailed && issue.phase !== "completed") return withEvidence(`tracker/local disagreement or merge review needed - ${mergeFailed.message ?? "merge failed"}`);
   if (isCommentReadDispatchStop(issue)) return withEvidence(`dispatch guardrail paused - ${nextSafeAction(issue, recovery)}`);
   if (issue.lifecycleStatus === "planning_required") {
-    return withEvidence(`planning required - ${nextSafeAction(issue, recovery)}`);
+    return withEvidence(`planning required - ${nextSafeAction(issue, recovery)}${scopeReportStatusSuffix(issue.scopeReport)}`);
   }
   if (hasApprovedPullRequest(issue) && issue.phase === "completed") return withEvidence("waiting on merge");
   if (issue.lifecycleStatus === "human_continuation" || issue.lifecycleStatus === "supervisor_continuation" || issue.lifecycleStatus === "externally_fixed") {
@@ -376,6 +403,7 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
     ...(issue.lastHumanDecision ? [issue.lastHumanDecision] : [])
   ]);
   if (issue.lifecycleStatus === "planning_required" || /planning|decomposition|likely-large/i.test(issue.stopReason ?? "")) {
+    if (issue.scopeReport?.planningReentry.status === "missing") return issue.scopeReport.dispatchAdvice.nextSafeAction;
     return "create or attach a planning/decomposition artifact, or split follow-up issues, before returning the issue to implementation";
   }
   if (isCommentReadDispatchStop(issue)) {
