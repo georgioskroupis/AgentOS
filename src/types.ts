@@ -353,6 +353,7 @@ export interface HumanDecisionState {
   trusted?: boolean;
   commentId?: string;
   body?: string;
+  bodyTruncated?: boolean;
   prHeadSha?: string | null;
   validationEvidence?: string | null;
   ciState?: "passed" | "failed" | "pending" | "unknown" | null;

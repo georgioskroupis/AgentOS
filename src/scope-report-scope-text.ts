@@ -1,4 +1,4 @@
-import { latestAuthoritativeHumanDecision } from "./issue-state.js";
+import { HUMAN_DECISION_BODY_PREVIEW_LIMIT, latestAuthoritativeHumanDecision } from "./issue-state.js";
 import { acceptanceBulletCount } from "./scope-report-scoring.js";
 import type { HumanDecisionState, Issue, IssueComment, IssueState, ScopePlanningReentryState, ScopeTextSource } from "./types.js";
 
@@ -25,7 +25,7 @@ export interface ScopeTextSelection {
 
 export function selectScopeText(issue: Issue, state: IssueState | null, linearComments: IssueComment[] | null): ScopeTextSelection {
   const latestDecision = latestAuthoritativeHumanDecision([...(state?.humanDecisions ?? []), ...(state?.lastHumanDecision ? [state.lastHumanDecision] : [])]);
-  const trustedPlanning = extractTrustedPlanningEvidence(latestDecision);
+  const trustedPlanning = extractTrustedPlanningEvidence(latestDecision, linearComments);
   const issueSelection = selectIssueScopeText(issue);
   const useTrustedActiveScope = trustedPlanning.activeScope.present && trustedPlanning.activeScope.bounded && trustedPlanning.activeScope.text;
   const text = useTrustedActiveScope ? [issue.title, trustedPlanning.activeScope.text, issue.labels.join(" ")].filter(Boolean).join("\n") : issueSelection.text;
@@ -45,19 +45,43 @@ export function selectScopeText(issue: Issue, state: IssueState | null, linearCo
   };
 }
 
-function extractTrustedPlanningEvidence(decision: HumanDecisionState | null): Pick<ScopeTextSelection, "activeScope" | "decompositionEvidence"> {
-  if (decision?.type !== "fix_findings" || !decision.body?.trim()) {
+function extractTrustedPlanningEvidence(decision: HumanDecisionState | null, linearComments: IssueComment[] | null): Pick<ScopeTextSelection, "activeScope" | "decompositionEvidence"> {
+  const source = trustedDecisionBodySource(decision, linearComments);
+  if (decision?.type !== "fix_findings" || !source.body) {
     return {
       activeScope: { present: false, bounded: false, text: null, excerpt: null, reason: null },
       decompositionEvidence: { present: false, references: [] }
     };
   }
-  const activeText = extractActiveScopeSection(decision.body);
-  const activeScope = activeScopeState(activeText);
-  const references = extractLinkedDecompositionReferences(decision.body);
+  const activeText = extractActiveScopeSection(source.body);
+  const activeScope = source.truncated && activeText ? truncatedActiveScopeState(activeText) : activeScopeState(activeText);
+  const references = extractLinkedDecompositionReferences(source.body);
   return {
     activeScope,
     decompositionEvidence: { present: references.length > 0, references }
+  };
+}
+
+function trustedDecisionBodySource(
+  decision: HumanDecisionState | null,
+  linearComments: IssueComment[] | null
+): { body: string; truncated: boolean } {
+  if (!decision?.body?.trim()) return { body: "", truncated: false };
+  const fetchedBody = decision.commentId ? (linearComments ?? []).find((comment) => comment.id === decision.commentId)?.body.trim() : null;
+  if (fetchedBody) return { body: fetchedBody, truncated: false };
+  const body = decision.body.trim();
+  const truncated = decision.bodyTruncated === true || (decision.bodyTruncated === undefined && body.length >= HUMAN_DECISION_BODY_PREVIEW_LIMIT);
+  return { body, truncated };
+}
+
+function truncatedActiveScopeState(text: string): ScopeTextSelection["activeScope"] {
+  const trimmed = text.trim();
+  return {
+    present: true,
+    bounded: false,
+    text: trimmed,
+    excerpt: cleanExcerpt(trimmed, 180),
+    reason: "trusted Active-Scope was read from a truncated decision body"
   };
 }
 
@@ -225,10 +249,17 @@ function extractActiveScopeSection(text: string): string | null {
 
 function extractLinkedDecompositionReferences(text: string): string[] {
   const references: string[] = [];
+  let capturing = false;
   for (const line of text.split(/\r?\n/)) {
     const header = parseSectionHeader(line);
-    if (!header || !isDecompositionEvidenceSection(header.key) || !header.inline) continue;
-    if (isLinkedReference(header.inline)) references.push(header.inline);
+    if (header) {
+      capturing = isDecompositionEvidenceSection(header.key);
+      if (capturing && header.inline && isLinkedReference(header.inline)) references.push(header.inline);
+      continue;
+    }
+    if (!capturing) continue;
+    const value = cleanReferenceLine(line);
+    if (value && isLinkedReference(value)) references.push(value);
   }
   return unique(references);
 }
@@ -282,6 +313,10 @@ function isDecompositionEvidenceSection(key: string): boolean {
 
 function isLinkedReference(value: string): boolean {
   return /https?:\/\/|\b[A-Z][A-Z0-9]+-\d+\b|(?:^|[\s`'"])(?:\.{1,2}\/|\/)?[A-Za-z0-9._/-]+\.(?:md|json|txt)\b/i.test(value);
+}
+
+function cleanReferenceLine(line: string): string {
+  return line.trim().replace(/^(?:[-*]|\d+\.)\s+/, "").trim();
 }
 
 function cleanExcerpt(value: string, maxLength: number): string {

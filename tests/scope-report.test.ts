@@ -286,6 +286,102 @@ describe("pre-dispatch scope report", () => {
     expect(report.dispatchAdvice.shouldBlock).toBe(false);
   });
 
+  it("keeps oversized trusted Active-Scope blocked when the stored decision body is truncated", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-reentry-oversized-active-"));
+    const issue = fakeIssue({
+      identifier: "AG-8B",
+      title: "MVP roadmap orchestration work",
+      description: "Background:\n- Full roadmap context that previously required planning."
+    });
+    const rawDecisionBody = [
+      "AgentOS-Human-Decision: fix-findings",
+      "Decision-Summary: continue only if the active scope is bounded.",
+      "",
+      "Active-Scope:",
+      `Implement ${"x".repeat(2200)}`
+    ].join("\n");
+    const truncatedDecision = trustedFixDecision(rawDecisionBody.trim().slice(0, 2000), "2026-05-08T00:01:00.000Z");
+    const state = await writeIssueState(repo, {
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      humanDecisions: [truncatedDecision],
+      lastHumanDecision: truncatedDecision
+    });
+
+    const report = await buildPreDispatchScopeReport({
+      repoRoot: repo,
+      issue,
+      state,
+      linearComments: [
+        {
+          id: truncatedDecision.commentId,
+          body: rawDecisionBody,
+          authorId: truncatedDecision.actorId,
+          authorEmail: truncatedDecision.actorEmail,
+          createdAt: truncatedDecision.decidedAt
+        }
+      ]
+    });
+
+    expect(report.evidence.planningReentry).toMatchObject({
+      status: "missing",
+      activeScopePresent: true,
+      activeScopeBounded: false
+    });
+    expect(report.dispatchAdvice).toMatchObject({
+      shouldBlock: true,
+      reason: "planning re-entry needs bounded active scope or linked decomposition evidence"
+    });
+  });
+
+  it("uses multiline linked decomposition evidence to resolve a prior planning pause", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-reentry-decomposition-"));
+    const issue = fakeIssue({
+      identifier: "AG-8C",
+      title: "MVP roadmap orchestration work",
+      description: [
+        "Acceptance criteria:",
+        "- Rebuild the orchestration roadmap.",
+        "- Update Linear lifecycle behavior.",
+        "- Update GitHub merge shepherding.",
+        "- Update validation evidence.",
+        "- Update status reports.",
+        "- Update docs."
+      ].join("\n")
+    });
+    const decision = trustedFixDecision(
+      [
+        "AgentOS-Human-Decision: fix-findings",
+        "Decision-Summary: continue after the split issue is linked.",
+        "",
+        "Decomposition-Evidence:",
+        "- VER-78"
+      ].join("\n"),
+      "2026-05-08T00:01:00.000Z"
+    );
+    const state = await writeIssueState(repo, {
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      humanDecisions: [decision],
+      lastHumanDecision: decision
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue, state });
+
+    expect(report.evidence.planningReentry).toMatchObject({
+      status: "satisfied",
+      activeScopePresent: false,
+      decompositionEvidencePresent: true
+    });
+    expect(report.dispatchAdvice.shouldBlock).toBe(false);
+  });
+
   it("keeps a prior planning pause blocked when trusted re-entry lacks active scope or decomposition evidence", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-reentry-unresolved-"));
     const issue = fakeIssue({
