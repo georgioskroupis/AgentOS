@@ -230,7 +230,140 @@ describe("pre-dispatch scope report", () => {
       shouldBlock: true,
       reason: "likely-large scope needs planning or decomposition before implementation dispatch"
     });
+    expect(report.scopeScoring.score).toBeGreaterThanOrEqual(5);
+    expect(report.scopeScoring).toMatchObject({
+      largeThreshold: 5,
+      textSource: "issue_full_text",
+      reasons: expect.arrayContaining([
+        expect.objectContaining({ reason: expect.stringContaining("likely subsystem") }),
+        { score: 2, reason: "has 7 acceptance/detail bullet(s)" },
+        { score: 2, reason: "contains broad orchestration or roadmap language" }
+      ])
+    });
     expect(report.dispatchAdvice.notes.join("\n")).toContain("likely-large scope should be planned or decomposed before implementation");
+  });
+
+  it("uses trusted bounded Active-Scope to resolve a prior planning pause without scoring background text", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-reentry-resolved-"));
+    const issue = fakeIssue({
+      identifier: "AG-8",
+      title: "MVP roadmap orchestration work",
+      description: [
+        "Bootstrap a compact slice.",
+        "",
+        "Background:",
+        "- Roadmap orchestration across Linear, GitHub, runtime, validation, docs, and workspaces.",
+        "- Migrate every workflow and architecture guardrail.",
+        "- Decompose dependencies across all projects.",
+        "- Include broad follow-up tracking.",
+        "- Audit registry daemon behavior.",
+        "- Update every runbook.",
+        "",
+        "History:",
+        "- Prior attempts scored the full roadmap as active scope."
+      ].join("\n")
+    });
+    const state = await writeIssueState(repo, {
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      humanDecisions: [trustedFixDecision(activeScopeDecisionBody(), "2026-05-08T00:01:00.000Z")],
+      lastHumanDecision: trustedFixDecision(activeScopeDecisionBody(), "2026-05-08T00:01:00.000Z")
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue, state });
+
+    expect(report.evidence.planningReentry).toMatchObject({
+      status: "satisfied",
+      activeScopePresent: true,
+      activeScopeBounded: true
+    });
+    expect(report.scopeScoring.textSource).toBe("trusted_active_scope");
+    expect(report.scopeScoring.ignoredSections).toEqual(expect.arrayContaining(["Background", "History", "issue text superseded by trusted Active-Scope"]));
+    expect(report.scopeSize).not.toBe("large");
+    expect(report.dispatchAdvice.shouldBlock).toBe(false);
+  });
+
+  it("keeps a prior planning pause blocked when trusted re-entry lacks active scope or decomposition evidence", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-reentry-unresolved-"));
+    const issue = fakeIssue({
+      identifier: "AG-9",
+      title: "Small implementation after pause",
+      description: "Acceptance criteria:\n- Add one focused status line."
+    });
+    const state = await writeIssueState(repo, {
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      humanDecisions: [trustedFixDecision("AgentOS-Human-Decision: fix-findings\nDecision-Summary: please proceed", "2026-05-08T00:01:00.000Z")],
+      lastHumanDecision: trustedFixDecision("AgentOS-Human-Decision: fix-findings\nDecision-Summary: please proceed", "2026-05-08T00:01:00.000Z")
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue, state });
+
+    expect(report.scopeSize).toBe("small");
+    expect(report.evidence.planningReentry).toMatchObject({
+      status: "missing",
+      activeScopePresent: false,
+      decompositionEvidencePresent: false
+    });
+    expect(report.dispatchAdvice).toMatchObject({
+      shouldBlock: true,
+      reason: "planning re-entry needs bounded active scope or linked decomposition evidence"
+    });
+  });
+
+  it("ignores verbose background, rationale, history, and split follow-up sections when estimating active scope", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-background-filter-"));
+    const issue = fakeIssue({
+      identifier: "AG-10",
+      title: "Add focused inspect output",
+      description: [
+        "Acceptance criteria:",
+        "- Show the latest scope score in inspect.",
+        "",
+        "Background:",
+        "- Roadmap orchestration across Linear, GitHub, runtime, validation, docs, and workspaces.",
+        "- Migrate every workflow and architecture guardrail.",
+        "",
+        "Rationale:",
+        "- This context mentions broad dependencies and all projects.",
+        "",
+        "History:",
+        "- Prior runs timed out across the orchestrator.",
+        "",
+        "Split follow-up:",
+        "- Build the registry dependency DAG.",
+        "- Redesign high-throughput merge behavior."
+      ].join("\n")
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue });
+
+    expect(report.scopeScoring.textSource).toBe("issue_active_sections");
+    expect(report.scopeScoring.ignoredSections).toEqual(expect.arrayContaining(["Background", "Rationale", "History", "Split follow-up"]));
+    expect(report.scopeSize).toBe("small");
+    expect(report.dispatchAdvice.shouldBlock).toBe(false);
+  });
+
+  it("does not treat an agent-check validation bullet as broad scope by itself", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-agent-check-"));
+    const issue = fakeIssue({
+      identifier: "AG-11",
+      title: "Require standard validation",
+      description: "Done when:\n- npm run agent-check passes."
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue });
+
+    expect(report.scopeScoring.textSource).toBe("issue_active_sections");
+    expect(report.scopeScoring.reasons).toEqual([]);
+    expect(report.scopeSize).toBe("small");
+    expect(report.dispatchAdvice.shouldBlock).toBe(false);
   });
 
   it("classifies vague candidates as unclear", async () => {
@@ -303,4 +436,38 @@ async function initGitRepoWithOriginMain(cwd: string): Promise<void> {
 
 async function run(command: string, args: string[], cwd: string): Promise<void> {
   await execFileAsync(command, args, { cwd });
+}
+
+function activeScopeDecisionBody(): string {
+  return [
+    "AgentOS-Human-Decision: fix-findings",
+    "Decision-Summary: continue with a compact active implementation slice.",
+    "",
+    "Active-Scope:",
+    "Make planning re-entry artifacts machine-readable.",
+    "",
+    "Done when:",
+    "* Pre-dispatch scope reports expose exact scoring reasons.",
+    "* Trusted planning re-entry evidence can clear a prior planning pause.",
+    "* Scope scoring ignores background text.",
+    "* Broad unsplit work still pauses.",
+    "* npm run agent-check passes.",
+    "",
+    "Out of scope:",
+    "Dependency DAG execution and high-throughput merge behavior."
+  ].join("\n");
+}
+
+function trustedFixDecision(body: string, decidedAt: string) {
+  return {
+    type: "fix_findings" as const,
+    decidedAt,
+    source: "linear-comment" as const,
+    actor: "Supervisor",
+    actorId: "user-supervisor",
+    actorEmail: "supervisor@example.com",
+    trusted: true,
+    commentId: `comment-${decidedAt}`,
+    body
+  };
 }

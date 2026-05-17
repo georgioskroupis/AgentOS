@@ -22,7 +22,16 @@ export function buildDispatchAdvice(
       notes
     };
   }
-  if (implementationStatus === "missing" && scopeSize === "large") {
+  if (evidence.planningReentry.status === "missing") {
+    return {
+      shouldBlock: true,
+      reason: "planning re-entry needs bounded active scope or linked decomposition evidence",
+      nextSafeAction: "record trusted Active-Scope or linked decomposition evidence before returning the issue to implementation",
+      notes
+    };
+  }
+  const hasLinkedDecomposition = evidence.planningReentry.status === "satisfied" && evidence.planningReentry.decompositionEvidencePresent;
+  if (implementationStatus === "missing" && scopeSize === "large" && !hasLinkedDecomposition) {
     return {
       shouldBlock: true,
       reason: "likely-large scope needs planning or decomposition before implementation dispatch",
@@ -43,6 +52,8 @@ function dispatchNotes(implementationStatus: ScopeImplementationStatus, scopeSiz
   if (implementationStatus === "already_satisfied") notes.push("already-satisfied work should not be redispatched");
   if (scopeSize === "large") notes.push("likely-large scope should be planned or decomposed before implementation");
   if (implementationStatus === "partially_satisfied") notes.push("preserve existing partial-work evidence before starting a fresh implementation path");
+  if (evidence.planningReentry.status === "satisfied") notes.push(evidence.planningReentry.reason);
+  if (evidence.planningReentry.status === "missing") notes.push(evidence.planningReentry.reason);
   if (evidence.workspace.dirty && evidence.workspace.upstreamMissing) notes.push("dirty workspace with no upstream is recoverable partial work, not fresh missing work");
   if (evidence.lastRun.quietValidationStop) notes.push("last run appears to have stopped during a quiet validation command");
   return notes;

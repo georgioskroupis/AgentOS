@@ -4,10 +4,12 @@ import { pullRequestUrls } from "./issue-state.js";
 import { inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { buildDispatchAdvice } from "./scope-report-advice.js";
 import { buildHumanDecisionEvidence, buildLinearCommentEvidence } from "./scope-report-comments.js";
+import { acceptanceBulletCount, estimateScope, estimateTouchedSubsystems, formatScoreReasons, SCOPE_LARGE_THRESHOLD, SCOPE_MEDIUM_THRESHOLD } from "./scope-report-scoring.js";
+import { selectScopeText, type ScopeTextSelection } from "./scope-report-scope-text.js";
 import { RunArtifactStore, type RunSummary } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry, type RuntimeState } from "./runtime-state.js";
 import { workspaceKey } from "./workspace.js";
-import type { AgentEvent, HumanDecisionState, Issue, IssueComment, IssueState, PullRequestRole, ValidationState } from "./types.js";
+import type { AgentEvent, HumanDecisionState, Issue, IssueComment, IssueState, PullRequestRole, ScopePlanningReentryState, ScopeReportState, ScopeScoreReasonState, ScopeTextSource, ValidationState } from "./types.js";
 
 export type ScopeImplementationStatus = "already_satisfied" | "partially_satisfied" | "missing" | "unclear";
 export type ScopeImpact = "none" | "low" | "medium" | "high" | "unclear";
@@ -29,6 +31,16 @@ export interface PreDispatchScopeReport {
   scopeSize: ScopeSize;
   likelyLarge: boolean;
   scopeReasons: string[];
+  scopeScoring: {
+    score: number | null;
+    mediumThreshold: number;
+    largeThreshold: number;
+    textSource: ScopeTextSource;
+    scoredAcceptanceBulletCount: number;
+    reasons: ScopeScoreReasonState[];
+    ignoredSections: string[];
+    activeScopeExcerpt: string | null;
+  };
   evidence: ScopeEvidence;
   dispatchAdvice: {
     shouldBlock: boolean;
@@ -42,8 +54,12 @@ export interface ScopeEvidence {
   issueText: {
     hasDescription: boolean;
     acceptanceBulletCount: number;
+    scoredAcceptanceBulletCount: number;
+    scoringTextSource: ScopeTextSource;
+    ignoredSections: string[];
     labelCount: number;
   };
+  planningReentry: ScopePlanningReentryState;
   state: {
     present: boolean;
     outcome: IssueState["outcome"] | null;
@@ -199,10 +215,11 @@ export async function buildPreDispatchScopeReport(input: BuildScopeReportInput):
     : null;
   const lastRun = await readLastRunEvidence(repoRoot, input.issue, input.state ?? null, activeRun, retry);
   const handoff = await readHandoffEvidence(repoRoot, input.issue, workspacePath, lastRun.runId);
-  const evidence = buildEvidence(repoRoot, input.issue, input.state ?? null, input.linearComments ?? null, recovery, handoff, activeRun, retry, lastRun);
+  const scopeText = selectScopeText(input.issue, input.state ?? null, input.linearComments ?? null);
+  const evidence = buildEvidence(repoRoot, input.issue, input.state ?? null, input.linearComments ?? null, recovery, handoff, activeRun, retry, lastRun, scopeText);
   const implementation = classifyImplementationStatus(input.issue, input.state ?? null, evidence);
-  const likelyTouchedSubsystems = estimateTouchedSubsystems(input.issue, input.state ?? null, evidence);
-  const scope = estimateScope(input.issue, implementation.status, likelyTouchedSubsystems, evidence);
+  const likelyTouchedSubsystems = estimateTouchedSubsystems(input.issue, input.state ?? null, evidence, scopeText);
+  const scope = estimateScope(input.issue, implementation.status, likelyTouchedSubsystems, evidence, scopeText);
   const prLikelihood = estimatePrLikelihood(input.issue, implementation.status, evidence);
   const dispatchAdvice = buildDispatchAdvice(implementation.status, scope.scopeSize, evidence);
   const report: PreDispatchScopeReport = {
@@ -220,6 +237,16 @@ export async function buildPreDispatchScopeReport(input: BuildScopeReportInput):
     scopeSize: scope.scopeSize,
     likelyLarge: scope.scopeSize === "large",
     scopeReasons: scope.reasons,
+    scopeScoring: {
+      score: scope.score,
+      mediumThreshold: SCOPE_MEDIUM_THRESHOLD,
+      largeThreshold: SCOPE_LARGE_THRESHOLD,
+      textSource: scopeText.source,
+      scoredAcceptanceBulletCount: scopeText.scoredAcceptanceBulletCount,
+      reasons: scope.scoreReasons,
+      ignoredSections: scopeText.ignoredSections,
+      activeScopeExcerpt: scopeText.activeScope.excerpt
+    },
     evidence,
     dispatchAdvice
   };
@@ -228,7 +255,9 @@ export async function buildPreDispatchScopeReport(input: BuildScopeReportInput):
 
 export function preDispatchScopeReportMessage(report: PreDispatchScopeReport): string {
   const large = report.likelyLarge ? "; likely large" : "";
-  return `implementation=${report.implementationStatus}; scope=${report.scopeSize}; pr=${report.prLikelihood}; review=${report.reviewRisk}${large}`;
+  const scoring = report.scopeScoring.score == null ? "score=unclear" : `score=${report.scopeScoring.score}/${report.scopeScoring.largeThreshold}`;
+  const reasons = report.scopeScoring.reasons.length ? `; scoring=${formatScoreReasons(report.scopeScoring.reasons)}` : "";
+  return `implementation=${report.implementationStatus}; scope=${report.scopeSize}; ${scoring}; source=${report.scopeScoring.textSource}; pr=${report.prLikelihood}; review=${report.reviewRisk}${large}${reasons}`;
 }
 
 export async function logPreDispatchScopeReport(input: LogScopeReportInput): Promise<PreDispatchScopeReport | null> {
@@ -262,7 +291,8 @@ function buildEvidence(
   handoff: ScopeEvidence["handoff"],
   activeRun: RuntimeActiveRun | null,
   retry: RuntimeRetryEntry | null,
-  lastRun: LastRunEvidence
+  lastRun: LastRunEvidence,
+  scopeText: ScopeTextSelection
 ): ScopeEvidence {
   const prs = pullRequestUrls(state);
   const validationCommand = latestValidationCommand(state?.validation ?? null);
@@ -272,8 +302,12 @@ function buildEvidence(
     issueText: {
       hasDescription: Boolean(issue.description?.trim()),
       acceptanceBulletCount: acceptanceBulletCount(issue.description),
+      scoredAcceptanceBulletCount: scopeText.scoredAcceptanceBulletCount,
+      scoringTextSource: scopeText.source,
+      ignoredSections: scopeText.ignoredSections,
       labelCount: issue.labels.length
     },
+    planningReentry: scopeText.planningReentry,
     state: {
       present: Boolean(state),
       outcome: state?.outcome ?? null,
@@ -335,6 +369,26 @@ function buildEvidence(
       tokenTotal: summary?.metrics.tokens.total ?? null,
       latestCommandActivity: lastRun.latestCommandActivity,
       quietValidationStop: lastRun.quietValidationStop
+    }
+  };
+}
+
+export function scopeReportStateFromReport(report: PreDispatchScopeReport): ScopeReportState {
+  return {
+    recordedAt: report.generatedAt,
+    scopeSize: report.scopeSize,
+    likelyLarge: report.likelyLarge,
+    score: report.scopeScoring.score,
+    largeThreshold: report.scopeScoring.largeThreshold,
+    mediumThreshold: report.scopeScoring.mediumThreshold,
+    scoringTextSource: report.scopeScoring.textSource,
+    scoringReasons: report.scopeScoring.reasons,
+    ignoredSections: report.scopeScoring.ignoredSections,
+    planningReentry: report.evidence.planningReentry,
+    dispatchAdvice: {
+      shouldBlock: report.dispatchAdvice.shouldBlock,
+      reason: report.dispatchAdvice.reason,
+      nextSafeAction: report.dispatchAdvice.nextSafeAction
     }
   };
 }
@@ -421,77 +475,6 @@ function classifyImplementationStatus(issue: Issue, state: IssueState | null, ev
   return { status: "missing", reasons: ["no prior implementation, PR, validation, handoff, runtime, or recoverable workspace evidence found"] };
 }
 
-function estimateTouchedSubsystems(issue: Issue, state: IssueState | null, evidence: ScopeEvidence): string[] {
-  const text = issueText(issue);
-  const matches: string[] = [];
-  const keywordMap: Array<[string, RegExp]> = [
-    ["orchestration", /\b(orchestrator|scheduler|dispatch|candidate|retry|reconciliation|lifecycle|linear)\b/i],
-    ["runner-runtime", /\b(codex|app server|runner|stall|timeout|token|event volume|runtime)\b/i],
-    ["workspace-recovery", /\b(workspace|worktree|branch|upstream|dirty|recoverable)\b/i],
-    ["github-pr", /\b(github|pull request| pr |checks?|ci|merge)\b/i],
-    ["validation", /\b(validation|agent-check|test|vitest|typecheck|build)\b/i],
-    ["harness-templates", /\b(harness|template|profile|skill|agent[s]?\.md)\b/i],
-    ["workflow-docs", /\b(workflow|readme|architecture|docs?|quality|runbook)\b/i],
-    ["cli", /\b(cli|command|commander|agent-os)\b/i],
-    ["security", /\b(security|secret|credential|trust|auth|token)\b/i],
-    ["registry", /\b(registry|multi-project|project registry|daemon)\b/i]
-  ];
-  for (const [subsystem, pattern] of keywordMap) {
-    if (pattern.test(text)) matches.push(subsystem);
-  }
-  if (state?.validation || evidence.lastRun.quietValidationStop) matches.push("validation");
-  if (evidence.workspace.recoverable) matches.push("workspace-recovery");
-  if (evidence.pullRequests.present) matches.push("github-pr");
-  return unique(matches).length ? unique(matches) : ["unknown"];
-}
-
-function estimateScope(
-  issue: Issue,
-  implementationStatus: ScopeImplementationStatus,
-  likelyTouchedSubsystems: string[],
-  evidence: ScopeEvidence
-): { scopeSize: ScopeSize; reasons: string[] } {
-  if (implementationStatus === "already_satisfied") {
-    return { scopeSize: "small", reasons: ["prior handoff says no implementation work is needed"] };
-  }
-  if (implementationStatus === "unclear") {
-    return { scopeSize: "unclear", reasons: ["scope cannot be estimated from current evidence"] };
-  }
-
-  const text = issueText(issue);
-  const concreteSubsystems = likelyTouchedSubsystems.filter((subsystem) => subsystem !== "unknown");
-  const reasons: string[] = [];
-  let score = 0;
-  if (concreteSubsystems.length >= 3) {
-    score += concreteSubsystems.length;
-    reasons.push(`touches ${concreteSubsystems.length} likely subsystem(s)`);
-  }
-  if (evidence.issueText.acceptanceBulletCount >= 5) {
-    score += 2;
-    reasons.push(`has ${evidence.issueText.acceptanceBulletCount} acceptance/detail bullet(s)`);
-  }
-  if (/\b(end-to-end|roadmap|migration|architecture|orchestrator|workflow|all|every|large|broad|dependencies|decompose|guardrail)\b/i.test(text)) {
-    score += 2;
-    reasons.push("contains broad orchestration or roadmap language");
-  }
-  if (text.length > 1200) {
-    score += 1;
-    reasons.push("issue text is long");
-  }
-  if (evidence.lastRun.eventCount > 200 || (evidence.lastRun.tokenTotal ?? 0) > 100_000) {
-    score += 2;
-    reasons.push("prior run had high event or token volume");
-  }
-  if (evidence.workspace.recoverable) {
-    score += 1;
-    reasons.push("recoverable partial workspace must be preserved");
-  }
-
-  if (score >= 5) return { scopeSize: "large", reasons };
-  if (score >= 2) return { scopeSize: "medium", reasons: reasons.length ? reasons : ["moderate subsystem or acceptance detail"] };
-  return { scopeSize: "small", reasons: reasons.length ? reasons : ["limited issue text and few subsystem signals"] };
-}
-
 function estimateDocsImpact(issue: Issue, implementationStatus: ScopeImplementationStatus, likelyTouchedSubsystems: string[]): ScopeImpact {
   if (implementationStatus === "already_satisfied") return "none";
   if (implementationStatus === "unclear") return "unclear";
@@ -576,10 +559,6 @@ function isQuietValidationStop(
 function latestValidationCommand(validation: ValidationState | null): { name: string; finishedAt: string } | null {
   const commands = [...(validation?.acceptedCommands ?? []), ...(validation?.additionalPassingCommands ?? []), ...(validation?.failedHistoricalAttempts ?? [])];
   return commands.sort((a, b) => a.finishedAt.localeCompare(b.finishedAt)).at(-1) ?? null;
-}
-
-function acceptanceBulletCount(description: string | null): number {
-  return (description ?? "").split(/\r?\n/).filter((line) => /^\s*(?:[-*]|\d+\.)\s+/.test(line)).length;
 }
 
 function isUnclearIssue(issue: Issue): boolean {

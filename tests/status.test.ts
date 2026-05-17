@@ -1158,6 +1158,33 @@ describe("issue inspection", () => {
           phase: "needs-input",
           lifecycleStatus: "planning_required",
           stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+          scopeReport: {
+            recordedAt: "2026-05-05T00:09:00.000Z",
+            scopeSize: "large",
+            likelyLarge: true,
+            score: 7,
+            mediumThreshold: 2,
+            largeThreshold: 5,
+            scoringTextSource: "issue_full_text",
+            scoringReasons: [
+              { score: 3, reason: "touches 3 likely subsystem(s)" },
+              { score: 2, reason: "has 6 acceptance/detail bullet(s)" },
+              { score: 2, reason: "contains broad orchestration or roadmap language" }
+            ],
+            ignoredSections: ["Background"],
+            planningReentry: {
+              status: "missing",
+              reason: "prior planning_required pause needs bounded Active-Scope or linked decomposition evidence",
+              activeScopePresent: false,
+              activeScopeBounded: false,
+              decompositionEvidencePresent: false
+            },
+            dispatchAdvice: {
+              shouldBlock: true,
+              reason: "likely-large scope needs planning or decomposition before implementation dispatch",
+              nextSafeAction: "create or attach a planning/decomposition artifact, or split follow-up issues, before starting implementation"
+            }
+          },
           updatedAt: "2026-05-05T00:10:00.000Z"
         },
         null,
@@ -1168,9 +1195,15 @@ describe("issue inspection", () => {
 
     const registryOutput = await getRegistryStatus(registryPath);
     expect(registryOutput).toContain("AG-10: planning required - create or attach a planning/decomposition artifact");
+    expect(registryOutput).toContain("scope score 7/5");
+    expect(registryOutput).toContain("+3 touches 3 likely subsystem(s)");
 
     const inspectOutput = await inspectIssue(repo, "AG-10");
     expect(inspectOutput).toContain("Next safe action: create or attach a planning/decomposition artifact");
+    expect(inspectOutput).toContain("Scope report: large (likely large)");
+    expect(inspectOutput).toContain("Scope scoring reasons:");
+    expect(inspectOutput).toContain("+2 contains broad orchestration or roadmap language");
+    expect(inspectOutput).toContain("Planning re-entry: missing");
   });
 
   it("does not warn when clean post-merge cleanup removed the recorded workspace", async () => {
