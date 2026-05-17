@@ -587,7 +587,7 @@ function isExpectedTerminalWorkspaceCleanup(issue: IssueState): boolean {
       issue.lifecycleStatus === "post_merge_cleanup_warning" ||
       issue.lifecycleStatus === "already_merged_pr" ||
       issue.lifecycleStatus === "terminal_linear" ||
-      (issue.phase === "completed" && issue.terminalState?.toLowerCase() === "done")
+      (issue.phase === "completed" && Boolean(issue.terminalState))
   );
 }
 

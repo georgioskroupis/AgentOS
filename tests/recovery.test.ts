@@ -137,6 +137,7 @@ describe("operator recovery", () => {
         failedHistoricalAttempts: [{ name: "npm run agent-check", exitCode: 1, startedAt: now, finishedAt: now }]
       },
       operatorRecovery: {
+        runId: recoveredRunId,
         branch: `agent/${issue.identifier}`,
         headSha,
         handoffPath: join(".agent-os", "workspaces", issue.identifier, ".agent-os", `handoff-${issue.identifier}.md`),

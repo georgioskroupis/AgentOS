@@ -292,6 +292,7 @@ export interface AppProofArtifact {
 
 export interface OperatorRecoveryState {
   recordedAt: string;
+  runId?: string;
   branch: string;
   headSha: string;
   workspacePath: string;
