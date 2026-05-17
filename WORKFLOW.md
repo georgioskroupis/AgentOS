@@ -380,10 +380,12 @@ After a PR-producing run opens or updates a PR, AgentOS keeps the issue in
   `recommend-only`; `prepare-draft` also writes a local follow-up proposal under
   `.agent-os/follow-ups/`.
 - When the review budget is exceeded for broad or non-mechanical signals,
-  AgentOS records a structured split/follow-up recommendation in durable status
-  and comments separately from generic review failure. Narrow mechanical
-  findings continue through the existing bounded fixer path while within
-  budget.
+  AgentOS records a structured split/follow-up recommendation in durable status.
+  If required reviewers approve and current validation/check evidence is green,
+  that recommendation is advisory and does not change `reviewStatus` from
+  `approved`; otherwise it remains a blocking review-budget escalation. Narrow
+  mechanical findings continue through the existing bounded fixer path while
+  within budget.
 - If review cannot converge, AgentOS moves to `Human Review` with
   `reviewStatus: human_required` and a Linear comment explaining why.
 

@@ -128,9 +128,10 @@ export function formatReviewBudgetState(budget: ReviewBudgetState | undefined): 
   return lines.join("\n");
 }
 
-export function formatSplitRecommendation(recommendation: ReviewSplitRecommendation | undefined): string {
+export function formatSplitRecommendation(recommendation: ReviewSplitRecommendation | undefined, options: { advisory?: boolean } = {}): string {
   if (!recommendation?.recommended) return "Split recommendation: none recorded";
-  const lines = [`Split recommendation: ${recommendation.action}`, `Split reason: ${recommendation.reason}`, `Split summary: ${recommendation.summary}`];
+  const label = options.advisory ? `advisory (${recommendation.action})` : recommendation.action;
+  const lines = [`Split recommendation: ${label}`, `Split reason: ${recommendation.reason}`, `Split summary: ${recommendation.summary}`];
   if (recommendation.proposals?.length) lines.push("Follow-up proposals:", ...recommendation.proposals.map((proposal) => `- ${proposal.title}${proposal.artifactPath ? ` (${proposal.artifactPath})` : ""}`));
   return lines.join("\n");
 }
@@ -149,6 +150,12 @@ export function isReviewSplitRecommendationOpen(state: Pick<IssueState, "splitRe
   if (!recommendation?.recommended) return false;
   const decision = reviewSupervisorMergeDecision(state);
   return !decision || !decisionClosesSplitRecommendation(decision, recommendation);
+}
+
+export function isReviewSplitRecommendationBlocking(
+  state: Pick<IssueState, "reviewStatus" | "splitRecommendation" | "humanDecisions" | "lastHumanDecision"> | null | undefined
+): boolean {
+  return state?.reviewStatus !== "approved" && isReviewSplitRecommendationOpen(state);
 }
 
 function decisionClosesSplitRecommendation(decision: HumanDecisionState, recommendation: ReviewSplitRecommendation): boolean {
