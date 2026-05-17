@@ -27,9 +27,29 @@ export function terminalWorkspaceWarning(issue: Issue, state: IssueState | null,
 }
 
 export async function isOperatorRecoveryTimingRunMissingSummary(repoRoot: string, state: IssueState | null, runId: string): Promise<boolean> {
+  if (!(await missingRunSummary(repoRoot, runId))) return false;
   if (!state?.operatorRecovery) return false;
   const recoveredRunId = state.operatorRecovery.runId ?? state.validation?.runId;
-  return recoveredRunId === runId && !(await exists(join(repoRoot, ".agent-os", "runs", runId, "summary.json")));
+  return recoveredRunId === runId;
+}
+
+export async function isSyntheticTimingRunMissingSummary(repoRoot: string, state: IssueState | null, runId: string): Promise<boolean> {
+  if (await isOperatorRecoveryTimingRunMissingSummary(repoRoot, state, runId)) return true;
+  if (!(await missingRunSummary(repoRoot, runId))) return false;
+  return isExternalSupervisorTimingRunId(state, runId);
+}
+
+function isExternalSupervisorTimingRunId(state: IssueState | null, runId: string): boolean {
+  if (!state?.lifecycleStatus || !["externally_fixed", "merge_success", "post_merge_cleanup_warning", "already_merged_pr"].includes(state.lifecycleStatus)) return false;
+  const supervisorFixed = [...(state.humanDecisions ?? []), ...(state.lastHumanDecision ? [state.lastHumanDecision] : [])].some(
+    (decision) => decision.type === "proceed_to_merge_after_supervisor_fix" && decision.trusted !== false
+  );
+  if (!supervisorFixed) return false;
+  return state.validation?.runId === runId || state.lastRunId === runId;
+}
+
+async function missingRunSummary(repoRoot: string, runId: string): Promise<boolean> {
+  return !(await exists(join(repoRoot, ".agent-os", "runs", runId, "summary.json")));
 }
 
 export function alreadyMergedIssuePatch(

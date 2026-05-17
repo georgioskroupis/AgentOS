@@ -19,7 +19,7 @@ import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
-import { alreadyMergedIssuePatch, isOperatorRecoveryTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
+import { alreadyMergedIssuePatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
 import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationOpen, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
@@ -225,7 +225,7 @@ export class Orchestrator {
     if (!runId) return false;
     const repoRoot = resolve(this.options.repoRoot);
     const state = await new IssueStateStore(repoRoot).read(issue.identifier).catch(() => null);
-    if (await isOperatorRecoveryTimingRunMissingSummary(repoRoot, state, runId)) return false;
+    if (await isSyntheticTimingRunMissingSummary(repoRoot, state, runId)) return false;
     try {
       const finished = await this.runArtifacts.finishOpenPhases(runId, { phase }, { status, finishedAt, metadata });
       if (finished.length === 0) return false;
@@ -278,7 +278,7 @@ export class Orchestrator {
     const runningRunId = this.running.get(issue.id)?.runId;
     const state = await new IssueStateStore(repoRoot).read(issue.identifier).catch(() => null);
     const runId = explicitRunId ?? runningRunId ?? state?.activeRunId ?? state?.lastRunId ?? null;
-    if (!runId || (runId !== runningRunId && (await isOperatorRecoveryTimingRunMissingSummary(repoRoot, state, runId)))) return null;
+    if (!runId || (runId !== runningRunId && (await isSyntheticTimingRunMissingSummary(repoRoot, state, runId)))) return null;
     return runId;
   }
 

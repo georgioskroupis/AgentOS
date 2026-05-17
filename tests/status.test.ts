@@ -1005,6 +1005,81 @@ describe("issue inspection", () => {
     expect(output).not.toContain("missing terminal workspace warning");
   });
 
+  it("renders terminal missing-workspace cleanup cleanly while active missing workspaces still warn", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-missing-clean-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    const terminalCases = [
+      ["AG-14", "Canceled"],
+      ["AG-15", "Duplicate"]
+    ] as const;
+    for (const [identifier, terminalState] of terminalCases) {
+      await writeFile(
+        join(repo, ".agent-os", "state", "issues", `${identifier}.json`),
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            issueId: `issue-${identifier}`,
+            issueIdentifier: identifier,
+            phase: "canceled",
+            lifecycleStatus: "terminal_missing_workspace",
+            terminalState,
+            reviewStatus: "pending",
+            workspacePath: `.agent-os/workspaces/${identifier}`,
+            workspaceMissingAt: "2026-05-05T00:10:00.000Z",
+            updatedAt: "2026-05-05T00:10:00.000Z"
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+    }
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-16.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-16",
+          issueIdentifier: "AG-16",
+          phase: "needs-input",
+          lifecycleStatus: "implementation_failure",
+          reviewStatus: "pending",
+          workspacePath: ".agent-os/workspaces/AG-16",
+          workspaceMissingAt: "2026-05-05T00:20:00.000Z",
+          updatedAt: "2026-05-05T00:20:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const statusOutput = await getStatus(repo);
+    expect(statusOutput).toContain("AG-14: terminal (Canceled)");
+    expect(statusOutput).toContain("AG-15: terminal (Duplicate)");
+    expect(statusOutput).not.toContain("AG-14: status warning");
+    expect(statusOutput).not.toContain("AG-15: status warning");
+    expect(statusOutput).toContain("AG-16: status warning - missing workspace warning:");
+
+    const canceledOutput = await inspectIssue(repo, "AG-14");
+    expect(canceledOutput).toContain("Status warnings: none");
+    expect(canceledOutput).toContain("Review: none recorded");
+    expect(canceledOutput).not.toContain("Review: pending");
+    expect(canceledOutput).not.toContain("Workspace recovery: workspace missing");
+    expect(canceledOutput).not.toContain("terminal workspace warning");
+
+    const duplicateOutput = await inspectIssue(repo, "AG-15");
+    expect(duplicateOutput).toContain("Status warnings: none");
+    expect(duplicateOutput).not.toContain("Review: pending");
+    expect(duplicateOutput).not.toContain("Workspace recovery: workspace missing");
+
+    const activeOutput = await inspectIssue(repo, "AG-16");
+    expect(activeOutput).toContain("Status warnings:");
+    expect(activeOutput).toContain("missing workspace warning: workspacePath points to missing workspace");
+    expect(activeOutput).toContain("Workspace recovery: workspace missing");
+    expect(activeOutput).toContain("Review: pending");
+  });
+
   it("names the planning/decomposition next safe action for planning-required issues", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-planning-required-"));
     const repo = join(root, "alpha");
