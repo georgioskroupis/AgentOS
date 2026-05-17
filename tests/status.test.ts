@@ -1150,16 +1150,38 @@ describe("issue inspection", () => {
       ),
       "utf8"
     );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-12.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-12",
+          issueIdentifier: "AG-12",
+          phase: "completed",
+          lifecycleStatus: "terminal_missing_workspace",
+          terminalState: "Done",
+          terminalAt: "2026-05-05T00:10:00.000Z",
+          workspacePath: ".agent-os/workspaces/AG-12",
+          workspaceMissingAt: "2026-05-05T00:10:00.000Z",
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
 
     const registryOutput = await getRegistryStatus(registryPath);
     expect(registryOutput).toContain("AG-5: merged");
     expect(registryOutput).toContain("AG-6: already merged");
     expect(registryOutput).toContain("AG-11: terminal (Done)");
+    expect(registryOutput).toContain("AG-12: terminal (Done)");
     expect(registryOutput).not.toContain("AG-5: waiting on merge");
     expect(registryOutput).not.toContain("AG-6: waiting on merge");
     expect(registryOutput).not.toContain("AG-5: status warning");
     expect(registryOutput).not.toContain("AG-6: status warning");
     expect(registryOutput).not.toContain("AG-11: status warning");
+    expect(registryOutput).not.toContain("AG-12: status warning");
 
     const inspectOutput = await inspectIssue(repo, "AG-5");
     expect(inspectOutput).toContain("Status warnings: none");
@@ -1184,6 +1206,12 @@ describe("issue inspection", () => {
     expect(terminalLinearOutput).toContain("Next safe action: no operator action required; issue is already in terminal state Done");
     expect(terminalLinearOutput).not.toContain("missing terminal workspace warning");
     expect(terminalLinearOutput).not.toContain("Workspace recovery: workspace missing");
+
+    const terminalMissingOutput = await inspectIssue(repo, "AG-12");
+    expect(terminalMissingOutput).toContain("Status warnings: none");
+    expect(terminalMissingOutput).toContain("Next safe action: no operator action required; issue is already in terminal state Done");
+    expect(terminalMissingOutput).not.toContain("terminal workspace warning");
+    expect(terminalMissingOutput).not.toContain("Workspace recovery: workspace missing");
   });
 });
 

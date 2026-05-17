@@ -4339,6 +4339,110 @@ describe("orchestrator", () => {
     expect(state?.workspaceMissingAt).toBeUndefined();
   });
 
+  it("does not warn repeatedly when operator recovery records a run id without a summary artifact", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-recovery-summary-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "completed",
+      lastRunId: "run_operator_recovered",
+      validation: {
+        status: "passed",
+        runId: "run_operator_recovered",
+        checkedAt: "2026-05-17T02:00:00.000Z"
+      },
+      operatorRecovery: {
+        recordedAt: "2026-05-17T02:00:00.000Z",
+        branch: "agent/AG-1",
+        headSha: "recovered-head",
+        workspacePath: ".agent-os/workspaces/AG-1",
+        handoffPath: ".agent-os/workspaces/AG-1/.agent-os/handoff-AG-1.md",
+        proofArtifacts: []
+      },
+      updatedAt: "2026-05-17T02:00:00.000Z"
+    });
+    const logger = new JsonlLogger(repo);
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[mergingIssue.id, mergingIssue]]);
+      },
+      async move() {},
+      async comment() {}
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const logs = await logger.tail(500);
+    expect(logs.filter((entry) => entry.type === "phase_timing_persistence_warning")).toEqual([]);
+  });
+
+  it("keeps warning when non-recovery phase timing points at a missing run summary", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-missing-summary-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "completed",
+      lastRunId: "run_missing_summary",
+      updatedAt: "2026-05-17T02:00:00.000Z"
+    });
+    const logger = new JsonlLogger(repo);
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[mergingIssue.id, mergingIssue]]);
+      },
+      async move() {},
+      async comment() {}
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const warnings = (await logger.tail(500)).filter((entry) => entry.type === "phase_timing_persistence_warning");
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings.map((entry) => entry.message ?? "").join("\n")).toContain("summary.json");
+  });
+
   it("records cleanup warnings instead of retrying when local branch deletion is blocked by an AgentOS worktree", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-cleanup-"));
     await initGitRemote(repo);
