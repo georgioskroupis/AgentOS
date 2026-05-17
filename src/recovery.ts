@@ -211,7 +211,7 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
   const workspaceRelativePath = relativeToRepo(repoRoot, workspacePath);
   const handoffRelativePath = relativeToRepo(repoRoot, handoffPath);
   const validationRelativePath = validation.state.path ? relativeToRepo(repoRoot, validation.state.path) : validationMarker;
-  const previousFailure = previousFailureFromIssueState(current);
+  const previousFailure = previousFailureFromIssueState(current) ?? current?.operatorRecovery?.previousFailure;
   const handoffPrs = handoffState.prs ?? [];
   const reviewTargetMode = current?.reviewTargetMode ?? "merge-eligible";
   const mergeTarget = handoffPrs.length ? mergeTargetPullRequest(handoffState) : null;
@@ -276,7 +276,7 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
     updatedAt: recordedAt
   });
   await stateStore.write(next);
-  await new RuntimeStateStore(repoRoot).clearIssue(next.issueId);
+  await new RuntimeStateStore(repoRoot).clearIssue(next.issueId, issueIdentifier);
   return {
     issueIdentifier,
     branch,

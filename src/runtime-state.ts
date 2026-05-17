@@ -185,11 +185,11 @@ export class RuntimeStateStore {
     });
   }
 
-  async clearIssue(issueId: string): Promise<RuntimeState> {
+  async clearIssue(issueId: string, identifier?: string): Promise<RuntimeState> {
     return this.update((state) => {
-      state.activeRuns = state.activeRuns.filter((entry) => entry.issueId !== issueId);
-      state.claimedIssues = state.claimedIssues.filter((entry) => entry.issueId !== issueId);
-      state.retryQueue = state.retryQueue.filter((entry) => entry.issueId !== issueId);
+      state.activeRuns = state.activeRuns.filter((entry) => !matchesIssueIdentity(entry, issueId, identifier));
+      state.claimedIssues = state.claimedIssues.filter((entry) => !matchesIssueIdentity(entry, issueId, identifier));
+      state.retryQueue = state.retryQueue.filter((entry) => !matchesIssueIdentity(entry, issueId, identifier));
     });
   }
 
@@ -238,6 +238,14 @@ function hasRetryIdentity(entry: RuntimeRetryEntry): entry is RuntimeRetryEntry 
 function upsertByIssueId<T extends { issueId: string }>(entries: T[], entry: T): T[] {
   const without = entries.filter((item) => item.issueId !== entry.issueId);
   return [...without, entry];
+}
+
+function matchesIssueIdentity(entry: { issueId: string; identifier: string; issue?: Issue }, issueId: string, identifier?: string): boolean {
+  return (
+    entry.issueId === issueId ||
+    entry.issue?.id === issueId ||
+    (identifier ? entry.identifier === identifier || entry.issue?.identifier === identifier : false)
+  );
 }
 
 function normalizeActiveRun(entry: RuntimeActiveRun): RuntimeActiveRun {

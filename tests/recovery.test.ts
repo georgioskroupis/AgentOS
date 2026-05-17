@@ -76,7 +76,20 @@ describe("operator recovery", () => {
       reviewTargetUrls: [stalePrUrl],
       updatedAt: "2026-05-17T00:00:00.000Z"
     });
-    await new RuntimeStateStore(repo).upsertRetry({
+    const runtime = new RuntimeStateStore(repo);
+    await runtime.upsertActiveRun({
+      issueId: "linear-issue-id",
+      identifier: issue.identifier,
+      issue: { ...issue, id: "linear-issue-id" },
+      attempt: 1,
+      runId: "run_stale_active",
+      startedAt: "2026-05-17T00:00:00.000Z",
+      lastEventAt: "2026-05-17T00:10:00.000Z",
+      phase: "implementing",
+      workspacePath: workspace,
+      workspaceKey: issue.identifier
+    });
+    await runtime.upsertRetry({
       issueId: issue.id,
       identifier: issue.identifier,
       issue,
@@ -84,6 +97,17 @@ describe("operator recovery", () => {
       dueAt: "2026-05-17T01:00:00.000Z",
       error: "codex_stall_timeout",
       scheduledAt: "2026-05-17T00:00:00.000Z",
+      workspacePath: workspace,
+      workspaceKey: issue.identifier
+    });
+    await runtime.upsertRetry({
+      issueId: "linear-issue-id",
+      identifier: issue.identifier,
+      issue: { ...issue, id: "linear-issue-id" },
+      attempt: 3,
+      dueAt: "2026-05-17T01:30:00.000Z",
+      error: "codex_stall_timeout",
+      scheduledAt: "2026-05-17T00:30:00.000Z",
       workspacePath: workspace,
       workspaceKey: issue.identifier
     });
@@ -133,7 +157,10 @@ describe("operator recovery", () => {
     expect(state?.mergeTargetUrl).toBeUndefined();
     expect(state?.mergeTargetRole).toBeUndefined();
     expect(state?.reviewTargetUrls).toBeUndefined();
-    expect((await new RuntimeStateStore(repo).read()).retryQueue).toEqual([]);
+    const runtimeState = await new RuntimeStateStore(repo).read();
+    expect(runtimeState.activeRuns).toEqual([]);
+    expect(runtimeState.claimedIssues).toEqual([]);
+    expect(runtimeState.retryQueue).toEqual([]);
 
     const status = await getStatus(repo);
     expect(status).toContain("AG-1: completed locally");
@@ -146,6 +173,19 @@ describe("operator recovery", () => {
     expect(inspect).toContain("Failed historical attempts:");
     expect(inspect).not.toContain("Last error: codex_stall_timeout");
     expect(inspect).not.toContain("Stop reason: codex_stall_timeout");
+
+    await recordOperatorRecovery({
+      repoRoot: repo,
+      issueIdentifier: issue.identifier,
+      runId: recoveredRunId,
+      now: "2026-05-17T03:00:00.000Z"
+    });
+    const rerecordedState = await new IssueStateStore(repo).read(issue.identifier);
+    expect(rerecordedState?.operatorRecovery?.previousFailure).toMatchObject({
+      lastError: "codex_stall_timeout",
+      retryAttempt: 2,
+      lifecycleStatus: "implementation_failure"
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("replaces stale PR output with recovered handoff PR metadata", async () => {
