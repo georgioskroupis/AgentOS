@@ -274,7 +274,6 @@ export function extractHumanDecisionsFromComments(comments: IssueComment[], opti
         { actor: comment.author, actorId: comment.authorId, actorEmail: comment.authorEmail },
         options
       );
-      if (!trusted) return null;
       return extractHumanDecision(comment.body, {
         source: "linear-comment",
         actor: comment.author,

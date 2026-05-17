@@ -104,6 +104,7 @@ export interface ScopeEvidence {
     latest: {
       type: HumanDecisionState["type"];
       source: HumanDecisionState["source"];
+      authority: "authoritative" | "context-only";
       actor: string | null;
       decidedAt: string;
       commentId: string | null;
