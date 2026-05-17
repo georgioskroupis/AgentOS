@@ -22,7 +22,7 @@ describe("reviewer artifact retry", () => {
     await scenario.run(async ({ input, reviewer, artifactPath }) => {
       const count = increment(attempts, reviewer);
       if (count === 1) return { status: "succeeded" };
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       return { status: "succeeded" };
     });
 
@@ -44,7 +44,7 @@ describe("reviewer artifact retry", () => {
         await writeFile(join(input.workspace.path, artifactPath), "{ not json", "utf8");
         return { status: "succeeded" };
       }
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       return { status: "succeeded" };
     });
 
@@ -61,7 +61,7 @@ describe("reviewer artifact retry", () => {
     await scenario.run(async ({ input, reviewer, artifactPath }) => {
       const count = increment(attempts, reviewer);
       if (count === 1) return { status: "stalled", error: "stall timeout exceeded" };
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       return { status: "succeeded" };
     });
 
@@ -78,7 +78,7 @@ describe("reviewer artifact retry", () => {
     await scenario.run(async ({ input, reviewer, artifactPath }) => {
       const count = increment(attempts, reviewer);
       if (reviewer === "correctness" && count === 1) return { status: "succeeded" };
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       return { status: "succeeded" };
     });
 
@@ -112,7 +112,7 @@ describe("reviewer artifact retry", () => {
       const policy = input.config.codex.turnSandboxPolicy as { writableRoots?: string[] };
       writableRoots.push(policy.writableRoots?.[0] ?? "");
       await delay(reviewer === "self" ? 30 : reviewer === "correctness" ? 5 : 10);
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       completed.push(reviewer);
       active -= 1;
       return { status: "succeeded" };
@@ -145,7 +145,7 @@ describe("reviewer artifact retry", () => {
       maxActive = Math.max(maxActive, active);
       artifactPaths.push(artifactPath);
       await delay(5);
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       active -= 1;
       return { status: "succeeded" };
     });
@@ -169,7 +169,7 @@ describe("reviewer artifact retry", () => {
     await scenario.run(async ({ input, reviewer, artifactPath }) => {
       const count = increment(attempts, reviewer);
       if (reviewer === "correctness" && count === 1) return { status: "succeeded" };
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       return { status: "succeeded" };
     });
 
@@ -200,7 +200,7 @@ describe("reviewer artifact retry", () => {
         return { status: "succeeded" };
       }
       await delay(reviewer === "correctness" ? 10 : 1);
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       return { status: "succeeded" };
     });
 
@@ -235,6 +235,7 @@ describe("reviewer artifact retry", () => {
       await writeReviewArtifact(join(input.workspace.path, artifactPath), {
         reviewer,
         decision: "changes_requested",
+        ...reviewArtifactScope(input),
         summary: "fix required",
         findings: [
           {
@@ -272,7 +273,7 @@ describe("reviewer artifact retry", () => {
 
     await scenario.run(async ({ input, reviewer, artifactPath }) => {
       increment(attempts, reviewer);
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       return { status: "succeeded" };
     });
 
@@ -300,6 +301,7 @@ describe("reviewer artifact retry", () => {
       await writeReviewArtifact(join(input.workspace.path, artifactPath), {
         reviewer,
         decision: "changes_requested",
+        ...reviewArtifactScope(input),
         summary: "fix required",
         findings: [
           {
@@ -336,6 +338,7 @@ describe("reviewer artifact retry", () => {
         await writeReviewArtifact(join(input.workspace.path, artifactPath), {
           reviewer,
           decision: "approved",
+          ...reviewArtifactScope(input),
           summary: "non-blocking advisory",
           findings: [
             {
@@ -398,7 +401,7 @@ describe("reviewer artifact retry", () => {
 
     await scenario.run(async ({ input, reviewer, artifactPath }) => {
       increment(attempts, reviewer);
-      await writeApprovedArtifact(input.workspace.path, artifactPath, reviewer);
+      await writeApprovedArtifact(input, artifactPath, reviewer);
       return { status: "failed", error: "codex_user_input_request_denied: reviewer requested input" };
     });
 
@@ -538,13 +541,26 @@ async function setupReviewScenario(options: {
   };
 }
 
-async function writeApprovedArtifact(workspacePath: string, artifactPath: string, reviewer: string): Promise<void> {
-  await writeReviewArtifact(join(workspacePath, artifactPath), {
+async function writeApprovedArtifact(input: Parameters<AgentRunner["run"]>[0], artifactPath: string, reviewer: string): Promise<void> {
+  await writeReviewArtifact(join(input.workspace.path, artifactPath), {
     reviewer,
     decision: "approved",
+    ...reviewArtifactScope(input),
     summary: "approved",
     findings: []
   });
+}
+
+function reviewArtifactScope(input: Parameters<AgentRunner["run"]>[0]): { runId?: string; headSha?: string; iteration?: number } {
+  const runId = input.prompt.match(/^- Run:\s*(.+)$/m)?.[1]?.trim();
+  const headSha = input.prompt.match(/^- Head SHA:\s*(.+)$/m)?.[1]?.trim();
+  const iterationText = input.prompt.match(/^- Iteration:\s*(\d+)$/m)?.[1];
+  const iteration = iterationText ? Number(iterationText) : undefined;
+  return {
+    ...(runId ? { runId } : {}),
+    ...(headSha ? { headSha } : {}),
+    ...(Number.isInteger(iteration) ? { iteration } : {})
+  };
 }
 
 function increment(counts: Map<string, number>, key: string): number {

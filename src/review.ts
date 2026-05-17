@@ -456,14 +456,26 @@ function scopedReviewArtifactFailure(
   options: { expectedRunId?: string | null; expectedHeadSha?: string | null; expectedIteration?: number | null }
 ): ReviewArtifactFailure | null {
   const mismatches: string[] = [];
-  if (options.expectedRunId && typeof parsed.runId === "string" && parsed.runId !== options.expectedRunId) {
-    mismatches.push(`runId=${parsed.runId} expected ${options.expectedRunId}`);
+  if (options.expectedRunId) {
+    if (typeof parsed.runId !== "string" || !parsed.runId) {
+      mismatches.push(`runId missing; expected ${options.expectedRunId}`);
+    } else if (parsed.runId !== options.expectedRunId) {
+      mismatches.push(`runId=${parsed.runId} expected ${options.expectedRunId}`);
+    }
   }
-  if (options.expectedHeadSha && typeof parsed.headSha === "string" && parsed.headSha.toLowerCase() !== options.expectedHeadSha.toLowerCase()) {
-    mismatches.push(`headSha=${parsed.headSha} expected ${options.expectedHeadSha}`);
+  if (options.expectedHeadSha) {
+    if (typeof parsed.headSha !== "string" || !parsed.headSha) {
+      mismatches.push(`headSha missing; expected ${options.expectedHeadSha}`);
+    } else if (parsed.headSha.toLowerCase() !== options.expectedHeadSha.toLowerCase()) {
+      mismatches.push(`headSha=${parsed.headSha} expected ${options.expectedHeadSha}`);
+    }
   }
-  if (options.expectedIteration != null && typeof parsed.iteration === "number" && parsed.iteration !== options.expectedIteration) {
-    mismatches.push(`iteration=${parsed.iteration} expected ${options.expectedIteration}`);
+  if (options.expectedIteration != null) {
+    if (typeof parsed.iteration !== "number" || !Number.isInteger(parsed.iteration)) {
+      mismatches.push(`iteration missing; expected ${options.expectedIteration}`);
+    } else if (parsed.iteration !== options.expectedIteration) {
+      mismatches.push(`iteration=${parsed.iteration} expected ${options.expectedIteration}`);
+    }
   }
   if (mismatches.length === 0) return null;
   return reviewArtifactFailure(

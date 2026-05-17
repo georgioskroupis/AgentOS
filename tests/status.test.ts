@@ -150,6 +150,12 @@ describe("issue inspection", () => {
       iteration: 1,
       findings: []
     });
+    await writeReviewArtifact(reviewArtifactPath(repo, "AG-1", 2, "architecture"), {
+      reviewer: "architecture",
+      decision: "approved",
+      iteration: 2,
+      findings: []
+    });
 
     const registryOutput = await getRegistryStatus(registryPath);
     expect(registryOutput).toContain("AG-1: waiting on review (changes_requested); evidence heads:");
@@ -165,6 +171,46 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("CI/check head: old-ci-head (stale; expected current-head)");
     expect(inspectOutput).toContain("iteration-2/self.json [current: iteration 2 current; run run_current current; head current-head current]");
     expect(inspectOutput).toContain("iteration-1/tests.json [stale, non-authoritative: iteration 1 stale; expected 2; run run_previous stale; expected run_current; head old-head-sha stale; expected current-head]");
+    expect(inspectOutput).toContain("iteration-2/architecture.json [stale, non-authoritative: run missing; expected run_current; head missing; expected current-head]");
+  });
+
+  it("does not label validation or CI heads current when no selected PR head is recorded", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-no-selected-head-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "review",
+          reviewStatus: "pending",
+          validation: {
+            status: "passed",
+            finalStatus: "passed",
+            repoHead: "validhead",
+            checkedAt: "2026-05-05T00:09:00.000Z",
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-05T00:06:00.000Z", finishedAt: "2026-05-05T00:07:00.000Z" }],
+            githubCi: { status: "passed", headSha: "cihead", checkedAt: "2026-05-05T00:08:00.000Z" }
+          },
+          updatedAt: "2026-05-05T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const statusOutput = await getStatus(repo);
+    expect(statusOutput).toContain("Selected PR head: unknown");
+    expect(statusOutput).toContain("Validation repoHead: validhead (unknown: no selected PR head)");
+    expect(statusOutput).toContain("CI/check head: cihead (unknown: no selected PR head)");
+
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+    expect(inspectOutput).toContain("Selected PR head: unknown");
+    expect(inspectOutput).toContain("Validation repoHead: validhead (unknown: no selected PR head)");
+    expect(inspectOutput).toContain("CI/check head: cihead (unknown: no selected PR head)");
   });
 
   it("shows review budget split recommendations in inspect output", async () => {

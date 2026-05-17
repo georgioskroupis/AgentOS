@@ -168,18 +168,24 @@ async function reviewArtifactFreshness(path: string, state: IssueState | null): 
     const label = parsed.iteration === state.reviewIteration ? `iteration ${parsed.iteration} current` : `iteration ${parsed.iteration} stale; expected ${state.reviewIteration}`;
     labels.push(label);
     if (parsed.iteration !== state.reviewIteration) stale.push(label);
+  } else if (state?.reviewIteration != null) {
+    stale.push(`iteration missing; expected ${state.reviewIteration}`);
   }
   if (typeof parsed.runId === "string" && state?.lastRunId) {
     const label = parsed.runId === state.lastRunId ? `run ${parsed.runId} current` : `run ${parsed.runId} stale; expected ${state.lastRunId}`;
     labels.push(label);
     if (parsed.runId !== state.lastRunId) stale.push(label);
+  } else if (state?.lastRunId) {
+    stale.push(`run missing; expected ${state.lastRunId}`);
   }
   if (typeof parsed.headSha === "string" && state?.headSha) {
     const label = sameSha(parsed.headSha, state.headSha) ? `head ${shortSha(parsed.headSha)} current` : `head ${shortSha(parsed.headSha)} stale; expected ${shortSha(state.headSha)}`;
     labels.push(label);
     if (!sameSha(parsed.headSha, state.headSha)) stale.push(label);
+  } else if (state?.headSha) {
+    stale.push(`head missing; expected ${shortSha(state.headSha)}`);
   }
-  if (labels.length === 0) return " [unknown: scope metadata missing]";
+  if (labels.length === 0 && stale.length === 0) return " [unknown: scope metadata missing]";
   return stale.length ? ` [stale, non-authoritative: ${stale.join("; ")}]` : ` [current: ${labels.join("; ")}]`;
 }
 
@@ -322,7 +328,7 @@ function validationHeadDetails(issue: IssueState | null): string[] {
 
 function formatComparedHead(value: string | null | undefined, selectedHead: string | null | undefined, options: { selected?: boolean } = {}): string {
   if (!value) return "unknown";
-  const label = options.selected || !selectedHead ? "current" : sameSha(value, selectedHead) ? "current" : `stale; expected ${shortSha(selectedHead)}`;
+  const label = options.selected ? "current" : !selectedHead ? "unknown: no selected PR head" : sameSha(value, selectedHead) ? "current" : `stale; expected ${shortSha(selectedHead)}`;
   return `${shortSha(value)} (${label})`;
 }
 

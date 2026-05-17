@@ -169,4 +169,51 @@ describe("review artifacts", () => {
       }
     });
   });
+
+  it("treats missing expected scope metadata as stale non-authoritative artifacts", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-review-scope-missing-"));
+    const path = reviewArtifactPath(repo, "AG-1", 2, "self");
+    await writeReviewArtifact(path, {
+      reviewer: "self",
+      decision: "approved",
+      findings: []
+    });
+
+    await expect(
+      readReviewArtifactResult(path, "self", {
+        expectedRunId: "run_current",
+        expectedHeadSha: "new-head",
+        expectedIteration: 2
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      failure: {
+        kind: "stale_artifact",
+        body: expect.stringContaining("runId missing; expected run_current")
+      }
+    });
+
+    await writeReviewArtifact(path, {
+      reviewer: "self",
+      decision: "approved",
+      runId: "run_current",
+      headSha: null,
+      iteration: 2,
+      findings: []
+    });
+
+    await expect(
+      readReviewArtifactResult(path, "self", {
+        expectedRunId: "run_current",
+        expectedHeadSha: "new-head",
+        expectedIteration: 2
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      failure: {
+        kind: "stale_artifact",
+        body: expect.stringContaining("headSha missing; expected new-head")
+      }
+    });
+  });
 });

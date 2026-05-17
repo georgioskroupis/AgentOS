@@ -179,6 +179,34 @@ describe("validation evidence", () => {
     });
   });
 
+  it("reuses matching validation evidence without requiring a recorded runId", async () => {
+    const workspace = await gitWorkspace();
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace });
+    const repoHead = stdout.trim();
+    const now = new Date().toISOString();
+    await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
+      schemaVersion: 1,
+      issueIdentifier: "AG-1",
+      repoHead,
+      status: "passed",
+      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+    });
+
+    const result = await verifyValidationEvidence({
+      issue: fakeIssue(),
+      handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
+      workspacePath: workspace,
+      runId: "run_current",
+      allowReusableRunEvidence: true
+    });
+
+    expect(result.state).toMatchObject({
+      status: "passed",
+      repoHead
+    });
+    expect(result.state.runId).toBeUndefined();
+  });
+
   it("rejects final failed evidence even when an earlier command passed", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "agent-os-validation-final-failed-"));
     const now = new Date().toISOString();

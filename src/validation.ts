@@ -123,7 +123,7 @@ export async function verifyValidationEvidence(input: {
   const workspaceHead = await gitHead(input.workspacePath);
   const selectedHeadSha = input.selectedHeadSha ?? null;
   const reusableHead = workspaceHead ?? selectedHeadSha;
-  if (input.runId && evidence.runId !== input.runId && !isReusableRunEvidence(evidence, input.runId, reusableHead, input.allowReusableRunEvidence === true)) {
+  if (input.runId && evidence.runId !== input.runId && !isReusableRunEvidence(evidence, reusableHead, input.allowReusableRunEvidence === true)) {
     errors.push(`runId mismatch: expected ${input.runId}`);
   }
   if (workspaceHead && evidence.repoHead !== workspaceHead) errors.push(`repoHead mismatch: expected ${workspaceHead}`);
@@ -146,9 +146,8 @@ export async function verifyValidationEvidence(input: {
   };
 }
 
-function isReusableRunEvidence(evidence: ValidationEvidence, expectedRunId: string, expectedHeadSha: string | null, enabled: boolean): boolean {
+function isReusableRunEvidence(evidence: ValidationEvidence, expectedHeadSha: string | null, enabled: boolean): boolean {
   if (!enabled) return false;
-  if (!evidence.runId || evidence.runId === expectedRunId) return false;
   if (!evidence.repoHead || !expectedHeadSha) return false;
   return sameSha(evidence.repoHead, expectedHeadSha);
 }
