@@ -1814,6 +1814,8 @@ export class Orchestrator {
 
       if (status === "approved") {
         let advisorySplitRecommendation = budgetDecision.splitRecommendation;
+        const reportOnlyCheckFindings = findings.filter((finding) => finding.reviewer === "checks" && finding.findingHash.startsWith("checks-failing-report-only-"));
+        const reportOnlyCheckDiagnostics = reportOnlyCheckFindings.length > 0 ? formatFindings(reportOnlyCheckFindings, resolve(this.options.repoRoot), { includeLogExcerpts: false }) : null;
         if (budgetDecision.shouldRecommendSplit && budgetDecision.splitRecommendation) {
           advisorySplitRecommendation = await prepareReviewFollowUpProposal(repoRoot, issue, budgetDecision.splitRecommendation);
           latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "approved", reviewBudget: budgetDecision.budget, splitRecommendation: advisorySplitRecommendation, findings, reviewRunnerFailures });
@@ -1827,7 +1829,7 @@ export class Orchestrator {
         }
         await this.commentIssue(
           issue,
-          formatApprovedReviewComment({ reviewTargetList, iteration, reviewers: reviewerStates, budget: budgetDecision.budget, splitRecommendation: advisorySplitRecommendation })
+          formatApprovedReviewComment({ reviewTargetList, iteration, reviewers: reviewerStates, budget: budgetDecision.budget, splitRecommendation: advisorySplitRecommendation, reportOnlyCheckDiagnostics })
         );
         return latestState;
       }

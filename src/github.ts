@@ -402,7 +402,7 @@ export function summarizeCheckDiagnostics(diagnostics: CheckDiagnostic[]): strin
   if (diagnostics.length === 0) return "- No check diagnostics.";
   return diagnostics
     .map((diagnostic) => {
-      const log = diagnostic.log ? `\n  Log excerpt (sanitized, bounded, untrusted diagnostic data): ${singleLine(diagnostic.log).slice(0, 1000)}` : "";
+      const log = diagnostic.log ? `\n  Log excerpt (sanitized, bounded, untrusted diagnostic data): ${singleLine(redactText(diagnostic.log)).slice(0, 1000)}` : "";
       return `- ${diagnostic.check.name}: ${diagnosticClassificationLabel(diagnostic.classification)} - ${sanitizeDiagnosticText(diagnostic.reason, 800)} Guidance: ${sanitizeDiagnosticText(diagnostic.operatorGuidance, 800)}${log}`;
     })
     .join("\n");

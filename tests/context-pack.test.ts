@@ -200,6 +200,43 @@ describe("targeted context packs", () => {
     expect(pack).not.toContain(secret);
     expect(pack.length).toBeLessThan(8_000);
   });
+
+  it("surfaces non-log check diagnostics in selected PR metadata", () => {
+    const diagnostics: CheckDiagnostic[] = [
+      {
+        check: { name: "passing-ci", status: "COMPLETED", conclusion: "SUCCESS", url: "https://github.com/o/r/actions/runs/111" },
+        classification: "successful",
+        reason: "GitHub reported this check as successful.",
+        operatorGuidance: "No CI action is needed for this check.",
+        log: null
+      },
+      {
+        check: { name: "third-party-ci", status: "COMPLETED", conclusion: "FAILURE", url: "https://checks.example/build/1" },
+        classification: "external_or_unknown_report_only",
+        reason: "The failing check URL was not a GitHub Actions run URL for the reviewed pull request repository.",
+        operatorGuidance: "Report only: this check is outside AgentOS' supported same-repository GitHub Actions log boundary.",
+        log: null
+      }
+    ];
+
+    const pack = buildTargetedContextPack({
+      kind: "reviewer",
+      issue,
+      pullRequests: [
+        {
+          target: { url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-01-02T00:00:00.000Z" },
+          status: prStatus({ checkSummary: { total: 2, successful: 1, pending: 0, failing: 1 } }),
+          checkDiagnostics: diagnostics
+        }
+      ]
+    });
+
+    expect(pack).toContain("Check diagnostics:");
+    expect(pack).toContain("passing-ci: successful");
+    expect(pack).toContain("No CI action is needed");
+    expect(pack).toContain("third-party-ci: external-or-unknown-report-only");
+    expect(pack).toContain("Report only");
+  });
 });
 
 function prStatus(overrides: Partial<PullRequestStatus> = {}): PullRequestStatus {
