@@ -4,10 +4,15 @@ export function isDispatchTerminalStop(error: string | undefined): boolean {
   return Boolean(
     error?.startsWith("issue_became_terminal:") ||
       error?.startsWith("issue_no_longer_dispatchable:") ||
+      isDependencyDispatchStop(error) ||
       error === "issue_no_longer_exists" ||
       error === "pull_request_already_merged" ||
       error === "supervisor_continuation_active"
   );
+}
+
+export function isDependencyDispatchStop(error: string | undefined): boolean {
+  return Boolean(error?.toLowerCase().startsWith("issue_blocked_by_dependency:"));
 }
 
 export function categorizeRunError(message: string): RunErrorCategory {

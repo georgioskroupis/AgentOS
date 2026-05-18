@@ -979,6 +979,139 @@ describe("orchestrator", () => {
     expect(moves).toEqual([]);
   });
 
+  it("skips dispatch when a dependency becomes nonterminal after preparation", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-late-blocked-dispatch-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  running_state: In Progress\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const unblockedIssue = {
+      ...readyIssue,
+      state: "Todo",
+      blocked_by: [{ id: "blocker-1", identifier: "AG-0", state: "Done" }]
+    };
+    const blockedIssue = {
+      ...unblockedIssue,
+      blocked_by: [{ id: "blocker-1", identifier: "AG-0", state: "In Progress" }]
+    };
+    let stateReads = 0;
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Todo") ? [unblockedIssue] : [];
+      },
+      async fetchIssueStates() {
+        stateReads += 1;
+        return new Map([[unblockedIssue.id, stateReads >= 2 ? blockedIssue : unblockedIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual([]);
+    expect(comments).toEqual([]);
+    expect(runtime.activeRuns).toEqual([]);
+    expect(runtime.claimedIssues).toEqual([]);
+    expect(runtime.retryQueue).toEqual([]);
+    const logs = await logger.tail(20);
+    expect(logs.some((entry) => entry.type === "dispatch_skipped" && entry.message?.includes("issue_blocked_by_dependency:AG-0"))).toBe(true);
+  });
+
+  it("treats pre-turn dependency stops as skipped runs without retrying", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-preturn-blocked-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  running_state: In Progress\nagent:\n  max_turns: 1\n  max_retry_attempts: 2\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const unblockedIssue = {
+      ...readyIssue,
+      state: "Todo",
+      blocked_by: [{ id: "blocker-1", identifier: "AG-0", state: "Done" }]
+    };
+    const blockedIssue = {
+      ...unblockedIssue,
+      blocked_by: [{ id: "blocker-1", identifier: "AG-0", state: "In Progress" }]
+    };
+    let stateReads = 0;
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Todo") ? [unblockedIssue] : [];
+      },
+      async fetchIssueStates() {
+        stateReads += 1;
+        return new Map([[unblockedIssue.id, stateReads >= 6 ? blockedIssue : unblockedIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const runtime = await new RuntimeStateStore(repo).read();
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> In Progress"]);
+    expect(comments.join("\n")).toContain("AgentOS started");
+    expect(comments.join("\n")).not.toContain("AgentOS retry scheduled");
+    expect(runtime.activeRuns).toEqual([]);
+    expect(runtime.claimedIssues).toEqual([]);
+    expect(runtime.retryQueue).toEqual([]);
+    expect(state?.phase).toBe("canceled");
+    expect(state?.stopReason).toContain("issue_blocked_by_dependency:AG-0");
+    expect(state?.retryAttempt).toBeUndefined();
+    const logs = await logger.tail(20);
+    expect(logs.some((entry) => entry.type === "dispatch_skipped" && entry.message?.includes("issue_blocked_by_dependency:AG-0"))).toBe(true);
+  });
+
   it("includes structured Linear human decisions in Todo re-entry prompts", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-reentry-"));
     await initGitRemote(repo);

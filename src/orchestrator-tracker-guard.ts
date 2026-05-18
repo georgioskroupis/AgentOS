@@ -1,4 +1,5 @@
 import type { JsonlLogger } from "./logging.js";
+import { isDependencyDispatchStop } from "./run-errors.js";
 import type { Issue, IssueTracker, ServiceConfig } from "./types.js";
 
 export type TrackerUpdateResult = "applied" | "unsupported" | "failed" | "blocked";
@@ -26,6 +27,10 @@ export function dependencyDispatchStop(config: ServiceConfig, issue: Issue): str
 export function isConfiguredReviewDispatchStop(config: ServiceConfig, reason: string): boolean {
   const reviewState = config.tracker.reviewState;
   return Boolean(reviewState && reason.toLowerCase() === `issue_no_longer_dispatchable:${reviewState}`.toLowerCase());
+}
+
+export function isPreRunDispatchSkipStop(config: ServiceConfig, reason: string): boolean {
+  return isConfiguredReviewDispatchStop(config, reason) || isDependencyDispatchStop(reason);
 }
 
 export async function reviewStateBlocksTrackerUpdate(input: {

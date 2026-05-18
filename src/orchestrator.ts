@@ -25,13 +25,13 @@ import { planningRecommendedCommentBody } from "./orchestrator-planning-comments
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
-import { alreadyMergedIssuePatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
-import { dependencyDispatchStop, isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
+import { alreadyMergedIssuePatch, dependencyDispatchStopPatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
+import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
 import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
 import { approvedReviewValidationBlockReason, formatApprovedReviewComment, reviewIterationLogMessage } from "./review-budget-orchestration.js";
 import { reviewerConcurrencyFor, runReviewerIteration } from "./reviewer-scheduler.js";
-import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
+import { categorizeRunError, isDependencyDispatchStop, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
@@ -998,7 +998,7 @@ export class Orchestrator {
 
   private async dispatch(issue: Issue, attempt: number | null): Promise<boolean> {
     const dispatchStop = await trackerDispatchStop(this.config, this.tracker, issue);
-    if (dispatchStop && isConfiguredReviewDispatchStop(this.config, dispatchStop)) {
+    if (dispatchStop && isPreRunDispatchSkipStop(this.config, dispatchStop)) {
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
       await this.logger.write({
@@ -1039,7 +1039,7 @@ export class Orchestrator {
 
   private async runIssue(issue: Issue, attempt: number | null, abortController: AbortController): Promise<void> {
     const startStop = await trackerDispatchStop(this.config, this.tracker, issue);
-    if (startStop && isConfiguredReviewDispatchStop(this.config, startStop)) {
+    if (startStop && isPreRunDispatchSkipStop(this.config, startStop)) {
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
       await this.logger.write({
@@ -2339,6 +2339,8 @@ export class Orchestrator {
       await this.runtimeState.clearIssue(issue.id);
     } else if (isStateIn(latest.state, this.config.tracker.terminalStates)) {
       await this.classifyTerminalIssue(latest, reason);
+    } else if (isDependencyDispatchStop(reason)) {
+      await this.recordDispatchGuardrailStop(latest, reason, dependencyDispatchStopPatch(runId));
     } else {
       const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
       if (!(await this.classifyAlreadyMergedIssue(latest, state, reason))) {
