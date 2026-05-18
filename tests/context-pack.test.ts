@@ -163,8 +163,9 @@ describe("targeted context packs", () => {
     const diagnostics: CheckDiagnostic[] = [
       {
         check: { name: "AgentOS CI", status: "COMPLETED", conclusion: "FAILURE", url: "https://github.com/o/r/actions/runs/123" },
-        classification: "mechanical",
+        classification: "mechanical_with_sanitized_logs",
         reason: "TypeScript compilation failed",
+        operatorGuidance: "Fixable mechanical failure.",
         log: `npm run agent-check\nTOKEN=${secret}\nsrc/orchestrator.ts(12,3): error TS2304: Cannot find name 'missingValue'.\n${"x".repeat(5_000)}`
       }
     ];

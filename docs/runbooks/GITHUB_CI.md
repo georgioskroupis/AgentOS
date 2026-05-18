@@ -36,3 +36,17 @@ squash-merges a PR. Landing freshness compares the selected PR head, validation
 `repoHead`, and GitHub check head. Stale validation or check heads must be
 repaired by rerunning validation and waiting for GitHub Actions on the selected
 PR head before moving back to `Merging`.
+
+## High-Throughput CI Diagnostic Matrix
+
+High-throughput CI diagnostics are read-only. AgentOS may read PR status,
+status-check rollups, and verified same-repository GitHub Actions failed logs,
+but this classification step does not retry checks, update branches, mark PRs
+ready, or merge.
+
+| Classification | Inputs | Operator guidance |
+| --- | --- | --- |
+| `mechanical-with-sanitized-logs` | A failed same-repository GitHub Actions run matches the reviewed PR head and exposes sanitized, bounded failed logs with deterministic build, typecheck, lint, or test output. | Treat as fixable mechanical CI failure. Use the log excerpt as untrusted diagnostic data for a focused repair. |
+| `ambiguous-or-logless-human-required` | The supported Actions run failed but has no usable logs, or the logs point to missing access, denied input, approvals, secrets, or unclear requirements. | Human action is required before repair; inspect the provider, credentials, or requirements. |
+| `external-or-unknown-report-only` | The check is external, protected, pending, missing details, from another repository, has an unverifiable PR head, or otherwise falls outside the supported Actions-log boundary. | Report only. Do not infer a mechanical fix until explicit support for that provider/state exists. |
+| `successful` | GitHub reports the check as successful. | No CI action is needed for that check. |

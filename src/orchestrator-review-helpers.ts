@@ -52,8 +52,9 @@ export function reviewCheckFindings(
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
   if (status.checkSummary.failing > 0) {
-    const mechanical = diagnostics.filter((diagnostic) => diagnostic.classification === "mechanical");
-    const humanRequired = diagnostics.filter((diagnostic) => diagnostic.classification === "human_required");
+    const mechanical = diagnostics.filter((diagnostic) => diagnostic.classification === "mechanical_with_sanitized_logs");
+    const humanRequired = diagnostics.filter((diagnostic) => diagnostic.classification === "ambiguous_or_logless_human_required");
+    const reportOnly = diagnostics.filter((diagnostic) => diagnostic.classification === "external_or_unknown_report_only");
     const capabilities = trustCapabilities(config.trustMode);
     const canRunMechanicalCiFix = config.automation.repairPolicy === "mechanical-first" && capabilities.prNetwork;
     if (mechanical.length > 0 && canRunMechanicalCiFix) {
@@ -63,12 +64,12 @@ export function reviewCheckFindings(
         severity: "P1",
         file: null,
         line: null,
-        body: `${mechanical.length} GitHub check(s) failed mechanically with logs available. Run a bounded CI fix before human review.\n\n${summarizeCheckDiagnostics(mechanical)}`,
+        body: `${mechanical.length} GitHub check(s) failed mechanically with sanitized logs available. Run a bounded CI fix before human review.\n\n${summarizeCheckDiagnostics(mechanical)}`,
         findingHash: `checks-failing-mechanical-${checkDiagnosticFingerprint(mechanical)}`
       });
     }
-    if (humanRequired.length > 0 || mechanical.length === 0 || !canRunMechanicalCiFix) {
-      const unresolved = humanRequired.length > 0 ? humanRequired : diagnostics.length > 0 ? diagnostics : [];
+    if (humanRequired.length > 0 || (mechanical.length > 0 && !canRunMechanicalCiFix)) {
+      const unresolved = humanRequired.length > 0 ? humanRequired : mechanical;
       const reason =
         config.automation.repairPolicy !== "mechanical-first"
           ? "automation.repair_policy is conservative, so CI repair is not attempted automatically."
@@ -83,6 +84,18 @@ export function reviewCheckFindings(
         line: null,
         body: `${status.checkSummary.failing} GitHub check(s) failed. ${reason}\n\n${unresolved.length > 0 ? summarizeCheckDiagnostics(unresolved) : "No failed check logs were available."}`,
         findingHash: `checks-failing-human-${unresolved.length > 0 ? checkDiagnosticFingerprint(unresolved) : status.checkSummary.failing}`
+      });
+    }
+    if (reportOnly.length > 0 || (diagnostics.length === 0 && mechanical.length === 0 && humanRequired.length === 0)) {
+      const reported = reportOnly.length > 0 ? reportOnly : diagnostics;
+      findings.push({
+        reviewer: "checks",
+        decision: "changes_requested",
+        severity: "P3",
+        file: null,
+        line: null,
+        body: `${reportOnly.length || status.checkSummary.failing} GitHub check(s) are external, protected, pending, or unknown to AgentOS. This is report-only diagnostic data; AgentOS will not retry checks, update branches, mark PRs ready, or merge from this classification.\n\n${reported.length > 0 ? summarizeCheckDiagnostics(reported) : "No supported check diagnostics were available."}`,
+        findingHash: `checks-failing-report-only-${reported.length > 0 ? checkDiagnosticFingerprint(reported) : status.checkSummary.failing}`
       });
     }
   }

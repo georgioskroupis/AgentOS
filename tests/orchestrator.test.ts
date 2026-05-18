@@ -7415,7 +7415,7 @@ describe("orchestrator", () => {
     }).runOnce(true);
 
     expect(fixRuns).toBe(0);
-    expect(comments.join("\n")).toContain("could not classify");
+    expect(comments.join("\n")).toContain("did not expose logs");
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.reviewStatus).toBe("human_required");
     expect(state.findings[0].decision).toBe("human_required");

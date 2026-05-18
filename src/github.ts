@@ -37,10 +37,17 @@ export interface CheckDetail {
   url: string | null;
 }
 
+export type CheckDiagnosticClassification =
+  | "mechanical_with_sanitized_logs"
+  | "ambiguous_or_logless_human_required"
+  | "external_or_unknown_report_only"
+  | "successful";
+
 export interface CheckDiagnostic {
   check: CheckDetail;
-  classification: "mechanical" | "human_required";
+  classification: CheckDiagnosticClassification;
   reason: string;
+  operatorGuidance: string;
   /** Sanitized, bounded, untrusted CI output excerpt. */
   log: string | null;
 }
@@ -179,10 +186,11 @@ export class GitHubClient {
     }));
   }
 
-  async getFailingCheckDiagnostics(status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic[]> {
-    const failing = status.checkDetails.filter((check) => checkDetailState(check) === "failing");
-    if (status.checkSummary.failing > 0 && failing.length === 0) {
+  async getCheckDiagnostics(status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic[]> {
+    const diagnostics = await Promise.all(status.checkDetails.map((check) => this.getCheckDiagnostic(check, status, cwd)));
+    if (status.checkSummary.failing > 0 && diagnostics.every((diagnostic) => checkDetailState(diagnostic.check) !== "failing")) {
       return [
+        ...diagnostics,
         {
           check: {
             name: "unknown failing check",
@@ -190,22 +198,48 @@ export class GitHubClient {
             conclusion: "FAILURE",
             url: null
           },
-          classification: "human_required",
+          classification: "external_or_unknown_report_only",
           reason: "GitHub reported failing checks, but no check details were available.",
+          operatorGuidance: "Report only: inspect the GitHub checks UI or add explicit support for this check provider before attempting automated repair.",
           log: null
         }
       ];
     }
-    return Promise.all(failing.map((check) => this.getCheckDiagnostic(check, status, cwd)));
+    return diagnostics;
+  }
+
+  async getFailingCheckDiagnostics(status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic[]> {
+    const diagnostics = await this.getCheckDiagnostics(status, cwd);
+    return diagnostics.filter((diagnostic) => checkDetailState(diagnostic.check) === "failing");
   }
 
   private async getCheckDiagnostic(check: CheckDetail, status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic> {
+    const checkState = checkDetailState(check);
+    if (checkState === "successful") {
+      return {
+        check,
+        classification: "successful",
+        reason: "GitHub reported this check as successful.",
+        operatorGuidance: "No CI action is needed for this check.",
+        log: null
+      };
+    }
+    if (checkState === "pending") {
+      return {
+        check,
+        classification: "external_or_unknown_report_only",
+        reason: "GitHub reported this check as pending or in progress.",
+        operatorGuidance: "Report only: wait for the check provider to finish before deciding whether repair is needed.",
+        log: null
+      };
+    }
     const run = githubActionsRunId(check.url, githubRepositoryFromPullRequestUrl(status.url));
     if (!run.runId) {
       return {
         check,
-        classification: "human_required",
+        classification: "external_or_unknown_report_only",
         reason: run.reason,
+        operatorGuidance: "Report only: this check is outside AgentOS' supported same-repository GitHub Actions log boundary.",
         log: null
       };
     }
@@ -213,8 +247,9 @@ export class GitHubClient {
     if (!verification.ok) {
       return {
         check,
-        classification: "human_required",
+        classification: "external_or_unknown_report_only",
         reason: verification.reason,
+        operatorGuidance: "Report only: AgentOS could not verify that this GitHub Actions run belongs to the reviewed PR head.",
         log: null
       };
     }
@@ -223,15 +258,17 @@ export class GitHubClient {
       const classification = classifyCiFailureLog(log);
       return {
         check,
-        classification: classification.mechanical ? "mechanical" : "human_required",
+        classification: classification.classification,
         reason: classification.reason,
+        operatorGuidance: classification.operatorGuidance,
         log: sanitizeCiLog(log)
       };
     } catch (error) {
       return {
         check,
-        classification: "human_required",
+        classification: "ambiguous_or_logless_human_required",
         reason: diagnosticErrorReason("Could not read failed check logs", error),
+        operatorGuidance: "Human action required: inspect the check provider or credentials before AgentOS attempts CI repair.",
         log: null
       };
     }
@@ -321,7 +358,7 @@ export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: s
   const checks = status.checkDetails.length
     ? status.checkDetails.map((check) => `- ${check.name}: ${check.status ?? check.state ?? "unknown"} / ${check.conclusion ?? "unknown"}${check.url ? ` (${check.url})` : ""}`).join("\n")
     : "- No checks reported.";
-  const checkDiagnostics = diagnostics.length ? summarizeCheckDiagnostics(diagnostics) : "- No failed check diagnostics reported.";
+  const checkDiagnostics = diagnostics.length ? summarizeCheckDiagnostics(diagnostics) : "- No check diagnostics reported.";
   const reviews = status.latestReviews.length
     ? status.latestReviews.map((review) => `- ${review.author ?? "unknown"}: ${review.state}${review.body ? ` - ${firstLine(review.body)}` : ""}`).join("\n")
     : "- No reviews reported.";
@@ -344,7 +381,7 @@ export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: s
     "Checks:",
     checks,
     "",
-    "Failed check diagnostics:",
+    "Check diagnostics:",
     checkDiagnostics,
     "",
     "Latest reviews:",
@@ -362,11 +399,11 @@ export function summarizePullRequestForPrompt(status: PullRequestStatus, diff: s
 }
 
 export function summarizeCheckDiagnostics(diagnostics: CheckDiagnostic[]): string {
-  if (diagnostics.length === 0) return "- No failing check diagnostics.";
+  if (diagnostics.length === 0) return "- No check diagnostics.";
   return diagnostics
     .map((diagnostic) => {
-      const log = diagnostic.log ? `\n  Log excerpt (sanitized, untrusted): ${singleLine(diagnostic.log).slice(0, 1200)}` : "";
-      return `- ${diagnostic.check.name}: ${diagnostic.classification} - ${sanitizeDiagnosticText(diagnostic.reason, 800)}${log}`;
+      const log = diagnostic.log ? `\n  Log excerpt (sanitized, bounded, untrusted diagnostic data): ${singleLine(diagnostic.log).slice(0, 1000)}` : "";
+      return `- ${diagnostic.check.name}: ${diagnosticClassificationLabel(diagnostic.classification)} - ${sanitizeDiagnosticText(diagnostic.reason, 800)} Guidance: ${sanitizeDiagnosticText(diagnostic.operatorGuidance, 800)}${log}`;
     })
     .join("\n");
 }
@@ -464,26 +501,55 @@ function sanitizeDiagnosticText(value: string, maxLength: number): string {
   return singleLine(redactText(value)).slice(0, maxLength).trim();
 }
 
-function classifyCiFailureLog(log: string): { mechanical: boolean; reason: string } {
+function classifyCiFailureLog(log: string): Pick<CheckDiagnostic, "classification" | "reason" | "operatorGuidance"> {
   const text = log.trim();
   if (!text) {
-    return { mechanical: false, reason: "The failed check did not expose logs." };
+    return {
+      classification: "ambiguous_or_logless_human_required",
+      reason: "The failed check did not expose logs.",
+      operatorGuidance: "Human action required: inspect the check provider or rerun validation manually before AgentOS attempts repair."
+    };
   }
   if (
     /ambiguous|unclear requirement|human judgment|manual approval|requires approval|user input|approval request|elicitation|permission denied|resource not accessible|authentication|authorization|missing secret/i.test(
       text
     )
   ) {
-    return { mechanical: false, reason: "The failed check logs point to missing access, denied input, or ambiguous requirements." };
+    return {
+      classification: "ambiguous_or_logless_human_required",
+      reason: "The failed check logs point to missing access, denied input, or ambiguous requirements.",
+      operatorGuidance: "Human action required: resolve access, input, or requirement ambiguity before automated CI repair."
+    };
   }
   if (
     /npm run agent-check|npm test|vitest|test failed|tests failed|assertionerror|expected .* received|error TS\d+|typescript|tsc\b|eslint|prettier|lint|syntaxerror|typeerror|referenceerror|build failed|command failed/i.test(
       text
     )
   ) {
-    return { mechanical: true, reason: "Failed check logs contain deterministic build, typecheck, lint, or test output." };
+    return {
+      classification: "mechanical_with_sanitized_logs",
+      reason: "Failed check logs contain deterministic build, typecheck, lint, or test output.",
+      operatorGuidance: "Fixable mechanical failure: use the sanitized, bounded, untrusted log excerpt to drive a focused CI repair."
+    };
   }
-  return { mechanical: false, reason: "The failed check logs were present, but AgentOS could not classify the failure as mechanical." };
+  return {
+    classification: "ambiguous_or_logless_human_required",
+    reason: "The failed check logs were present, but AgentOS could not classify the failure as mechanical.",
+    operatorGuidance: "Human action required: inspect the full CI context before deciding whether a repair turn is safe."
+  };
+}
+
+function diagnosticClassificationLabel(classification: CheckDiagnosticClassification): string {
+  switch (classification) {
+    case "mechanical_with_sanitized_logs":
+      return "mechanical-with-sanitized-logs";
+    case "ambiguous_or_logless_human_required":
+      return "ambiguous-or-logless-human-required";
+    case "external_or_unknown_report_only":
+      return "external-or-unknown-report-only";
+    case "successful":
+      return "successful";
+  }
 }
 
 function singleLine(value: string): string {
