@@ -14,8 +14,10 @@ import {
 } from "./issue-state.js";
 import { RuntimeStateStore } from "./runtime-state.js";
 import { validationEvidencePath, verifyValidationEvidence } from "./validation.js";
+import { validationReuseProfileForConfig } from "./validation-profile.js";
 import { workspaceKey } from "./workspace.js";
-import type { Issue, IssueState, OperatorRecoveryState } from "./types.js";
+import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
+import type { Issue, IssueState, OperatorRecoveryState, ServiceConfig } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -192,12 +194,15 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
   }
 
   const validationMarker = validationEvidencePath(handoff);
+  const config = await recoveryServiceConfig(repoRoot);
   const validation = await verifyValidationEvidence({
     issue,
     handoff,
     workspacePath,
     runId: input.runId,
-    allowReusableRunEvidence: true
+    allowReusableRunEvidence: true,
+    validationBudget: config.validationBudget,
+    reuseProfile: validationReuseProfileForConfig(config)
   });
   if (validation.state.status !== "passed") {
     throw new OperatorRecoveryRefusal(
@@ -288,6 +293,14 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
     proofArtifacts: operatorRecovery.proofArtifacts,
     state: next
   };
+}
+
+async function recoveryServiceConfig(repoRoot: string): Promise<ServiceConfig> {
+  const workflowPath = join(repoRoot, "WORKFLOW.md");
+  if (await pathExists(workflowPath)) {
+    return resolveServiceConfig(await loadWorkflow(workflowPath));
+  }
+  return resolveServiceConfig({ config: {}, prompt_template: "", workflowPath });
 }
 
 export function formatOperatorRecoveryRecord(result: OperatorRecoveryRecordResult): string {

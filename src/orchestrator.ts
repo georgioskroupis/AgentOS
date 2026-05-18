@@ -40,6 +40,7 @@ import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingP
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
 import { logPreDispatchScopeReport, scopeReportStateFromReport, type PreDispatchScopeReport } from "./scope-report.js";
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
+import { validationRunContext, verifyHandoffValidationEvidence } from "./orchestrator-validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
@@ -1148,7 +1149,7 @@ export class Orchestrator {
         if (handoff) {
           const validationVerificationStartedAt = new Date().toISOString();
           try {
-            validation = await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId, allowReusableRunEvidence: true, validationBudget: this.config.validationBudget });
+            validation = await verifyHandoffValidationEvidence({ config: this.config, issue, handoff, workspacePath: workspace.path, runId });
             await this.writePhaseTimingEvent(issue, {
               phase: "validation",
               status: validation.state.status === "passed" ? "completed" : "failed",
@@ -1318,14 +1319,7 @@ export class Orchestrator {
 
   private async implementationPrompt(issue: Issue, attempt: number | null, turnNumber: number, runId: string): Promise<string> {
     const base = await renderPrompt(this.workflow.prompt_template, issue, attempt);
-    const runContext = [
-      "",
-      "## AgentOS Run Context",
-      "",
-      `Run ID: ${runId}`,
-      `Validation evidence path: .agent-os/validation/${issue.identifier}.json`,
-      "Include this run ID and the current `git rev-parse HEAD` value in the validation evidence JSON."
-    ].join("\n");
+    const runContext = validationRunContext(this.config, issue, runId);
     const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
     const state = await stateStore.read(issue.identifier);
     const existingAudit = existingImplementationAuditContext(state);
@@ -1372,7 +1366,7 @@ export class Orchestrator {
       "",
       feedback || "No recent feedback was found.",
       "",
-      "Update the existing branch and PR. Reuse existing validation evidence when it already matches the current code head; rerun validation only when code changed or the evidence is stale, failing, or for another head."
+      "Update the existing branch and PR. Reuse existing validation evidence when it already matches the current code head and validation reuse profile; rerun validation when code, workflow/config, trust, automation, risk profile, or evidence freshness changed."
     ].join("\n");
   }
 
@@ -1997,7 +1991,7 @@ export class Orchestrator {
           });
           return latestState;
         }
-        const validation = await verifyValidationEvidence({ issue, handoff: updatedHandoff, workspacePath: workspace.path, runId, selectedHeadSha: joinedHeadShas(githubContext.entries), allowReusableRunEvidence: true, validationBudget: this.config.validationBudget });
+        const validation = await verifyHandoffValidationEvidence({ config: this.config, issue, handoff: updatedHandoff, workspacePath: workspace.path, runId, selectedHeadSha: joinedHeadShas(githubContext.entries) });
         const updated = issueStateFromHandoff(issue, updatedHandoff);
         const fixPatch = { phase: "fix" as const, reviewIteration: iteration, lastFixedSha: joinedHeadShas(githubContext.entries), reviewTargetMode, validation: validation.state };
         if (updated) {
@@ -2237,6 +2231,9 @@ export class Orchestrator {
           phase: "completed",
           lifecycleStatus: cleanupWarnings.length ? "post_merge_cleanup_warning" : "merge_success",
           mergedAt: new Date().toISOString(),
+          lastError: undefined,
+          errorCategory: undefined,
+          activeRunId: undefined,
           nextRetryAt: undefined,
           retryAttempt: undefined,
           stopReason: undefined

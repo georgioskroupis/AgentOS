@@ -11,8 +11,9 @@ import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecomm
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
 import { daemonCredentialDetails, daemonRuntimeDetails } from "./status-daemon.js";
 import { contextBudgetDetails, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
+import { appendEvidenceStatus, validationDetails } from "./status-validation.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
-import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
+import type { IssueState, ValidationState } from "./types.js";
 
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
   const root = resolve(repo);
@@ -210,24 +211,6 @@ function safeFileName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
-function validationDetails(state: IssueState | null): string {
-  const validation = state?.validation;
-  if (!validation) return "Validation: none recorded";
-  const headLines = validationHeadDetails(state);
-  const lines = [
-    `Validation: ${validation.status}${validation.finalStatus ? ` (final: ${validation.finalStatus})` : ""}`,
-    validation.runId ? `Validation run: ${validation.runId}` : null,
-    validation.acceptedCommands?.length ? `Accepted validation commands:\n${commandLines(validation.acceptedCommands)}` : null,
-    validation.additionalPassingCommands?.length ? `Additional passing commands:\n${commandLines(validation.additionalPassingCommands)}` : null,
-    validation.failedHistoricalAttempts?.length ? `Failed historical attempts:\n${commandLines(validation.failedHistoricalAttempts)}` : null,
-    headLines.length ? `Evidence heads:\n${headLines.join("\n")}` : null,
-    validation.githubCi ? `GitHub CI: ${validation.githubCi.status}${validation.githubCi.headSha ? ` (${validation.githubCi.headSha})` : ""}` : null,
-    validation.budget ? `Validation budget: ${validation.budget.status} - ${validation.budget.summary}` : null,
-    validation.errors?.length ? `Validation errors:\n${validation.errors.map((error) => `- ${error}`).join("\n")}` : null
-  ].filter((line): line is string => line !== null);
-  return lines.join("\n");
-}
-
 function humanDecisionDetails(state: IssueState | null): string | null {
   const decision = state?.lastHumanDecision ?? latestHumanDecision(state?.humanDecisions);
   if (!decision) return "Human decision: none recorded";
@@ -274,12 +257,6 @@ function reviewDetails(state: IssueState | null): string {
   if (!state?.reviewStatus) return "Review: none recorded";
   if (state.reviewStatus === "pending" && isAuthoritativeTerminalIssueState(state)) return "Review: none recorded";
   return `Review: ${state.reviewStatus}${state.reviewIteration ? ` iteration ${state.reviewIteration}` : ""}`;
-}
-
-function commandLines(commands: ValidationCommandState[]): string {
-  return commands
-    .map((command) => `- ${command.name}: exitCode ${command.exitCode}, finished ${command.finishedAt}`)
-    .join("\n");
 }
 
 async function projectConfigLine(workflowPath: string): Promise<string> {
@@ -345,36 +322,6 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   }
   if (issue.phase === "completed") return withEvidence("completed locally");
   return withEvidence(`${issue.phase ?? "recorded"}${issue.lastError ? ` - ${issue.lastError}` : ""}`);
-}
-
-function appendEvidenceStatus(issue: IssueState, line: string): string {
-  const summary = validationHeadSummary(issue);
-  return summary ? `${line}; ${summary}` : line;
-}
-
-function validationHeadSummary(issue: IssueState): string | null {
-  const details = validationHeadDetails(issue);
-  if (details.length === 0) return null;
-  return `evidence heads: ${details.map((line) => line.replace(/^- /, "")).join("; ")}`;
-}
-
-function validationHeadDetails(issue: IssueState | null): string[] {
-  if (!issue?.validation && !issue?.headSha) return [];
-  const selectedHead = issue?.headSha ?? null;
-  const validationHead = issue?.validation?.repoHead ?? null;
-  const ciHead = issue?.validation?.githubCi?.headSha ?? null;
-  const details = [
-    `- Selected PR head: ${formatComparedHead(selectedHead, selectedHead, { selected: true })}`,
-    `- Validation repoHead: ${formatComparedHead(validationHead, selectedHead)}`,
-    `- CI/check head: ${formatComparedHead(ciHead, selectedHead)}`
-  ];
-  return details;
-}
-
-function formatComparedHead(value: string | null | undefined, selectedHead: string | null | undefined, options: { selected?: boolean } = {}): string {
-  if (!value) return "unknown";
-  const label = options.selected ? "current" : !selectedHead ? "unknown: no selected PR head" : sameSha(value, selectedHead) ? "current" : `stale; expected ${shortSha(selectedHead)}`;
-  return `${shortSha(value)} (${label})`;
 }
 
 function sameSha(left: string | null | undefined, right: string | null | undefined): boolean {

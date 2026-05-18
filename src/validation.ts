@@ -1,8 +1,9 @@
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { exists, readText } from "./fs-utils.js";
-import type { Issue, ReviewFinding, ValidationBudgetConfig, ValidationState } from "./types.js";
+import type { Issue, ReviewFinding, ValidationBudgetConfig, ValidationReuseProfileState, ValidationState } from "./types.js";
 import { findingHash } from "./review.js";
+import { compareValidationReuseProfiles, VALIDATION_EVIDENCE_MAX_AGE_MS, VALIDATION_EVIDENCE_MAX_FUTURE_SKEW_MS } from "./validation-profile.js";
 
 export interface ValidationEvidence {
   schemaVersion: 1;
@@ -13,6 +14,7 @@ export interface ValidationEvidence {
   finalResult?: ValidationFinalResultEvidence;
   commands: ValidationCommandEvidence[];
   githubCi?: ValidationState["githubCi"];
+  reuseProfile?: ValidationReuseProfileState;
 }
 
 export interface ValidationFinalResultEvidence {
@@ -36,8 +38,8 @@ export interface ValidationEvidenceCheck {
 }
 
 const defaultExpectedCommands = ["npm run agent-check"];
-const maxFutureSkewMs = 5 * 60 * 1000;
-const maxEvidenceAgeMs = 24 * 60 * 60 * 1000;
+const maxFutureSkewMs = VALIDATION_EVIDENCE_MAX_FUTURE_SKEW_MS;
+const maxEvidenceAgeMs = VALIDATION_EVIDENCE_MAX_AGE_MS;
 
 export async function verifyValidationEvidence(input: {
   issue: Issue;
@@ -48,6 +50,7 @@ export async function verifyValidationEvidence(input: {
   allowReusableRunEvidence?: boolean;
   expectedCommands?: string[];
   validationBudget?: ValidationBudgetConfig;
+  reuseProfile?: ValidationReuseProfileState;
   now?: Date;
 }): Promise<ValidationEvidenceCheck> {
   const now = input.now ?? new Date();
@@ -89,7 +92,12 @@ export async function verifyValidationEvidence(input: {
   if (rawFinalStatus !== "passed" && rawFinalStatus !== "failed") errors.push("validation status must be passed or failed");
   if (finalStatus !== "passed") errors.push("final validation status is not passed");
   if (evidence.finalResult) validateFinalResult(evidence.finalResult, errors, now);
-  if (evidence.githubCi) validateGithubCi(evidence.githubCi, errors);
+  if (evidence.githubCi) validateGithubCi(evidence.githubCi, errors, now);
+  const reuseProfileCheck = input.reuseProfile ? compareValidationReuseProfiles(input.reuseProfile, evidence.reuseProfile) : null;
+  const profileAllowsReuse = !reuseProfileCheck || reuseProfileCheck.status === "matched";
+  if (reuseProfileCheck?.status === "mismatch") {
+    errors.push(...reuseProfileCheck.reasons.map((reason) => `validation reuse profile mismatch: ${reason}`));
+  }
 
   const expectedCommands = input.expectedCommands ?? [input.validationBudget?.fullValidationCommand ?? defaultExpectedCommands[0]];
   const acceptedCommands: ValidationCommandEvidence[] = [];
@@ -128,7 +136,15 @@ export async function verifyValidationEvidence(input: {
   const workspaceHead = await gitHead(input.workspacePath);
   const selectedHeadSha = input.selectedHeadSha ?? null;
   const reusableHead = workspaceHead ?? selectedHeadSha;
-  const reusedRunEvidence = Boolean(input.runId && evidence.runId !== input.runId && isReusableRunEvidence(evidence, reusableHead, input.allowReusableRunEvidence === true));
+  const reusedRunEvidence = Boolean(
+    input.runId &&
+      evidence.runId !== input.runId &&
+      profileAllowsReuse &&
+      isReusableRunEvidence(evidence, reusableHead, input.allowReusableRunEvidence === true)
+  );
+  if (input.runId && evidence.runId !== input.runId && input.allowReusableRunEvidence && reuseProfileCheck?.status === "missing") {
+    errors.push("validation reuse profile is missing; rerun validation with the current workflow/config, trust, automation, and risk profile");
+  }
   if (input.runId && evidence.runId !== input.runId && !reusedRunEvidence) {
     errors.push(`runId mismatch: expected ${input.runId}`);
   }
@@ -141,6 +157,7 @@ export async function verifyValidationEvidence(input: {
     currentRunId: input.runId ?? null,
     evidenceRunId: evidence.runId ?? null,
     reused: reusedRunEvidence,
+    profileChecked: Boolean(input.reuseProfile),
     evaluatedAt: checkedAt
   });
   if (budget.status === "exceeded") errors.push(budget.summary);
@@ -157,6 +174,7 @@ export async function verifyValidationEvidence(input: {
       failedHistoricalAttempts,
       ...(evidence.githubCi ? { githubCi: evidence.githubCi } : {}),
       budget,
+      ...(evidence.reuseProfile ? { reuseProfile: evidence.reuseProfile } : {}),
       errors: errors.length ? errors : undefined,
       checkedAt
     },
@@ -172,6 +190,7 @@ function validationBudgetState(input: {
   currentRunId: string | null;
   evidenceRunId: string | null;
   reused: boolean;
+  profileChecked: boolean;
   evaluatedAt: string;
 }): NonNullable<ValidationState["budget"]> {
   const enabled = input.config?.enabled ?? true;
@@ -191,8 +210,8 @@ function validationBudgetState(input: {
     summary: exceeded
       ? `${input.fullValidationCommand}: full validation rerun budget exceeded for repoHead ${input.repoHead ?? "unknown"} (${fullValidationRunsForHead}/${maxFullValidationRunsPerHead}); reuse unchanged-head evidence or record focused checks separately`
       : input.reused
-        ? `Reused passing ${input.fullValidationCommand} evidence from matching repoHead ${input.repoHead ?? "unknown"}; duplicate full validation was not required.`
-        : `Fresh ${input.fullValidationCommand} evidence recorded for repoHead ${input.repoHead ?? "unknown"}.`
+        ? `Reused passing ${input.fullValidationCommand} evidence from matching repoHead ${input.repoHead ?? "unknown"}${input.profileChecked ? " and validation reuse profile" : ""}; duplicate full validation was not required.`
+        : `Fresh/rerun ${input.fullValidationCommand} evidence recorded for repoHead ${input.repoHead ?? "unknown"}.`
   };
 }
 
@@ -276,13 +295,29 @@ function validateFinalResult(finalResult: ValidationFinalResultEvidence, errors:
   }
 }
 
-function validateGithubCi(ci: NonNullable<ValidationState["githubCi"]>, errors: string[]): void {
+function validateGithubCi(ci: NonNullable<ValidationState["githubCi"]>, errors: string[], now: Date): void {
   if (ci.status !== "passed" && ci.status !== "failed" && ci.status !== "pending") {
     errors.push("githubCi.status must be passed, failed, or pending");
   }
   if (ci.headSha != null && typeof ci.headSha !== "string") errors.push("githubCi.headSha must be a string when present");
   if (ci.source != null && typeof ci.source !== "string") errors.push("githubCi.source must be a string when present");
   if (ci.checkedAt && !parseTime(ci.checkedAt)) errors.push("githubCi.checkedAt is invalid");
+  if (ci.checkedAt) {
+    const freshnessError = githubCiFreshnessError(ci.checkedAt, now);
+    if (freshnessError) errors.push(freshnessError);
+  }
+}
+
+function githubCiFreshnessError(checkedAt: string, now: Date): string | null {
+  const parsed = parseTime(checkedAt);
+  if (!parsed) return null;
+  if (parsed.getTime() - now.getTime() > maxFutureSkewMs) {
+    return `githubCi.checkedAt is in the future (${parsed.toISOString()} > ${now.toISOString()} + ${maxFutureSkewMs}ms skew)`;
+  }
+  if (now.getTime() - parsed.getTime() > maxEvidenceAgeMs) {
+    return `githubCi evidence is stale (${parsed.toISOString()} is older than ${maxEvidenceAgeMs}ms relative to ${now.toISOString()})`;
+  }
+  return null;
 }
 
 function gitHead(cwd: string): Promise<string | null> {

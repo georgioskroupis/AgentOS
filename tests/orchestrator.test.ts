@@ -14,6 +14,8 @@ import { IssueStateStore } from "../src/issue-state.js";
 import { writeReviewArtifact } from "../src/review.js";
 import { writeValidationEvidence } from "../src/validation.js";
 import { inspectIssue } from "../src/status.js";
+import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
+import { validationReuseProfileForConfig } from "../src/validation-profile.js";
 
 const readyIssue: Issue = {
   id: "issue-1",
@@ -5214,6 +5216,8 @@ describe("orchestrator", () => {
       ),
       "utf8"
     );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const validationNow = new Date().toISOString();
     await new IssueStateStore(repo).write({
       schemaVersion: 1,
       issueId: readyIssue.id,
@@ -5228,8 +5232,9 @@ describe("orchestrator", () => {
         finalStatus: "passed",
         runId: "run_supervisor_external",
         repoHead: "supervisor-head",
-        checkedAt: "2026-05-17T02:00:00.000Z",
-        acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-17T02:00:00.000Z", finishedAt: "2026-05-17T02:01:00.000Z" }]
+        checkedAt: validationNow,
+        acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+        reuseProfile: validationProfile
       },
       lastHumanDecision: {
         type: "proceed_to_merge_after_supervisor_fix",
@@ -7585,6 +7590,8 @@ describe("orchestrator", () => {
       `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const validationNow = new Date().toISOString();
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -7595,12 +7602,17 @@ describe("orchestrator", () => {
           issueIdentifier: "AG-1",
           prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-05-16T00:00:00.000Z" }],
           reviewStatus: "approved",
+          lastError: "stale canceled implementation turn",
+          errorCategory: "canceled",
+          retryAttempt: 2,
+          nextRetryAt: "2026-05-16T00:30:00.000Z",
           validation: {
             status: "passed",
             finalStatus: "passed",
             repoHead: "abc123",
-            checkedAt: "2026-05-16T00:05:00.000Z",
-            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-16T00:04:00.000Z", finishedAt: "2026-05-16T00:05:00.000Z" }]
+            checkedAt: validationNow,
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+            reuseProfile: validationProfile
           },
           splitRecommendation: {
             recommended: true,
@@ -7666,6 +7678,10 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("Merged successfully");
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.mergedAt).toBeTruthy();
+    expect(state.lastError).toBeUndefined();
+    expect(state.errorCategory).toBeUndefined();
+    expect(state.retryAttempt).toBeUndefined();
+    expect(state.nextRetryAt).toBeUndefined();
   });
 
   it("blocks merge shepherding when landing validation evidence is stale for the selected head", async () => {
@@ -7759,6 +7775,7 @@ describe("orchestrator", () => {
       `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -7775,7 +7792,8 @@ describe("orchestrator", () => {
           path: ".agent-os/workspaces/AG-1/.agent-os/validation/AG-1.json",
           repoHead: "current-head",
           checkedAt: "2026-05-18T00:05:00.000Z",
-          acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-18T00:04:00.000Z", finishedAt: "2026-05-18T00:05:00.000Z" }]
+          acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-18T00:04:00.000Z", finishedAt: "2026-05-18T00:05:00.000Z" }],
+          reuseProfile: validationProfile
         },
         operatorRecovery: {
           recordedAt: "2026-05-18T00:06:00.000Z",
@@ -7942,6 +7960,8 @@ describe("orchestrator", () => {
       `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const validationNow = new Date().toISOString();
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -7956,8 +7976,9 @@ describe("orchestrator", () => {
             status: "passed",
             finalStatus: "passed",
             repoHead: "abc123",
-            checkedAt: "2026-05-16T00:05:00.000Z",
-            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-16T00:04:00.000Z", finishedAt: "2026-05-16T00:05:00.000Z" }]
+            checkedAt: validationNow,
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+            reuseProfile: validationProfile
           },
           splitRecommendation: {
             recommended: true,
@@ -8065,6 +8086,8 @@ describe("orchestrator", () => {
       `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const validationNow = new Date().toISOString();
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -8079,8 +8102,9 @@ describe("orchestrator", () => {
             status: "passed",
             finalStatus: "passed",
             repoHead: "abc123",
-            checkedAt: "2026-05-16T00:05:00.000Z",
-            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-16T00:04:00.000Z", finishedAt: "2026-05-16T00:05:00.000Z" }]
+            checkedAt: validationNow,
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+            reuseProfile: validationProfile
           },
           splitRecommendation: {
             recommended: true,
@@ -8209,6 +8233,8 @@ describe("orchestrator", () => {
       `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: true\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const validationNow = new Date().toISOString();
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -8221,7 +8247,9 @@ describe("orchestrator", () => {
           status: "passed",
           finalStatus: "passed",
           repoHead: "abc123",
-          acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-05T00:00:00.000Z", finishedAt: "2026-05-05T00:01:00.000Z" }]
+          checkedAt: validationNow,
+          acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+          reuseProfile: validationProfile
         },
         updatedAt: new Date().toISOString()
       }),
@@ -8897,6 +8925,11 @@ describe("orchestrator", () => {
   });
 });
 
+async function reuseProfileForWorkflow(workflowPath: string) {
+  const workflow = await loadWorkflow(workflowPath);
+  return validationReuseProfileForConfig(resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test" }));
+}
+
 async function writePassingHandoff(
   workspacePath: string,
   issueIdentifier: string,
@@ -8905,6 +8938,7 @@ async function writePassingHandoff(
   options: { validationStartedAt?: string; validationFinishedAt?: string } = {}
 ): Promise<void> {
   const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
+  const reuseProfile = prompt.match(/^Validation reuse profile JSON: (.+)$/m)?.[1];
   const validationPath = `.agent-os/validation/${issueIdentifier}.json`;
   await mkdir(join(workspacePath, ".agent-os", "validation"), { recursive: true });
   await writeFile(join(workspacePath, ".agent-os", `handoff-${issueIdentifier}.md`), `${body}\n\nValidation-JSON: ${validationPath}`, "utf8");
@@ -8915,6 +8949,7 @@ async function writePassingHandoff(
     schemaVersion: 1,
     issueIdentifier,
     runId,
+    ...(reuseProfile ? { reuseProfile: JSON.parse(reuseProfile) } : {}),
     status: "passed",
     finalResult: {
       status: "passed",

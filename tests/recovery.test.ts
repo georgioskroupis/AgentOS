@@ -243,6 +243,44 @@ describe("operator recovery", () => {
     expect(result.state.lastRunId).toBe("run_recovered_pr");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("refuses recovered previous-run validation evidence without a matching reuse profile", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-recovery-reuse-profile-"));
+    const { workspace, headSha } = await createWorkspace(repo, { pushBranch: true });
+    const now = new Date().toISOString();
+    await mkdir(join(workspace, ".agent-os"), { recursive: true });
+    await writeFile(
+      join(workspace, ".agent-os", `handoff-${issue.identifier}.md`),
+      ["AgentOS-Outcome: implemented", `Validation-JSON: .agent-os/validation/${issue.identifier}.json`].join("\n"),
+      "utf8"
+    );
+    await writeValidationEvidence(join(workspace, ".agent-os", "validation", `${issue.identifier}.json`), {
+      schemaVersion: 1,
+      issueIdentifier: issue.identifier,
+      runId: "run_previous",
+      repoHead: headSha,
+      status: "passed",
+      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+    });
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "human-required",
+      lastRunId: "run_failed",
+      workspacePath: workspace,
+      updatedAt: "2026-05-17T00:00:00.000Z"
+    });
+
+    await expect(
+      recordOperatorRecovery({
+        repoRoot: repo,
+        issueIdentifier: issue.identifier,
+        runId: "run_current",
+        now: "2026-05-17T02:00:00.000Z"
+      })
+    ).rejects.toThrow(/validation reuse profile is missing/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("refuses partially satisfied handoffs as successful recovery evidence", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-recovery-partial-"));
     const { workspace } = await createWorkspace(repo, { pushBranch: true });

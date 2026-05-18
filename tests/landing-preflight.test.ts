@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { evaluateLandingPreflight, githubCiFromPullRequest, landingFreshnessPatch } from "../src/landing-preflight.js";
+import { validationReuseProfileForConfig } from "../src/validation-profile.js";
 import type { DaemonPreflightResult } from "../src/env.js";
 import type { PullRequestStatus } from "../src/github.js";
 import type { IssueState, ServiceConfig } from "../src/types.js";
+
+const LANDING_NOW = new Date("2026-05-18T00:10:00.000Z");
 
 describe("landing preflight", () => {
   it("passes when credentials, daemon freshness, validation, and CI all match the selected head", () => {
@@ -12,7 +15,8 @@ describe("landing preflight", () => {
       credentials: credentials(),
       state: issueState({ validationHead: "abc123", ciHead: "abc123", ciStatus: "passed" }),
       pullRequest: pullRequest({ headSha: "abc123", checks: "passed" }),
-      requireFreshness: true
+      requireFreshness: true,
+      now: LANDING_NOW
     });
 
     expect(result).toMatchObject({ status: "ready", ready: true, reasons: [] });
@@ -25,7 +29,8 @@ describe("landing preflight", () => {
       credentials: credentials(),
       state: issueState({ validationHead: "old123", ciHead: "abc123", ciStatus: "passed" }),
       pullRequest: pullRequest({ headSha: "abc123", checks: "passed" }),
-      requireFreshness: true
+      requireFreshness: true,
+      now: LANDING_NOW
     });
 
     expect(result.status).toBe("blocked");
@@ -40,7 +45,8 @@ describe("landing preflight", () => {
       credentials: credentials(),
       state: issueState({ validationHead: "abc123", ciHead: null, ciStatus: "passed" }),
       pullRequest: pullRequest({ headSha: "abc123", checks: "passed" }),
-      requireFreshness: true
+      requireFreshness: true,
+      now: LANDING_NOW
     });
     const pendingState = issueState({ validationHead: "abc123", ciHead: "abc123", ciStatus: "passed" });
     const pendingPr = pullRequest({ headSha: "abc123", checks: "pending" });
@@ -48,9 +54,10 @@ describe("landing preflight", () => {
       config: config(),
       daemon: { startedAt: "2026-05-18T00:00:00.000Z", workflowPath: "WORKFLOW.md", freshnessStatus: "fresh" },
       credentials: credentials(),
-      state: { ...pendingState, ...landingFreshnessPatch(pendingState, pendingPr, true) },
+      state: { ...pendingState, ...landingFreshnessPatch(pendingState, pendingPr, true, LANDING_NOW) },
       pullRequest: pendingPr,
-      requireFreshness: true
+      requireFreshness: true,
+      now: LANDING_NOW
     });
 
     expect(unknown.status).toBe("blocked");
@@ -61,7 +68,98 @@ describe("landing preflight", () => {
 
   it("derives current check head evidence from pull request status", () => {
     const pr = pullRequest({ headSha: "abc123", checks: "passed" });
-    expect(githubCiFromPullRequest(pr, true)).toMatchObject({ status: "passed", headSha: "abc123" });
+    expect(githubCiFromPullRequest(pr, true, LANDING_NOW)).toMatchObject({ status: "passed", headSha: "abc123", reused: false, checkedAt: LANDING_NOW.toISOString() });
+  });
+
+  it("reuses unchanged-head validation and CI evidence when the profile and timestamps are fresh", () => {
+    const serviceConfig = config();
+    const state = reusedIssueState(serviceConfig, {
+      validationHead: "abc123",
+      ciHead: "abc123",
+      validationFinishedAt: "2026-05-18T00:05:00.000Z",
+      ciCheckedAt: "2026-05-18T00:06:00.000Z"
+    });
+    const pr = pullRequest({ headSha: "abc123", checks: "passed" });
+    const patched = { ...state, ...landingFreshnessPatch(state, pr, true, LANDING_NOW) };
+
+    const result = evaluateLandingPreflight({
+      config: serviceConfig,
+      daemon: { startedAt: "2026-05-18T00:00:00.000Z", workflowPath: "WORKFLOW.md", freshnessStatus: "fresh" },
+      credentials: credentials(),
+      state: patched,
+      pullRequest: pr,
+      requireFreshness: true,
+      now: LANDING_NOW
+    });
+
+    expect(result.ready).toBe(true);
+    expect(patched.validation?.githubCi?.reused).toBe(true);
+  });
+
+  it("blocks validation evidence when stale or missing current profile metadata", () => {
+    const serviceConfig = config();
+    const missingProfileState = issueState({ validationHead: "abc123", ciHead: "abc123", ciStatus: "passed" });
+    delete missingProfileState.validation!.reuseProfile;
+    const missingProfile = evaluateLandingPreflight({
+      config: serviceConfig,
+      daemon: { startedAt: "2026-05-18T00:00:00.000Z", workflowPath: "WORKFLOW.md", freshnessStatus: "fresh" },
+      credentials: credentials(),
+      state: missingProfileState,
+      pullRequest: pullRequest({ headSha: "abc123", checks: "passed" }),
+      requireFreshness: true,
+      now: LANDING_NOW
+    });
+    const stale = evaluateLandingPreflight({
+      config: serviceConfig,
+      daemon: { startedAt: "2026-05-18T00:00:00.000Z", workflowPath: "WORKFLOW.md", freshnessStatus: "fresh" },
+      credentials: credentials(),
+      state: reusedIssueState(serviceConfig, {
+        validationHead: "abc123",
+        ciHead: "abc123",
+        validationFinishedAt: "2026-05-16T00:05:00.000Z",
+        ciCheckedAt: "2026-05-16T00:06:00.000Z"
+      }),
+      pullRequest: pullRequest({ headSha: "abc123", checks: "passed" }),
+      requireFreshness: true,
+      now: LANDING_NOW
+    });
+    const changedProfileState = reusedIssueState(serviceConfig, {
+      validationHead: "abc123",
+      ciHead: "abc123",
+      validationFinishedAt: "2026-05-18T00:05:00.000Z",
+      ciCheckedAt: "2026-05-18T00:06:00.000Z"
+    });
+    changedProfileState.validation!.reuseProfile = {
+      ...changedProfileState.validation!.reuseProfile!,
+      workflowConfigHash: "old-config",
+      riskProfile: "old-risk"
+    };
+    const changedProfile = evaluateLandingPreflight({
+      config: serviceConfig,
+      daemon: { startedAt: "2026-05-18T00:00:00.000Z", workflowPath: "WORKFLOW.md", freshnessStatus: "fresh" },
+      credentials: credentials(),
+      state: changedProfileState,
+      pullRequest: pullRequest({ headSha: "abc123", checks: "passed" }),
+      requireFreshness: true,
+      now: LANDING_NOW
+    });
+
+    expect(missingProfile.status).toBe("blocked");
+    expect(missingProfile.reasons.join("\n")).toContain("validation evidence is missing workflow/config");
+    expect(stale.status).toBe("blocked");
+    expect(stale.reasons.join("\n")).toContain("npm run agent-check reuse evidence is stale");
+    expect(stale.reasons.join("\n")).toContain("GitHub CI reuse evidence is stale");
+    expect(changedProfile.status).toBe("blocked");
+    expect(changedProfile.reasons.join("\n")).toContain("workflow/config hash changed");
+    expect(changedProfile.reasons.join("\n")).toContain("risk profile changed");
+  });
+
+  it("changes the reuse profile when codex approval policy changes", () => {
+    const baseline = config();
+    const changed = config();
+    changed.codex = { ...changed.codex, approvalPolicy: "on-request" };
+
+    expect(validationReuseProfileForConfig(changed).workflowConfigHash).not.toBe(validationReuseProfileForConfig(baseline).workflowConfigHash);
   });
 });
 
@@ -130,10 +228,36 @@ function issueState(input: { validationHead: string; ciHead: string | null; ciSt
       finalStatus: "passed",
       repoHead: input.validationHead,
       checkedAt: "2026-05-18T00:00:00.000Z",
-      githubCi: { status: input.ciStatus, headSha: input.ciHead, checkedAt: "2026-05-18T00:00:00.000Z" }
+      githubCi: { status: input.ciStatus, headSha: input.ciHead, checkedAt: "2026-05-18T00:00:00.000Z" },
+      reuseProfile: validationReuseProfileForConfig(config())
     },
     updatedAt: "2026-05-18T00:00:00.000Z"
   };
+}
+
+function reusedIssueState(
+  serviceConfig: ServiceConfig,
+  input: { validationHead: string; ciHead: string; validationFinishedAt: string; ciCheckedAt: string }
+): IssueState {
+  const state = issueState({ validationHead: input.validationHead, ciHead: input.ciHead, ciStatus: "passed" });
+  state.validation = {
+    ...state.validation!,
+    acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: input.validationFinishedAt, finishedAt: input.validationFinishedAt }],
+    githubCi: { status: "passed", headSha: input.ciHead, checkedAt: input.ciCheckedAt, reused: true },
+    budget: {
+      status: "reused",
+      evaluatedAt: "2026-05-18T00:07:00.000Z",
+      fullValidationCommand: "npm run agent-check",
+      maxFullValidationRunsPerHead: 1,
+      fullValidationRunsForHead: 1,
+      repoHead: input.validationHead,
+      currentRunId: "run_current",
+      evidenceRunId: "run_previous",
+      summary: "Reused passing npm run agent-check evidence."
+    },
+    reuseProfile: validationReuseProfileForConfig(serviceConfig)
+  };
+  return state;
 }
 
 function pullRequest(input: { headSha: string | null; checks: "passed" | "pending" | "failed" }): PullRequestStatus {

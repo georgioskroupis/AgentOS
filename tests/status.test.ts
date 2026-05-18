@@ -85,6 +85,58 @@ describe("issue inspection", () => {
     expect(output).toContain("npm run agent-check: exitCode 1");
   });
 
+  it("reports whether validation evidence was reused or rerun in status and inspect", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-validation-budget-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "completed",
+          validation: {
+            status: "passed",
+            checkedAt: "2026-05-18T00:06:00.000Z",
+            githubCi: { status: "passed", headSha: "abc123", checkedAt: "2026-05-18T00:06:00.000Z", reused: true },
+            budget: {
+              status: "reused",
+              evaluatedAt: "2026-05-18T00:06:00.000Z",
+              fullValidationCommand: "npm run agent-check",
+              maxFullValidationRunsPerHead: 1,
+              fullValidationRunsForHead: 1,
+              repoHead: "abc123",
+              currentRunId: "run_current",
+              evidenceRunId: "run_previous",
+              summary: "Reused passing npm run agent-check evidence from matching repoHead abc123 and validation reuse profile."
+            },
+            reuseProfile: {
+              workflowConfigHash: "hash-a",
+              trustMode: "local-trusted",
+              automationProfile: "high-throughput",
+              automationRepairPolicy: "mechanical-first",
+              riskProfile: "review=enabled|githubChecks=required"
+            }
+          },
+          updatedAt: "2026-05-18T00:06:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const statusOutput = await getStatus(repo);
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+
+    expect(statusOutput).toContain("validation evidence reused: 1/1 full run(s) for head");
+    expect(inspectOutput).toContain("GitHub CI: passed (abc123) [reused]");
+    expect(inspectOutput).toContain("Validation budget: reused - Reused passing npm run agent-check evidence");
+    expect(inspectOutput).toContain("Validation reuse profile:");
+    expect(inspectOutput).toContain("automation: high-throughput/mechanical-first");
+  });
+
   it("summarizes context-only decision authority failures with operator next actions", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-status-decision-authority-"));
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
