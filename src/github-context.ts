@@ -5,7 +5,7 @@ import type { PullRequestRef } from "./types.js";
 export interface GitHubReviewContextEntry {
   target: PullRequestRef;
   status: Awaited<ReturnType<GitHubClient["getPullRequest"]>>;
-  checkDiagnostics: Awaited<ReturnType<GitHubClient["getFailingCheckDiagnostics"]>>;
+  checkDiagnostics: Awaited<ReturnType<GitHubClient["getCheckDiagnostics"]>>;
   diff: string;
   threads: Awaited<ReturnType<GitHubClient["getPullRequestReviewThreads"]>>;
 }
@@ -24,7 +24,7 @@ export async function readGitHubReviewContext(targets: PullRequestRef[], input: 
   const feedback: string[] = [];
   for (const target of targets) {
     const status = await github.getPullRequest(target.url, cwd);
-    const checkDiagnostics = await github.getFailingCheckDiagnostics(status, cwd);
+    const checkDiagnostics = await github.getCheckDiagnostics(status, cwd);
     const diff = await github.getPullRequestDiff(target.url, cwd).catch((error: Error) => `Could not fetch diff: ${error.message}`);
     const threads = await github.getPullRequestReviewThreads(target.url, cwd).catch(() => []);
     entries.push({ target, status, checkDiagnostics, diff, threads });

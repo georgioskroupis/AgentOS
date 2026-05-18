@@ -169,7 +169,47 @@ describe("GitHubClient", () => {
     expect(legacy?.url).toBe("https://github.com/o/r/actions/runs/999");
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0].check.name).toBe("AgentOS CI");
-    expect(diagnostics[0].classification).toBe("mechanical");
+    expect(diagnostics[0].classification).toBe("mechanical_with_sanitized_logs");
+  });
+
+  it("classifies successful checks without reading logs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/12",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              detailsUrl: "https://github.com/o/r/actions/runs/111"
+            }
+          ]
+        },
+        runLogs: {
+          "111": "this should not be read for successful checks"
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/12", dir);
+    const diagnostics = await client.getCheckDiagnostics(status, dir);
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      classification: "successful",
+      reason: "GitHub reported this check as successful.",
+      log: null
+    });
   });
 
   it("refuses to read Actions logs from a check URL outside the reviewed repository", async () => {
@@ -205,7 +245,7 @@ describe("GitHubClient", () => {
     const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
 
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0].classification).toBe("human_required");
+    expect(diagnostics[0].classification).toBe("external_or_unknown_report_only");
     expect(diagnostics[0].log).toBeNull();
     expect(diagnostics[0].reason).toContain("reviewed pull request repository");
   });
@@ -246,7 +286,7 @@ describe("GitHubClient", () => {
     const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
 
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0].classification).toBe("human_required");
+    expect(diagnostics[0].classification).toBe("external_or_unknown_report_only");
     expect(diagnostics[0].log).toBeNull();
     expect(diagnostics[0].reason).toContain("head SHA");
   });
@@ -284,9 +324,49 @@ describe("GitHubClient", () => {
 
     expect(status.headSha).toBeNull();
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0].classification).toBe("human_required");
+    expect(diagnostics[0].classification).toBe("external_or_unknown_report_only");
     expect(diagnostics[0].log).toBeNull();
     expect(diagnostics[0].reason).toContain("pull request head SHA");
+  });
+
+  it("classifies logless same-repository Actions failures as human-required", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/13",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/112"
+            }
+          ]
+        },
+        runLogs: {
+          "112": ""
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/13", dir);
+    const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      classification: "ambiguous_or_logless_human_required",
+      reason: "The failed check did not expose logs.",
+      log: null
+    });
   });
 
   it("redacts and bounds failed Actions log excerpts before summarizing diagnostics", async () => {
@@ -323,9 +403,9 @@ describe("GitHubClient", () => {
     const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
     const summary = summarizeCheckDiagnostics(diagnostics);
 
-    expect(diagnostics[0].classification).toBe("mechanical");
+    expect(diagnostics[0].classification).toBe("mechanical_with_sanitized_logs");
     expect(diagnostics[0].log?.length).toBeLessThanOrEqual(4000);
-    expect(summary).toContain("sanitized, untrusted");
+    expect(summary).toContain("sanitized, bounded, untrusted diagnostic data");
     expect(summary).toContain("[REDACTED]");
     expect(summary).not.toContain(secret);
     expect(summary.length).toBeLessThan(1500);
@@ -363,7 +443,7 @@ describe("GitHubClient", () => {
     const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
     const summary = summarizeCheckDiagnostics(diagnostics);
 
-    expect(diagnostics[0].classification).toBe("human_required");
+    expect(diagnostics[0].classification).toBe("ambiguous_or_logless_human_required");
     expect(diagnostics[0].reason).toContain("[REDACTED]");
     expect(diagnostics[0].reason).not.toContain(secret);
     expect(diagnostics[0].reason).not.toContain("command_failed");
@@ -404,7 +484,7 @@ describe("GitHubClient", () => {
     const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
     const summary = summarizeCheckDiagnostics(diagnostics);
 
-    expect(diagnostics[0].classification).toBe("human_required");
+    expect(diagnostics[0].classification).toBe("external_or_unknown_report_only");
     expect(diagnostics[0].reason).toContain("[REDACTED]");
     expect(diagnostics[0].reason).not.toContain(secret);
     expect(diagnostics[0].reason).not.toContain("command_failed");

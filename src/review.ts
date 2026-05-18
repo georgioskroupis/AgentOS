@@ -401,7 +401,7 @@ export function formatReviewRunnerFailures(failures: ReviewRunnerFailure[]): str
 
 function omitDiagnosticLogExcerpts(body: string): string {
   return body
-    .replace(/\n  Log excerpt \(sanitized, untrusted\): .*/g, "\n  Log excerpt: omitted from tracker comments.")
+    .replace(/\n  Log excerpt \([^)]*untrusted[^)]*\): .*/g, "\n  Log excerpt: omitted from tracker comments.")
     .replace(/\n  Log excerpt: .*/g, "\n  Log excerpt: omitted from tracker comments.");
 }
 

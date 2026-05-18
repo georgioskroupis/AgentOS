@@ -1,6 +1,6 @@
 import { redactText } from "./redaction.js";
 import { isAuthoritativeHumanDecision } from "./issue-state.js";
-import type { CheckDiagnostic, PullRequestStatus, ReviewThread } from "./github.js";
+import { summarizeCheckDiagnostics, type CheckDiagnostic, type PullRequestStatus, type ReviewThread } from "./github.js";
 import type { HumanDecisionState, Issue, IssueState, PullRequestRef, ReviewFinding, ReviewStateReviewer, ValidationState } from "./types.js";
 
 export type ContextPackKind = "implementation-reentry" | "reviewer" | "fixer" | "ci-repair";
@@ -147,6 +147,9 @@ function formatPullRequests(entries: PullRequestContextEntry[]): string[] {
             status.checkDetails.length
               ? `  Check details: ${status.checkDetails.slice(0, 12).map((check) => `${check.name}=${check.status ?? check.state ?? "unknown"}/${check.conclusion ?? "unknown"}`).join("; ")}${status.checkDetails.length > 12 ? `; ... ${status.checkDetails.length - 12} more` : ""}`
               : "  Check details: none reported",
+            entry.checkDiagnostics?.length
+              ? ["  Check diagnostics:", indentBlock(summarizeCheckDiagnostics(entry.checkDiagnostics), 4)].join("\n")
+              : "  Check diagnostics: none reported",
             unresolvedThreads.length ? ["  Unresolved review threads:", indentBlock(formatThreads(unresolvedThreads), 4)].join("\n") : "  Unresolved review threads: none reported",
             formatDiffExcerpt(entry)
           ]

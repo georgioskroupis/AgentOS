@@ -12,8 +12,10 @@ export function formatApprovedReviewComment(input: {
   reviewers: ReviewStateReviewer[];
   budget: ReviewBudgetState;
   splitRecommendation?: ReviewSplitRecommendation | null;
+  reportOnlyCheckDiagnostics?: string | null;
 }): string {
   const splitRecommendation = input.splitRecommendation;
+  const reportOnlyCheckDiagnostics = input.reportOnlyCheckDiagnostics?.trim() || null;
   return [
     "### AgentOS automated review approved",
     "",
@@ -22,6 +24,10 @@ export function formatApprovedReviewComment(input: {
     input.reviewTargetList,
     `- Iteration: ${input.iteration}`,
     `- Reviewers: ${input.reviewers.map((reviewer) => `${reviewer.name}=${reviewer.decision}`).join(", ")}`,
+    reportOnlyCheckDiagnostics ? "" : null,
+    reportOnlyCheckDiagnostics ? "Report-only check diagnostics:" : null,
+    reportOnlyCheckDiagnostics ? "These diagnostics are operator-visible only. AgentOS did not retry checks, update branches, mark PRs ready, or merge from this classification." : null,
+    reportOnlyCheckDiagnostics,
     splitRecommendation ? "" : null,
     splitRecommendation ? "Review budget advisory:" : null,
     splitRecommendation ? formatReviewBudgetState(input.budget) : null,
