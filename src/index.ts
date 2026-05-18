@@ -4,6 +4,7 @@ export * from "./registry.js";
 export * from "./registry-orchestrator.js";
 export * from "./workflow.js";
 export * from "./linear.js";
+export * from "./linear-planned-issues.js";
 export * from "./github.js";
 export * from "./issue-state.js";
 export * from "./workspace.js";

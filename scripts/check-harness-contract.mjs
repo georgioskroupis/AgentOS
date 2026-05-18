@@ -44,6 +44,7 @@ function checkWorkflow(path) {
     "scripts/agent-linear-move.sh",
     "scripts/agent-linear-pr.sh",
     "scripts/agent-linear-handoff.sh",
+    "scripts/agent-linear-plan-issues.sh",
     "lifecycle.allowed_tracker_tools",
     "lifecycle.allowed_state_transitions",
     "lifecycle.fallback_behavior"

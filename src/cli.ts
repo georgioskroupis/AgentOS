@@ -15,6 +15,12 @@ import {
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
 import { daemonLaunchCommand, getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
+import {
+  formatLinearPlanError,
+  formatLinearPlannedIssuesResult,
+  parseLinearPlannedIssueInput,
+  upsertLinearPlannedIssues
+} from "./linear-planned-issues.js";
 import { seedMaintenanceIssues } from "./maintenance.js";
 import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -487,6 +493,42 @@ linearLifecycle
     const context = await agentLifecycleContextFromOptions(options);
     const handoffPath = await resolveRepoLocalInputPath(context.repoRoot, options.file, "handoff file");
     console.log(formatAgentLifecycleResult(await recordHandoffWithAgentLifecycleTool(context, { issue, handoffPath, event: options.event, tool })));
+  });
+
+linear
+  .command("plan-issues")
+  .requiredOption("--file <path>", "YAML or JSON plan file with child_issues or follow_up_issues")
+  .option("--parent <issue>", "parent Linear issue id or identifier for generated work")
+  .option("--team <team>", "Linear team id or key when no parent issue is provided")
+  .option("--project <name>", "Linear project name or slug; defaults to tracker.project_slug")
+  .option("--state <name>", "Linear workflow state for generated issues")
+  .option("--assignee <user-id>", "explicit Linear user id for generated issues")
+  .option("--trusted-actor <actor>", "trusted decision actor note when generated issues are intentionally unassigned")
+  .option("--max-criteria <number>", "maximum acceptance criteria per generated issue", parsePositiveIntegerOption("max-criteria"), 4)
+  .option("--repo <path>", "repository root", process.cwd())
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .action(async (options) => {
+    try {
+      const repoRoot = resolve(options.repo);
+      const workflowPath = await resolveRepoLocalWorkflowPath(repoRoot, options.workflow);
+      const { config } = await workflowConfigFromRepoEnv(workflowPath);
+      const filePath = await resolveRepoLocalInputPath(repoRoot, options.file, "plan file");
+      const plan = parseLinearPlannedIssueInput(await readText(filePath));
+      const result = await upsertLinearPlannedIssues(new LinearClient(config.tracker), plan, {
+        apiKey: config.tracker.apiKey,
+        projectSlug: config.tracker.projectSlug,
+        parentIssue: options.parent,
+        team: options.team,
+        project: options.project,
+        state: options.state,
+        assigneeId: options.assignee,
+        trustedDecisionActor: options.trustedActor,
+        maxAcceptanceCriteria: options.maxCriteria
+      });
+      console.log(formatLinearPlannedIssuesResult(result));
+    } catch (error) {
+      throw formatLinearPlanError(error);
+    }
   });
 
 linear

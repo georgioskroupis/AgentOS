@@ -274,6 +274,81 @@ describe("LinearClient", () => {
     expect(requests[2].variables).toEqual({ id: issueId, input: { stateId: "state-review" } });
   });
 
+  it("scopes planned issue marker and reference lookups to an override project", async () => {
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      {
+        data: {
+          issues: {
+            nodes: [
+              {
+                id: "issue-8",
+                identifier: "OTH-8",
+                title: "Planned issue",
+                description: "<!-- agentos:planned-issue=child-a -->",
+                url: "https://linear.test/OTH-8",
+                state: { name: "Todo" },
+                team: { id: "team-1", key: "OTH", name: "Other" },
+                project: { id: "project-2", name: "Other", slugId: "Other" }
+              }
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null }
+          }
+        }
+      },
+      {
+        data: {
+          issues: {
+            nodes: [
+              {
+                id: "parent-2",
+                identifier: "OTH-1",
+                title: "Other parent",
+                url: "https://linear.test/OTH-1",
+                state: { name: "Todo" },
+                team: { id: "team-1", key: "OTH", name: "Other" },
+                project: { id: "project-2", name: "Other", slugId: "Other" }
+              }
+            ]
+          }
+        }
+      }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    const marked = await client.findIssueByPlanningMarker("<!-- agentos:planned-issue=child-a -->", { project: "Other" });
+    const parent = await client.findIssueReference("OTH-1", { project: "Other" });
+
+    expect(marked?.identifier).toBe("OTH-8");
+    expect(parent.identifier).toBe("OTH-1");
+    expect(requests[0].variables.filter).toEqual({ project: otherProjectFilter() });
+    expect(requests[1].variables.filter).toEqual({
+      team: { key: { eq: "OTH" } },
+      number: { eq: 1 },
+      project: otherProjectFilter()
+    });
+  });
+
+  it("detects existing issue relations before creating duplicates", async () => {
+    const requests: Array<Record<string, any>> = [];
+    const fetchImpl = fakeFetch(requests, [
+      {
+        data: {
+          issue: {
+            relations: {
+              nodes: [{ type: "blocks", relatedIssue: { id: "issue-b" } }]
+            }
+          }
+        }
+      }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    await expect(client.findIssueRelation({ issueId: "issue-a", relatedIssueId: "issue-b", type: "blocks" })).resolves.toBe(true);
+
+    expect(requests[0].variables).toEqual({ id: "issue-a" });
+  });
+
   it("creates missing workflow states for setup", async () => {
     const requests: Array<Record<string, any>> = [];
     const fetchImpl = fakeFetch(requests, [
@@ -312,6 +387,12 @@ function fakeFetch(requests: Array<Record<string, any>>, responses: unknown[]): 
 function agentOsProjectFilter(): Record<string, unknown> {
   return {
     or: [{ slugId: { eq: "AgentOS" } }, { name: { eq: "AgentOS" } }]
+  };
+}
+
+function otherProjectFilter(): Record<string, unknown> {
+  return {
+    or: [{ slugId: { eq: "Other" } }, { name: { eq: "Other" } }]
   };
 }
 

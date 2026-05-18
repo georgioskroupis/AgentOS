@@ -53,6 +53,9 @@ Use this as a lightweight rubric for harnessed repositories.
   `scripts/agent-linear-pr.sh`, and `scripts/agent-linear-handoff.sh` provide
   deterministic agent-owned tracker writes for configured `hybrid` or
   experimental `agent-owned` projects.
+- `scripts/agent-linear-plan-issues.sh` turns approved decomposition plans into
+  marker-backed child/follow-up issues with parent, assignee continuity, and
+  requested dependency links.
 - Handoffs that reference `Validation-JSON` are not moved to review unless the
   evidence verifies successfully; missing handoffs and dead/stalled Codex App
   Server turns fail through the retry/failure path. Durable runtime state lets
