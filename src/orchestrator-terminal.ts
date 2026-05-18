@@ -78,6 +78,19 @@ export function alreadyMergedIssuePatch(
   };
 }
 
+export function dependencyDispatchStopPatch(runId: string): Partial<IssueState> {
+  return {
+    phase: "canceled",
+    lastRunId: runId,
+    lastError: undefined,
+    errorCategory: undefined,
+    lifecycleStatus: undefined,
+    activeRunId: undefined,
+    nextRetryAt: undefined,
+    retryAttempt: undefined
+  };
+}
+
 export function terminalHeadPatch(state: IssueState | null, pr: PullRequestStatus | null, checkedAt: string): Partial<IssueState> {
   const headSha = pr?.headSha ?? state?.validation?.githubCi?.headSha ?? state?.headSha ?? null;
   if (!headSha) return {};

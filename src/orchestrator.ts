@@ -25,13 +25,13 @@ import { planningRecommendedCommentBody } from "./orchestrator-planning-comments
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
-import { alreadyMergedIssuePatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
-import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
+import { alreadyMergedIssuePatch, dependencyDispatchStopPatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
+import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
 import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
 import { approvedReviewValidationBlockReason, formatApprovedReviewComment, reviewIterationLogMessage } from "./review-budget-orchestration.js";
 import { reviewerConcurrencyFor, runReviewerIteration } from "./reviewer-scheduler.js";
-import { categorizeRunError, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
+import { categorizeRunError, isDependencyDispatchStop, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
@@ -622,6 +622,18 @@ export class Orchestrator {
       });
       return null;
     }
+    const dependencyStop = dependencyDispatchStop(this.config, latest);
+    if (dependencyStop) {
+      await this.runtimeState.clearIssue(latest.id);
+      this.retries.delete(latest.id);
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: latest.id,
+        issueIdentifier: latest.identifier,
+        message: dependencyStop
+      });
+      return null;
+    }
     let state = await new IssueStateStore(resolve(this.options.repoRoot)).read(latest.identifier);
     const linearComments = await this.fetchDispatchGuardrailIssueComments(latest).catch(async (error: Error) => {
       await this.recordCommentReadDispatchStop(latest, error);
@@ -986,7 +998,7 @@ export class Orchestrator {
 
   private async dispatch(issue: Issue, attempt: number | null): Promise<boolean> {
     const dispatchStop = await trackerDispatchStop(this.config, this.tracker, issue);
-    if (dispatchStop && isConfiguredReviewDispatchStop(this.config, dispatchStop)) {
+    if (dispatchStop && isPreRunDispatchSkipStop(this.config, dispatchStop)) {
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
       await this.logger.write({
@@ -1027,7 +1039,7 @@ export class Orchestrator {
 
   private async runIssue(issue: Issue, attempt: number | null, abortController: AbortController): Promise<void> {
     const startStop = await trackerDispatchStop(this.config, this.tracker, issue);
-    if (startStop && isConfiguredReviewDispatchStop(this.config, startStop)) {
+    if (startStop && isPreRunDispatchSkipStop(this.config, startStop)) {
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
       await this.logger.write({
@@ -2285,13 +2297,7 @@ export class Orchestrator {
     const state = issue.state.toLowerCase();
     if (!this.config.tracker.activeStates.map((item) => item.toLowerCase()).includes(state)) return false;
     if (this.config.tracker.terminalStates.map((item) => item.toLowerCase()).includes(state)) return false;
-    if (state === "todo") {
-      return issue.blocked_by.every((blocker) => {
-        const blockerState = (blocker.state ?? "").toLowerCase();
-        return this.config.tracker.terminalStates.map((item) => item.toLowerCase()).includes(blockerState);
-      });
-    }
-    return true;
+    return !dependencyDispatchStop(this.config, issue);
   }
 
   private hasSlot(state: string): boolean {
@@ -2333,6 +2339,8 @@ export class Orchestrator {
       await this.runtimeState.clearIssue(issue.id);
     } else if (isStateIn(latest.state, this.config.tracker.terminalStates)) {
       await this.classifyTerminalIssue(latest, reason);
+    } else if (isDependencyDispatchStop(reason)) {
+      await this.recordDispatchGuardrailStop(latest, reason, dependencyDispatchStopPatch(runId));
     } else {
       const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
       if (!(await this.classifyAlreadyMergedIssue(latest, state, reason))) {

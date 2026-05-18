@@ -420,6 +420,51 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("Next safe action: mark the PR ready only after fresh validation and green CI");
   });
 
+  it("treats terminal child issues with advisory split telemetry as closed out", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-child-advisory-"));
+    const stateRoot = join(repo, ".agent-os", "state", "issues");
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(
+      join(stateRoot, "VER-80.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-80",
+          issueIdentifier: "VER-80",
+          phase: "completed",
+          lifecycleStatus: "terminal_linear",
+          terminalState: "Done",
+          terminalAt: "2026-05-18T10:00:00.000Z",
+          splitRecommendation: {
+            recommended: true,
+            action: "recommend-only",
+            reason: "review budget exceeded for broad or non-mechanical signals",
+            summary: "Recommend split or follow-up work for VER-80: review_token_total, repeated_broad_categories.",
+            signals: [
+              { name: "review_token_total", classification: "broad", current: 220000, threshold: 200000, summary: "Review/fix token volume is 220000." },
+              { name: "repeated_broad_categories", classification: "broad", current: 2, threshold: 2, summary: "Repeated broad review categories: architecture." }
+            ],
+            recordedAt: "2026-05-18T09:30:00.000Z"
+          },
+          updatedAt: "2026-05-18T10:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const statusOutput = await getStatus(repo);
+    const inspectOutput = await inspectIssue(repo, "VER-80");
+
+    expect(statusOutput).toContain("VER-80: terminal (Done)");
+    expect(statusOutput).not.toContain("VER-80: split recommended");
+    expect(inspectOutput).toContain("Split recommendation: advisory (recommend-only)");
+    expect(inspectOutput).toContain("Next safe action: no operator action required; issue is already in terminal state Done");
+    expect(inspectOutput).not.toContain("Next safe action: record a split-follow-up decision");
+    expect(inspectOutput).toContain("Status warnings: none");
+  });
+
   it("does not keep asking for split follow-up after an authoritative split decision", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-status-review-budget-resolved-"));
     const stateRoot = join(repo, ".agent-os", "state", "issues");
