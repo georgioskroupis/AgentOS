@@ -187,8 +187,39 @@ describe("validation evidence", () => {
     expect(reusableResult.state).toMatchObject({
       status: "passed",
       runId: "run_previous",
-      repoHead
+      repoHead,
+      budget: {
+        status: "reused",
+        fullValidationRunsForHead: 1,
+        currentRunId: "run_current",
+        evidenceRunId: "run_previous"
+      }
     });
+  });
+
+  it("flags duplicate full validation runs for the same evidence head", async () => {
+    const workspace = await gitWorkspace();
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace });
+    await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
+      schemaVersion: 1,
+      issueIdentifier: "AG-1",
+      runId: "run_current",
+      repoHead: stdout.trim(),
+      status: "passed",
+      commands: [freshCommand("npm run agent-check", 0), freshCommand("npm run agent-check", 0)]
+    });
+
+    const result = await verifyValidationEvidence({
+      issue: fakeIssue(),
+      handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
+      workspacePath: workspace,
+      runId: "run_current",
+      now: VALIDATION_NOW
+    });
+
+    expect(result.state.status).toBe("failed");
+    expect(result.state.budget).toMatchObject({ status: "exceeded", fullValidationRunsForHead: 2 });
+    expect(result.state.errors?.join("\n")).toContain("full validation rerun budget exceeded");
   });
 
   it("reuses matching validation evidence without requiring a recorded runId", async () => {

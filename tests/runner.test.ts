@@ -83,6 +83,8 @@ describe("CodexAppServerRunner", () => {
       workspace: { root: workspacePath },
       hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 1000 },
       agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryAttempts: 3, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
+      contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
+      validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
       codex: {
         command: fixtureCommand,
         approvalPolicy: "never",
@@ -145,6 +147,8 @@ describe("CodexAppServerRunner", () => {
       workspace: { root: workspacePath },
       hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 1000 },
       agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryAttempts: 3, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
+      contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
+      validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
       codex: {
         command: instantFixtureCommand,
         approvalPolicy: "never",
@@ -297,6 +301,8 @@ describe("CodexAppServerRunner", () => {
       workspace: { root: workspacePath },
       hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 1000 },
       agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryAttempts: 3, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
+      contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
+      validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
       codex: {
         command: strictSandboxFixtureCommand,
         approvalEventPolicy: "deny",
@@ -622,6 +628,8 @@ function runnerConfig(workspacePath: string, command: string): ServiceConfig {
     workspace: { root: workspacePath },
     hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 1000 },
     agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryAttempts: 3, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
+    contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
+    validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
     codex: {
       command,
       approvalPolicy: "never",

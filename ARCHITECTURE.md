@@ -25,6 +25,9 @@ layers:
 - `src/issue-state.ts` stores durable per-issue PR metadata.
 - `src/context-pack.ts` builds targeted prompt context packs for
   implementation re-entry, reviewer turns, fixer turns, and CI repair turns.
+- `src/context-budget.ts` estimates prompt size, records included-section
+  diagnostics, and enforces per-turn/cumulative context budgets before
+  implementation, reviewer, and fixer turns.
 - `src/scope-report.ts` builds pre-dispatch reports and dispatch advice from issue state,
   recent Linear comments, trusted human decisions, run artifacts, runtime state,
   PR metadata, validation/handoff evidence, and workspace recovery diagnostics.
@@ -72,6 +75,7 @@ skills contains reusable agent workflows for planning, implementation, bug fixin
 src/linear.ts integrates with Linear GraphQL.
 src/github.ts shells through gh for PR status and squash merge workflows.
 src/context-pack.ts builds bounded implementation, review, fix, and CI-repair prompt packs from issue text, authoritative decisions, selected PR metadata, diffs, findings, validation, and sanitized logs.
+src/context-budget.ts records shared context diagnostics and enforces configured prompt budgets for long implementation/review/fix runs.
 src/scope-report.ts builds pre-dispatch scope reports and dispatch advice for active candidate issues.
 src/runtime-state.ts persists active-run, retry-queue, claimed-issue, daemon freshness, and startup recovery state.
 src/runner/app-server.ts targets Codex App Server through JSON-RPC.

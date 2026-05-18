@@ -132,6 +132,121 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
   });
 
+  it("stops before a runner call when the implementation prompt exceeds the context budget", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-context-budget-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  kind: linear",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "  active_states: [Ready]",
+        "context_budget:",
+        "  max_prompt_tokens: 20",
+        "  max_cumulative_tokens: 40",
+        "  large_section_tokens: 5",
+        "workspace:",
+        "  root: .agent-os/workspaces",
+        "review:",
+        "  enabled: false",
+        "---",
+        `Do {{ issue.identifier }} ${"large context ".repeat(50)}`
+      ].join("\n"),
+      "utf8"
+    );
+    const comments: string[] = [];
+    let runnerCalled = false;
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: {
+        async fetchCandidates() {
+          return [readyIssue];
+        },
+        async fetchIssueStates() {
+          return new Map([[readyIssue.id, readyIssue]]);
+        },
+        async comment(_issue, body) {
+          comments.push(body);
+        },
+        async move() {}
+      },
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(runnerCalled).toBe(false);
+    expect(comments.join("\n")).toContain("context_budget_exceeded");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.contextBudget).toMatchObject({ status: "exceeded", kind: "implementation" });
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+    expect(inspectOutput).toContain("Context budget: exceeded");
+    expect(inspectOutput).toContain("reduce prompt context");
+  });
+
+  it("schedules Codex usage-limit reset times as capacity waits without incrementing retry attempts", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-capacity-wait-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_retry_attempts: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const resetAt = new Date(Date.now() + 60_000).toISOString();
+    const comments: string[] = [];
+    let runnerCalls = 0;
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: {
+        async fetchCandidates() {
+          return [readyIssue];
+        },
+        async fetchIssueStates() {
+          return new Map([[readyIssue.id, readyIssue]]);
+        },
+        async comment(_issue, body) {
+          comments.push(body);
+        },
+        async move() {}
+      },
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalls += 1;
+          return { status: "failed", error: `Codex usage limit reached; try again after ${resetAt}` };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(runnerCalls).toBe(1);
+    expect(comments.join("\n")).toContain("capacity wait scheduled");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      errorCategory: "capacity-wait",
+      retryAttempt: 0,
+      nextRetryAt: resetAt
+    });
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.retryQueue[0]).toMatchObject({
+      errorCategory: "capacity-wait",
+      attempt: 0,
+      dueAt: resetAt
+    });
+  });
+
   it("blocks broad missing work with a planning recommendation before dispatch", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-scope-report-"));
     const workflowPath = join(repo, "WORKFLOW.md");

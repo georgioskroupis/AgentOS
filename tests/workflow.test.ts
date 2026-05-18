@@ -272,6 +272,43 @@ describe("workflow", () => {
     });
   });
 
+  it("parses context and validation budget controls", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-budget-controls-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "context_budget:",
+        "  max_prompt_tokens: 5000",
+        "  max_cumulative_tokens: 12000",
+        "  large_section_tokens: 1000",
+        "validation_budget:",
+        "  full_validation_command: npm run agent-check",
+        "  max_full_validation_runs_per_head: 1",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const config = resolveServiceConfig(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+    expect(config.contextBudget).toMatchObject({
+      enabled: true,
+      maxPromptTokens: 5000,
+      maxCumulativeTokens: 12000,
+      largeSectionTokens: 1000
+    });
+    expect(config.validationBudget).toMatchObject({
+      enabled: true,
+      fullValidationCommand: "npm run agent-check",
+      maxFullValidationRunsPerHead: 1
+    });
+  });
+
   it("rejects invalid automation configs", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-automation-invalid-"));
     const workflowPath = join(repo, "WORKFLOW.md");

@@ -12,6 +12,7 @@ export function isDispatchTerminalStop(error: string | undefined): boolean {
 
 export function categorizeRunError(message: string): RunErrorCategory {
   const normalized = message.toLowerCase();
+  if (normalized.includes("capacity_wait") || /\b(usage limit|rate limit|too many requests|quota)\b/.test(normalized)) return "capacity-wait";
   if (isHumanInputStop(normalized)) return "human-input";
   if (normalized.includes("timeout")) return "timeout";
   if (normalized.includes("stall")) return "stall";
@@ -32,6 +33,7 @@ export function isHumanInputStop(message: string): boolean {
     normalized.includes("codex_user_input_request_denied") ||
     normalized.includes("codex_elicitation_request_denied") ||
     normalized.includes("agent_pr_creation_failed") ||
-    normalized.includes("nested_orchestrator_forbidden")
+    normalized.includes("nested_orchestrator_forbidden") ||
+    normalized.includes("context_budget_exceeded")
   );
 }

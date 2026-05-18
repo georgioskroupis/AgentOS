@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { evaluateContextBudget } from "../src/context-budget.js";
 import { buildTargetedContextPack } from "../src/context-pack.js";
 import type { CheckDiagnostic, PullRequestStatus } from "../src/github.js";
 import type { Issue, IssueState, ReviewFinding } from "../src/types.js";
@@ -20,6 +21,23 @@ const issue: Issue = {
 };
 
 describe("targeted context packs", () => {
+  it("records prompt size and large-section reasons for context budget diagnostics", () => {
+    const budget = evaluateContextBudget({
+      config: { enabled: true, maxPromptTokens: 10_000, maxCumulativeTokens: 20_000, largeSectionTokens: 5 },
+      kind: "implementation",
+      runId: "run_context_budget",
+      prompt: ["Base instructions", "", "## AgentOS Run Context", "Run ID: run_context_budget", "", "## AgentOS Targeted Context Pack", "x".repeat(200)].join("\n")
+    });
+
+    expect(budget.status).toBe("within_budget");
+    expect(budget.estimatedPromptTokens).toBeGreaterThan(0);
+    expect(budget.sections.map((section) => section.name)).toEqual(["Prompt preamble", "AgentOS Run Context", "AgentOS Targeted Context Pack"]);
+    expect(budget.sections.find((section) => section.name === "AgentOS Targeted Context Pack")).toMatchObject({
+      large: true,
+      reason: expect.stringContaining("bounded implementation evidence pack")
+    });
+  });
+
   it("keeps implementation re-entry focused on authoritative decisions and validation summaries", () => {
     const state: IssueState = {
       schemaVersion: 1,

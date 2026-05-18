@@ -445,6 +445,8 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
       maxRetryBackoffMs: 1,
       maxConcurrentAgentsByState: new Map()
     },
+    contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
+    validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
     codex: {
       command: "node tests/fixtures/fake-app-server.mjs",
       approvalEventPolicy: "deny",

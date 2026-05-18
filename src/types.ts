@@ -13,6 +13,7 @@ export type ReviewTargetMode = "merge-eligible" | "primary";
 export type MergeTargetMode = "primary";
 export type HumanDecisionType = "approve_as_is" | "fix_findings" | "accept_risk" | "split_follow_up" | "proceed_to_merge_after_supervisor_fix";
 export type HumanDecisionFindingsState = "resolved" | "accepted" | "open" | "unknown";
+export type ContextBudgetTurnKind = "implementation" | "reviewer" | "fixer";
 
 export interface HarnessChange {
   action: "add" | "overwrite" | "exists" | "missing" | "invalid";
@@ -124,6 +125,8 @@ export interface ServiceConfig {
     maxRetryBackoffMs: number;
     maxConcurrentAgentsByState: Map<string, number>;
   };
+  contextBudget: ContextBudgetConfig;
+  validationBudget: ValidationBudgetConfig;
   codex: {
     command: string;
     approvalPolicy?: unknown;
@@ -159,6 +162,19 @@ export interface ServiceConfig {
     skipOptionalReviewersAfterBlockingRequired: boolean;
     budget: ReviewBudgetConfig;
   };
+}
+
+export interface ContextBudgetConfig {
+  enabled: boolean;
+  maxPromptTokens: number;
+  maxCumulativeTokens: number;
+  largeSectionTokens: number;
+}
+
+export interface ValidationBudgetConfig {
+  enabled: boolean;
+  fullValidationCommand: string;
+  maxFullValidationRunsPerHead: number;
 }
 
 export interface Workspace {
@@ -303,8 +319,32 @@ export interface IssueState {
   operatorRecovery?: OperatorRecoveryState;
   appProof?: AppProofState;
   scopeReport?: ScopeReportState;
+  contextBudget?: ContextBudgetState;
   validation?: ValidationState;
   updatedAt: string;
+}
+
+export interface ContextBudgetSectionState {
+  name: string;
+  estimatedTokens: number;
+  chars: number;
+  reason: string;
+  large: boolean;
+}
+
+export interface ContextBudgetState {
+  status: "within_budget" | "exceeded";
+  evaluatedAt: string;
+  runId?: string | null;
+  kind: ContextBudgetTurnKind;
+  estimatedPromptTokens: number;
+  maxPromptTokens: number;
+  cumulativeEstimatedTokens: number;
+  maxCumulativeTokens: number;
+  largeSectionTokens: number;
+  sections: ContextBudgetSectionState[];
+  exceededReasons?: string[];
+  summary: string;
 }
 
 export interface PullRequestRef {
@@ -373,6 +413,7 @@ export interface ValidationState {
   additionalPassingCommands?: ValidationCommandState[];
   failedHistoricalAttempts?: ValidationCommandState[];
   githubCi?: ValidationCiState;
+  budget?: ValidationBudgetState;
 }
 
 export interface ValidationCommandState {
@@ -387,6 +428,18 @@ export interface ValidationCiState {
   headSha?: string | null;
   source?: string;
   checkedAt?: string;
+}
+
+export interface ValidationBudgetState {
+  status: "fresh" | "reused" | "exceeded";
+  evaluatedAt: string;
+  fullValidationCommand: string;
+  maxFullValidationRunsPerHead: number;
+  fullValidationRunsForHead: number;
+  repoHead?: string | null;
+  currentRunId?: string | null;
+  evidenceRunId?: string | null;
+  summary: string;
 }
 
 export type RunPhase =
@@ -424,6 +477,7 @@ export type RunErrorCategory =
   | "timeout"
   | "stall"
   | "canceled"
+  | "capacity-wait"
   | "human-input"
   | "validation"
   | "review"
