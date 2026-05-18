@@ -10,7 +10,17 @@ export async function trackerDispatchStop(config: ServiceConfig, tracker: IssueT
   const latest = current ?? issue;
   if (isStateIn(latest.state, config.tracker.terminalStates)) return `issue_became_terminal:${latest.state}`;
   if (!isStateIn(latest.state, runningAllowedStates(config))) return `issue_no_longer_dispatchable:${latest.state}`;
+  const dependencyStop = dependencyDispatchStop(config, latest);
+  if (dependencyStop) return dependencyStop;
   return null;
+}
+
+export function dependencyDispatchStop(config: ServiceConfig, issue: Issue): string | null {
+  const blocker = issue.blocked_by.find((candidate) => !isStateIn(candidate.state ?? "", config.tracker.terminalStates));
+  if (!blocker) return null;
+  const blockerRef = blocker.identifier ?? blocker.id ?? "unknown";
+  const blockerState = blocker.state ?? "unknown";
+  return `issue_blocked_by_dependency:${blockerRef} (${blockerState})`;
 }
 
 export function isConfiguredReviewDispatchStop(config: ServiceConfig, reason: string): boolean {

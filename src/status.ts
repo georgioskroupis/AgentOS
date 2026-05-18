@@ -116,7 +116,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     prs.length ? `PRs:\n${prs.map((pr) => `- ${pr.url}${pr.role ? ` (${pr.role})` : ""}`).join("\n")}` : "PRs: none recorded",
     reviewDetails(state),
     formatReviewBudgetState(state?.reviewBudget),
-    formatSplitRecommendation(state?.splitRecommendation, { advisory: state?.reviewStatus === "approved" }),
+    formatSplitRecommendation(state?.splitRecommendation, { advisory: isSplitRecommendationAdvisory(state) }),
     state?.reviewRunnerFailures?.length ? `Review runner failures:\n${formatReviewRunnerFailures(state.reviewRunnerFailures)}` : "Review runner failures: none recorded",
     humanDecisionDetails(state),
     scopeReportDetails(state),
@@ -306,7 +306,6 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (runtimeActive) return withEvidence(`running (${runtimeActive.phase ?? issue.phase ?? "active"})`);
   if (retry && (retry.errorCategory === "capacity-wait" || issue.errorCategory === "capacity-wait")) return withEvidence(`capacity wait until ${retry.dueAt}; next: wait for the Codex usage reset time before redispatch`);
   if (retry) return withEvidence(`retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`);
-  if (isReviewSplitRecommendationBlocking(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
   const latestRunnerFailure = latestReviewRunnerFailure(issue);
   if ((issue.reviewStatus === "human_required" || issue.phase === "human-required") && latestRunnerFailure) {
     return withEvidence(`waiting on Human Review - reviewer runner failure (${latestRunnerFailure.reviewer}: ${latestRunnerFailure.reason})`);
@@ -314,6 +313,7 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (recovery?.recoverable) return withEvidence(`recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`);
   const terminalStatus = cleanTerminalStatusLine(issue);
   if (terminalStatus) return withEvidence(terminalStatus);
+  if (isReviewSplitRecommendationBlocking(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
   const mergeWaiting = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_waiting");
   if (mergeWaiting) return withEvidence(`waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`);
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
@@ -425,6 +425,10 @@ export { daemonLaunchCommand, inspectDaemonHealth };
 
 function hasApprovedPullRequest(issue: IssueState): boolean {
   return issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0;
+}
+
+function isSplitRecommendationAdvisory(issue: IssueState | null): boolean {
+  return Boolean(issue && (issue.reviewStatus === "approved" || isAuthoritativeTerminalIssueState(issue)));
 }
 
 function isCommentReadDispatchStop(issue: IssueState): boolean {

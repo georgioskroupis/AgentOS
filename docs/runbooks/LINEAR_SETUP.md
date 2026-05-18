@@ -54,6 +54,40 @@ small `acceptance_criteria` list. The helper reuses existing generated issues by
 marker, inherits the parent assignee unless an assignee or trusted actor is set,
 and writes requested `blocked_by`/`unblocks` relationships.
 
+Use this as one workflow with the planning guidance, not as a separate
+bookkeeping shortcut:
+
+1. Capture the approved decomposition plan in the parent issue or a repo-local
+   plan artifact.
+2. Run `scripts/agent-linear-plan-issues.sh` against that plan so every child
+   has a stable idempotency marker, compact active scope, and any requested
+   `blocked_by`/`unblocks` relation.
+3. Leave blocked children in an active state only when their Linear dependency
+   relations are accurate. AgentOS dispatch eligibility is issue-driven: a
+   child with a nonterminal `blocked_by` issue is skipped even when local PR
+   metadata or GitHub checks look ready.
+4. Let completed dependencies become eligible through Linear state changes.
+   A blocked child becomes dispatchable when every `blocked_by` relation is in
+   a configured terminal state such as `Done`, `Closed`, `Canceled`, or
+   `Duplicate`.
+
+## Parent Closeout Evidence
+
+Before closing a decomposed parent issue, record a compact closeout note in the
+parent handoff or a linked proof artifact. Include:
+
+- Child issue links and their final Linear states.
+- The primary PR for each child, whether it merged, and the head SHA used for
+  validation.
+- The validation evidence path for each child, including any focused checks and
+  the final `npm run agent-check` result.
+- Current `main` and selected PR head agreement, or an explicit follow-up when
+  local validation and GitHub CI disagree.
+- Clean root worktree status plus workspace cleanup/reconciliation after any
+  daemon restart needed for closeout.
+- Advisory review-budget split telemetry, if present, as historical context
+  only when the child is terminal in Linear and the selected PR is merged.
+
 ## Live AgentOS Project
 
 - Workspace/team: `VerityStudio` (`VER`)

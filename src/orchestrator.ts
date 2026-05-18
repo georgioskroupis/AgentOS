@@ -26,7 +26,7 @@ import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullReques
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
-import { isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
+import { dependencyDispatchStop, isConfiguredReviewDispatchStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
 import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
 import { approvedReviewValidationBlockReason, formatApprovedReviewComment, reviewIterationLogMessage } from "./review-budget-orchestration.js";
@@ -619,6 +619,18 @@ export class Orchestrator {
         issueId: latest.id,
         issueIdentifier: latest.identifier,
         message: `issue state ${latest.state} is not active`
+      });
+      return null;
+    }
+    const dependencyStop = dependencyDispatchStop(this.config, latest);
+    if (dependencyStop) {
+      await this.runtimeState.clearIssue(latest.id);
+      this.retries.delete(latest.id);
+      await this.logger.write({
+        type: "dispatch_skipped",
+        issueId: latest.id,
+        issueIdentifier: latest.identifier,
+        message: dependencyStop
       });
       return null;
     }
@@ -2285,13 +2297,7 @@ export class Orchestrator {
     const state = issue.state.toLowerCase();
     if (!this.config.tracker.activeStates.map((item) => item.toLowerCase()).includes(state)) return false;
     if (this.config.tracker.terminalStates.map((item) => item.toLowerCase()).includes(state)) return false;
-    if (state === "todo") {
-      return issue.blocked_by.every((blocker) => {
-        const blockerState = (blocker.state ?? "").toLowerCase();
-        return this.config.tracker.terminalStates.map((item) => item.toLowerCase()).includes(blockerState);
-      });
-    }
-    return true;
+    return !dependencyDispatchStop(this.config, issue);
   }
 
   private hasSlot(state: string): boolean {
