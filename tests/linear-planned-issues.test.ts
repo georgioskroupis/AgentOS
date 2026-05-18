@@ -5,8 +5,10 @@ import {
   plannedIssueMarker,
   upsertLinearPlannedIssues,
   type LinearPlannedIssueAdapter,
+  type LinearPlannedIssueLookupOptions,
   type LinearPlannedIssueReference,
-  type LinearPlannedIssueWriteInput
+  type LinearPlannedIssueWriteInput,
+  type PlannedIssueRelationInput
 } from "../src/linear-planned-issues.js";
 import { estimateScope, estimateTouchedSubsystems } from "../src/scope-report-scoring.js";
 import { selectScopeText } from "../src/scope-report-scope-text.js";
@@ -101,7 +103,63 @@ child_issues:
     expect(adapter.updated[0].issueId).toBe("existing-1");
   });
 
-  it("writes blocks relations for blocked_by and unblocks plan references", async () => {
+  it("scopes marker reuse and parent lookup to the resolved plan project", async () => {
+    const adapter = new FakePlannedIssueAdapter();
+    adapter.existingByMarker.set(
+      plannedIssueMarker("other-project-child"),
+      fakeReference({ id: "existing-other", identifier: "OTH-88", title: "Old other title", project: otherProject() })
+    );
+    const plan = parseLinearPlannedIssueInput(`
+project: Other
+parent_issue: OTH-1
+child_issues:
+  - marker: other-project-child
+    title: Reused other child
+    scope: Update the existing generated issue in the selected project.
+    acceptance_criteria:
+      - Existing issue is updated in the selected project.
+`);
+
+    const result = await upsertLinearPlannedIssues(adapter, plan, {
+      apiKey: "lin_test_key",
+      projectSlug: "AgentOS"
+    });
+
+    expect(result.project).toEqual(otherProject());
+    expect(result.issues[0]).toMatchObject({ action: "updated", identifier: "OTH-88" });
+    expect(adapter.created).toHaveLength(0);
+    expect(adapter.updated[0]).toMatchObject({ issueId: "existing-other", input: { projectId: "project-2", parentId: "parent-2" } });
+    expect(adapter.referenceLookups).toContainEqual({ issueIdentifierOrId: "OTH-1", project: "Other" });
+    expect(adapter.markerLookups).toContainEqual({ markerText: plannedIssueMarker("other-project-child"), project: "Other" });
+  });
+
+  it("rejects duplicate resolved markers before writing issues", async () => {
+    const adapter = new FakePlannedIssueAdapter();
+    const plan = parseLinearPlannedIssueInput(`
+parent_issue: VER-53
+child_issues:
+  - title: Duplicate slice
+    scope: Add one small change.
+    acceptance_criteria:
+      - First focused check passes.
+  - title: Duplicate slice
+    scope: Add another small change.
+    acceptance_criteria:
+      - Second focused check passes.
+`);
+
+    await expect(
+      upsertLinearPlannedIssues(adapter, plan, {
+        apiKey: "lin_test_key",
+        projectSlug: "AgentOS"
+      })
+    ).rejects.toThrow("linear_plan_duplicate_marker");
+    expect(adapter.created).toHaveLength(0);
+    expect(adapter.updated).toHaveLength(0);
+    expect(adapter.relations).toHaveLength(0);
+  });
+
+  it("writes blocks relations for blocked_by and unblocks plan references idempotently", async () => {
     const adapter = new FakePlannedIssueAdapter();
     adapter.references.set("VER-99", fakeReference({ id: "external-99", identifier: "VER-99" }));
     const plan = parseLinearPlannedIssueInput(`
@@ -134,6 +192,17 @@ child_issues:
         { issueId: "issue-1", relatedIssueId: "issue-2", type: "blocks" }
       ])
     );
+
+    const second = await upsertLinearPlannedIssues(adapter, plan, {
+      apiKey: "lin_test_key",
+      projectSlug: "AgentOS"
+    });
+
+    expect(second.issues.map((issue) => issue.action)).toEqual(["updated", "updated"]);
+    expect(adapter.relations).toEqual([
+      { issueId: "issue-1", relatedIssueId: "external-99", type: "blocks" },
+      { issueId: "issue-1", relatedIssueId: "issue-2", type: "blocks" }
+    ]);
   });
 
   it("fails clearly and redacts diagnostics when credentials are missing", async () => {
@@ -151,9 +220,10 @@ child_issues:
     await expect(upsertLinearPlannedIssues(adapter, plan, { projectSlug: "AgentOS" })).rejects.toThrow(
       "linear_plan_missing_credentials"
     );
-    const redacted = formatLinearPlanError(new Error("linear_graphql_errors: token lin_abcdefghijklmnopqrstuvwxyz123456 failed"));
+    const linearToken = ["lin", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
+    const redacted = formatLinearPlanError(new Error(`linear_graphql_errors: token ${linearToken} failed`));
     expect(redacted.message).toContain("[REDACTED]");
-    expect(redacted.message).not.toContain("lin_abcdefghijklmnopqrstuvwxyz123456");
+    expect(redacted.message).not.toContain(linearToken);
   });
 });
 
@@ -161,10 +231,32 @@ class FakePlannedIssueAdapter implements LinearPlannedIssueAdapter {
   readonly created: LinearPlannedIssueWriteInput[] = [];
   readonly updated: Array<{ issueId: string; input: LinearPlannedIssueWriteInput }> = [];
   readonly relations: Array<{ issueId: string; relatedIssueId: string; type: "blocks" | "related" }> = [];
+  readonly markerLookups: Array<{ markerText: string; project: string | null }> = [];
+  readonly referenceLookups: Array<{ issueIdentifierOrId: string; project: string | null }> = [];
   readonly existingByMarker = new Map<string, LinearPlannedIssueReference>();
   readonly references = new Map<string, LinearPlannedIssueReference>([
     ["VER-53", fakeReference({ id: "parent-1", identifier: "VER-53", title: "Parent issue", assigneeId: "user-supervisor" })],
-    ["parent-1", fakeReference({ id: "parent-1", identifier: "VER-53", title: "Parent issue", assigneeId: "user-supervisor" })]
+    ["parent-1", fakeReference({ id: "parent-1", identifier: "VER-53", title: "Parent issue", assigneeId: "user-supervisor" })],
+    [
+      "OTH-1",
+      fakeReference({
+        id: "parent-2",
+        identifier: "OTH-1",
+        title: "Other parent issue",
+        assigneeId: "user-supervisor",
+        project: otherProject()
+      })
+    ],
+    [
+      "parent-2",
+      fakeReference({
+        id: "parent-2",
+        identifier: "OTH-1",
+        title: "Other parent issue",
+        assigneeId: "user-supervisor",
+        project: otherProject()
+      })
+    ]
   ]);
 
   async listTeams() {
@@ -176,17 +268,23 @@ class FakePlannedIssueAdapter implements LinearPlannedIssueAdapter {
   }
 
   async findProject(slugOrName: string) {
-    return slugOrName === "AgentOS" ? { id: "project-1", name: "AgentOS", slugId: "AgentOS" } : null;
+    if (slugOrName === "AgentOS") return agentOsProject();
+    if (slugOrName === "Other") return otherProject();
+    return null;
   }
 
-  async findIssueReference(issueIdentifierOrId: string) {
+  async findIssueReference(issueIdentifierOrId: string, options: LinearPlannedIssueLookupOptions = {}) {
+    this.referenceLookups.push({ issueIdentifierOrId, project: options.project ?? null });
     const issue = this.references.get(issueIdentifierOrId);
-    if (!issue) throw new Error(`missing fake issue: ${issueIdentifierOrId}`);
+    if (!issue || !projectMatches(issue.project, options.project ?? "AgentOS")) throw new Error(`missing fake issue: ${issueIdentifierOrId}`);
     return issue;
   }
 
-  async findIssueByPlanningMarker(markerText: string) {
-    return this.existingByMarker.get(markerText) ?? null;
+  async findIssueByPlanningMarker(markerText: string, options: LinearPlannedIssueLookupOptions = {}) {
+    this.markerLookups.push({ markerText, project: options.project ?? null });
+    const issue = this.existingByMarker.get(markerText);
+    if (!issue || !projectMatches(issue.project, options.project ?? "AgentOS")) return null;
+    return issue;
   }
 
   async createIssue(input: LinearPlannedIssueWriteInput) {
@@ -195,10 +293,13 @@ class FakePlannedIssueAdapter implements LinearPlannedIssueAdapter {
       id: `issue-${this.created.length}`,
       identifier: `VER-${100 + this.created.length}`,
       title: input.title,
-      assigneeId: input.assigneeId ?? null
+      assigneeId: input.assigneeId ?? null,
+      project: projectForId(input.projectId)
     });
     this.references.set(issue.id, issue);
     this.references.set(issue.identifier, issue);
+    const marker = markerFromDescription(input.description);
+    if (marker) this.existingByMarker.set(marker, issue);
     return issue;
   }
 
@@ -209,16 +310,48 @@ class FakePlannedIssueAdapter implements LinearPlannedIssueAdapter {
       id: issueId,
       identifier: previous?.identifier ?? "VER-200",
       title: input.title,
-      assigneeId: input.assigneeId ?? previous?.assigneeId ?? null
+      assigneeId: input.assigneeId ?? previous?.assigneeId ?? null,
+      project: projectForId(input.projectId) ?? previous?.project ?? null
     });
     this.references.set(issue.id, issue);
     this.references.set(issue.identifier, issue);
+    const marker = markerFromDescription(input.description);
+    if (marker) this.existingByMarker.set(marker, issue);
     return issue;
   }
 
-  async createIssueRelation(input: { issueId: string; relatedIssueId: string; type: "blocks" | "related" }) {
+  async findIssueRelation(input: PlannedIssueRelationInput) {
+    return this.relations.some(
+      (relation) => relation.issueId === input.issueId && relation.relatedIssueId === input.relatedIssueId && relation.type === input.type
+    );
+  }
+
+  async createIssueRelation(input: PlannedIssueRelationInput) {
     this.relations.push(input);
   }
+}
+
+function agentOsProject() {
+  return { id: "project-1", name: "AgentOS", slugId: "AgentOS" };
+}
+
+function otherProject() {
+  return { id: "project-2", name: "Other", slugId: "Other" };
+}
+
+function projectForId(projectId: string | undefined) {
+  if (projectId === "project-2") return otherProject();
+  if (projectId === "project-1") return agentOsProject();
+  return null;
+}
+
+function projectMatches(project: LinearPlannedIssueReference["project"], slugOrName: string | undefined): boolean {
+  if (!slugOrName) return true;
+  return project?.slugId === slugOrName || project?.name === slugOrName || project?.id === slugOrName;
+}
+
+function markerFromDescription(description: string): string | null {
+  return description.match(/<!-- agentos:planned-issue=[^>]+ -->/)?.[0] ?? null;
 }
 
 function fakeReference(overrides: Partial<LinearPlannedIssueReference> = {}): LinearPlannedIssueReference {
@@ -231,7 +364,7 @@ function fakeReference(overrides: Partial<LinearPlannedIssueReference> = {}): Li
     url: `https://linear.test/${overrides.identifier ?? "VER-1"}`,
     assigneeId: null,
     assigneeEmail: null,
-    project: { id: "project-1", name: "AgentOS", slugId: "AgentOS" },
+    project: agentOsProject(),
     ...overrides
   };
 }

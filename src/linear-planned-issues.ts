@@ -18,11 +18,16 @@ export interface LinearPlannedIssueAdapter {
   listTeams(): Promise<LinearTeam[]>;
   listWorkflowStates(teamId: string): Promise<LinearState[]>;
   findProject(slugOrName: string): Promise<LinearProject | null>;
-  findIssueReference(issueIdentifierOrId: string): Promise<LinearPlannedIssueReference>;
-  findIssueByPlanningMarker(markerText: string): Promise<LinearPlannedIssueReference | null>;
+  findIssueReference(issueIdentifierOrId: string, options?: LinearPlannedIssueLookupOptions): Promise<LinearPlannedIssueReference>;
+  findIssueByPlanningMarker(markerText: string, options?: LinearPlannedIssueLookupOptions): Promise<LinearPlannedIssueReference | null>;
   createIssue(input: LinearPlannedIssueWriteInput): Promise<LinearPlannedIssueReference>;
   updateIssue(issueId: string, input: LinearPlannedIssueWriteInput): Promise<LinearPlannedIssueReference>;
-  createIssueRelation(input: { issueId: string; relatedIssueId: string; type: PlannedIssueRelationType }): Promise<void>;
+  findIssueRelation?(input: PlannedIssueRelationInput): Promise<boolean>;
+  createIssueRelation(input: PlannedIssueRelationInput): Promise<void>;
+}
+
+export interface LinearPlannedIssueLookupOptions {
+  project?: string;
 }
 
 export interface LinearPlannedIssueWriteInput {
@@ -33,6 +38,12 @@ export interface LinearPlannedIssueWriteInput {
   stateId?: string;
   parentId?: string;
   assigneeId?: string;
+}
+
+export interface PlannedIssueRelationInput {
+  issueId: string;
+  relatedIssueId: string;
+  type: PlannedIssueRelationType;
 }
 
 export interface PlannedIssuePlan {
@@ -145,24 +156,30 @@ export async function upsertLinearPlannedIssues(
   const resolved: ResolvedPlannedIssue[] = [];
   const resultIssues: UpsertPlannedIssueResult[] = [];
   const byMarker = new Map<string, UpsertPlannedIssueResult>();
-  const allMarkers = plan.issues.map((issue) => issue.marker).filter((marker): marker is string => Boolean(marker));
   let firstParent: LinearPlannedIssueReference | null = null;
 
   for (const spec of plan.issues) {
-    const item = await resolvePlannedIssue(adapter, spec, plan, options, project, allMarkers);
+    const item = await resolvePlannedIssue(adapter, spec, plan, options, project);
     if (!firstParent && item.parent) firstParent = item.parent;
     resolved.push(item);
-    const existing = await adapter.findIssueByPlanningMarker(item.markerText);
+  }
+  assertUniqueResolvedMarkers(resolved);
+  for (const item of resolved) {
+    item.siblingMarkers = resolved.map((candidate) => candidate.marker).filter((marker) => marker !== item.marker);
+  }
+
+  for (const item of resolved) {
+    const existing = await adapter.findIssueByPlanningMarker(item.markerText, projectLookup(item.project));
     const writeInput = plannedIssueWriteInput(item);
     const issue = existing ? await adapter.updateIssue(existing.id, writeInput) : await adapter.createIssue(writeInput);
     const result: UpsertPlannedIssueResult = {
       marker: item.marker,
       markerText: item.markerText,
-      kind: spec.kind,
+      kind: item.spec.kind,
       action: existing ? "updated" : "created",
       id: issue.id,
       identifier: issue.identifier,
-      title: issue.title ?? spec.title,
+      title: issue.title ?? item.spec.title,
       url: issue.url ?? null
     };
     resultIssues.push(result);
@@ -174,18 +191,18 @@ export async function upsertLinearPlannedIssues(
     const written = byMarker.get(issue.marker);
     if (!written) continue;
     for (const ref of issue.spec.blockedBy ?? []) {
-      const relatedIssueId = await resolveRelationIssueId(adapter, byMarker, ref);
-      await adapter.createIssueRelation({ issueId: relatedIssueId, relatedIssueId: written.id, type: "blocks" });
+      const relatedIssueId = await resolveRelationIssueId(adapter, byMarker, ref, issue.project);
+      await ensureIssueRelation(adapter, { issueId: relatedIssueId, relatedIssueId: written.id, type: "blocks" });
       relations.push({ issueId: relatedIssueId, relatedIssueId: written.id, type: "blocks" });
     }
     for (const ref of issue.spec.blocks ?? []) {
-      const relatedIssueId = await resolveRelationIssueId(adapter, byMarker, ref);
-      await adapter.createIssueRelation({ issueId: written.id, relatedIssueId, type: "blocks" });
+      const relatedIssueId = await resolveRelationIssueId(adapter, byMarker, ref, issue.project);
+      await ensureIssueRelation(adapter, { issueId: written.id, relatedIssueId, type: "blocks" });
       relations.push({ issueId: written.id, relatedIssueId, type: "blocks" });
     }
     for (const ref of issue.spec.related ?? []) {
-      const relatedIssueId = await resolveRelationIssueId(adapter, byMarker, ref);
-      await adapter.createIssueRelation({ issueId: written.id, relatedIssueId, type: "related" });
+      const relatedIssueId = await resolveRelationIssueId(adapter, byMarker, ref, issue.project);
+      await ensureIssueRelation(adapter, { issueId: written.id, relatedIssueId, type: "related" });
       relations.push({ issueId: written.id, relatedIssueId, type: "related" });
     }
   }
@@ -221,13 +238,12 @@ async function resolvePlannedIssue(
   spec: PlannedIssueSpec,
   plan: PlannedIssuePlan,
   options: UpsertPlannedIssuesOptions,
-  project: LinearProject,
-  allMarkers: string[]
+  project: LinearProject
 ): Promise<ResolvedPlannedIssue> {
   const boundedSpec = enforceSmallCriteriaSet(spec, options.maxAcceptanceCriteria ?? 4);
   const parentRef = boundedSpec.parentIssue ?? plan.parentIssue ?? options.parentIssue;
   if (boundedSpec.kind === "child" && !parentRef) throw new Error(`linear_plan_missing_parent: child issue "${boundedSpec.title}" requires a parent issue`);
-  const parent = parentRef ? await adapter.findIssueReference(parentRef) : null;
+  const parent = parentRef ? await adapter.findIssueReference(parentRef, projectLookup(project)) : null;
   const team = parent?.team ?? (await resolveTeam(adapter, options.team ?? plan.team));
   const stateName = options.state ?? plan.state;
   const state = stateName ? await resolveState(adapter, team, stateName) : null;
@@ -255,7 +271,7 @@ async function resolvePlannedIssue(
     state,
     assigneeId: assignee,
     continuity,
-    siblingMarkers: allMarkers.filter((item) => item !== marker)
+    siblingMarkers: []
   };
 }
 
@@ -331,13 +347,46 @@ async function resolveState(adapter: LinearPlannedIssueAdapter, team: LinearTeam
 async function resolveRelationIssueId(
   adapter: LinearPlannedIssueAdapter,
   byMarker: Map<string, UpsertPlannedIssueResult>,
-  ref: string
+  ref: string,
+  project: LinearProject
 ): Promise<string> {
   const trimmed = ref.trim();
   if (!trimmed) throw new Error("linear_plan_missing_relation_issue_id");
   const planned = byMarker.get(trimmed);
   if (planned) return planned.id;
-  return (await adapter.findIssueReference(trimmed)).id;
+  return (await adapter.findIssueReference(trimmed, projectLookup(project))).id;
+}
+
+async function ensureIssueRelation(adapter: LinearPlannedIssueAdapter, input: PlannedIssueRelationInput): Promise<void> {
+  if (adapter.findIssueRelation && (await adapter.findIssueRelation(input))) return;
+  try {
+    await adapter.createIssueRelation(input);
+  } catch (error) {
+    if (isDuplicateRelationError(error)) return;
+    throw error;
+  }
+}
+
+function assertUniqueResolvedMarkers(issues: ResolvedPlannedIssue[]): void {
+  const seen = new Map<string, ResolvedPlannedIssue>();
+  for (const issue of issues) {
+    const existing = seen.get(issue.markerText);
+    if (existing) {
+      throw new Error(
+        `linear_plan_duplicate_marker: ${redactText(issue.marker)} used by "${existing.spec.title}" and "${issue.spec.title}"`
+      );
+    }
+    seen.set(issue.markerText, issue);
+  }
+}
+
+function projectLookup(project: LinearProject): LinearPlannedIssueLookupOptions {
+  return { project: project.slugId ?? project.name };
+}
+
+function isDuplicateRelationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /duplicate|already exists|already has|relation.*exists|must be unique/i.test(message);
 }
 
 function assertPlanPrerequisites(plan: PlannedIssuePlan, options: UpsertPlannedIssuesOptions): void {

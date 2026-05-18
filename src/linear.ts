@@ -1,7 +1,13 @@
 import type { Issue, IssueComment, IssueTracker, LifecycleDuplicateCommentBehavior, ServiceConfig } from "./types.js";
 import { latestIssueComments } from "./issue-state.js";
 import { redactText } from "./redaction.js";
-import type { LinearPlannedIssueReference, LinearPlannedIssueWriteInput, PlannedIssueRelationType } from "./linear-planned-issues.js";
+import type {
+  LinearPlannedIssueLookupOptions,
+  LinearPlannedIssueReference,
+  LinearPlannedIssueWriteInput,
+  PlannedIssueRelationInput,
+  PlannedIssueRelationType
+} from "./linear-planned-issues.js";
 
 type FetchLike = typeof fetch;
 
@@ -286,7 +292,21 @@ export class LinearClient implements IssueTracker {
     return normalizeLinearIssueReference(data.issueUpdate.issue);
   }
 
-  async createIssueRelation(input: { issueId: string; relatedIssueId: string; type: PlannedIssueRelationType }): Promise<void> {
+  async findIssueRelation(input: PlannedIssueRelationInput): Promise<boolean> {
+    const data = await this.request<{ issue: { relations?: { nodes?: Array<{ type?: unknown; relatedIssue?: { id?: string | null } | null }> } } }>(
+      `query AgentOSIssueRelations($id: String!) {
+        issue(id: $id) {
+          relations { nodes { type relatedIssue { id } } }
+        }
+      }`,
+      { id: input.issueId }
+    );
+    return (data.issue.relations?.nodes ?? []).some(
+      (relation) => sameLinearRelationType(relation.type, input.type) && relation.relatedIssue?.id === input.relatedIssueId
+    );
+  }
+
+  async createIssueRelation(input: PlannedIssueRelationInput): Promise<void> {
     await this.request(
       `mutation AgentOSIssueRelationCreate($input: IssueRelationCreateInput!) {
         issueRelationCreate(input: $input) { success }
@@ -295,11 +315,15 @@ export class LinearClient implements IssueTracker {
     );
   }
 
-  async findIssueByPlanningMarker(markerText: string): Promise<LinearPlannedIssueReference | null> {
+  async findIssueByPlanningMarker(
+    markerText: string,
+    options: LinearPlannedIssueLookupOptions = {}
+  ): Promise<LinearPlannedIssueReference | null> {
+    const project = options.project ?? this.projectSlug;
     let after: string | null = null;
     do {
       const data: IssueConnection = await this.request<IssueConnection>(issueQuery("AgentOSIssuesByPlanningMarker"), {
-        filter: { project: projectFilter(this.projectSlug) },
+        filter: { project: projectFilter(project) },
         first: 100,
         after
       });
@@ -377,11 +401,15 @@ export class LinearClient implements IssueTracker {
     );
   }
 
-  async findIssueReference(issueIdentifierOrId: string): Promise<LinearPlannedIssueReference> {
+  async findIssueReference(
+    issueIdentifierOrId: string,
+    options: LinearPlannedIssueLookupOptions = {}
+  ): Promise<LinearPlannedIssueReference> {
     const trimmed = issueIdentifierOrId.trim();
+    const project = options.project ?? this.projectSlug;
     const filter = {
       ...(isLinearIdentifier(trimmed) ? identifierFilter(trimmed) : { id: { eq: trimmed } }),
-      project: projectFilter(this.projectSlug)
+      project: projectFilter(project)
     };
     const data = await this.request<{ issues: { nodes: unknown[] } }>(
       `query AgentOSFindIssue($filter: IssueFilter) {
@@ -569,6 +597,14 @@ function projectFilter(projectSlugOrName: string): Record<string, unknown> {
   return {
     or: [{ slugId: { eq: projectSlugOrName } }, { name: { eq: projectSlugOrName } }]
   };
+}
+
+function sameLinearRelationType(value: unknown, expected: PlannedIssueRelationType): boolean {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return normalized === expected;
 }
 
 function isBlockedByRelation(type: unknown): boolean {
