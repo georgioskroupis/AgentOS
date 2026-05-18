@@ -79,6 +79,18 @@ bin/agent-os project add my-project ../my-project --workflow WORKFLOW.md
 bin/agent-os project remove my-project
 ```
 
+### `maintenance seed`
+
+Seeds recurring AgentOS maintenance issues from `templates/maintenance/`.
+The templates cover doc gardening, stale runbooks, quality score refreshes,
+architecture drift, obsolete skills, stale PR/branch state, merge cleanup drift,
+daemon/repo SHA freshness, workspace/lock/retry drift, automation prompt drift,
+and unpublished branches or failed PR creation.
+
+```bash
+bin/agent-os maintenance seed --team <team-key-or-id> --project AgentOS
+```
+
 ### `check <repo>`
 
 Runs the target repository's `scripts/agent-check.sh` if present.
@@ -227,8 +239,8 @@ bin/agent-os linear seed-roadmap --team <team-key-or-id> --project AgentOS
 
 ### `linear seed-maintenance`
 
-Creates Backlog issues for recurring doc-gardening, quality score refresh,
-workflow naming drift, and small refactor scans.
+Compatibility alias for `maintenance seed`. Creates Backlog issues from the
+same reusable maintenance templates.
 
 ```bash
 bin/agent-os linear seed-maintenance --team <team-key-or-id> --project AgentOS

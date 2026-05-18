@@ -118,6 +118,7 @@ async function writeDocsFixture(repo: string): Promise<void> {
     "docs/quality/QUALITY_SCORE.md",
     "docs/runbooks/README.md",
     "docs/runbooks/LINEAR_SETUP.md",
+    "docs/runbooks/MAINTENANCE.md",
     "docs/runbooks/ROLLOUT.md",
     "docs/runbooks/MIGRATIONS.md",
     "docs/runbooks/DOGFOODING.md",
@@ -133,11 +134,78 @@ async function writeDocsFixture(repo: string): Promise<void> {
   await writeFile(join(repo, "docs", "README.md"), requiredDocs.map((path) => `- \`${path}\``).join("\n"), "utf8");
   for (const path of requiredDocs) {
     await mkdir(join(repo, path, ".."), { recursive: true });
-    const text = path.endsWith("SOURCE_ALIGNMENT_AUDIT.md")
-      ? "pre-dispatch reconciliation\nrecoverable partial work\ndaemon liveness\nExisting Implementation Audit\ncheck:architecture\ncheck:docs\n"
-      : `${path}\n`;
+    let text = `${path}\n`;
+    if (path.endsWith("SOURCE_ALIGNMENT_AUDIT.md")) {
+      text = "pre-dispatch reconciliation\nrecoverable partial work\ndaemon liveness\nExisting Implementation Audit\ncheck:architecture\ncheck:docs\n";
+    } else if (path.endsWith("QUALITY_SCORE.md")) {
+      text = qualityScoreFixture();
+    } else if (path.endsWith("MAINTENANCE.md")) {
+      text = "Generic maintenance prompt: do not use a hard-coded roadmap range.\n";
+    }
     await writeFile(join(repo, path), text, "utf8");
   }
+  await writeMaintenanceTemplateFixture(repo);
+}
+
+async function writeMaintenanceTemplateFixture(repo: string): Promise<void> {
+  const templates = [
+    "doc-gardening",
+    "stale-runbook-detection",
+    "quality-score-refresh",
+    "architecture-drift-scan",
+    "obsolete-skill-cleanup",
+    "stale-pr-branch-report",
+    "merged-pr-cleanup-drift-report",
+    "stale-daemon-repo-sha-report",
+    "stale-workspace-lock-retry-report",
+    "automation-prompt-drift-report",
+    "unpublished-issue-branch-failed-pr-creation-report"
+  ];
+  await mkdir(join(repo, "templates", "maintenance"), { recursive: true });
+  for (const slug of templates) {
+    const extra =
+      slug === "doc-gardening"
+        ? [
+            "more than one active issue",
+            "In Progress",
+            "Human Review",
+            "Merging",
+            "PRs merged while",
+            "checks are failing",
+            "root `main` is behind `origin/main`",
+            "daemon",
+            "stale workspace locks",
+            "dirty source state",
+            "committed work not pushed to origin",
+            "validation, handoff, or PR body artifacts",
+            "agent_pr_creation_failed",
+            "hard-coded roadmap"
+          ].join("\n")
+        : "recurring maintenance template\n";
+    await writeFile(join(repo, "templates", "maintenance", `${slug}.md`), `# ${slug}\n${extra}\n`, "utf8");
+  }
+}
+
+function qualityScoreFixture(): string {
+  return [
+    "# Quality Score",
+    "",
+    "| Area | Target |",
+    "| --- | --- |",
+    "| Context | Current source of truth |",
+    "| Validation | Local validation |",
+    "| Observability | Status and logs |",
+    "| Lifecycle | Workflow states |",
+    "| Review loops | Review and fixer loop |",
+    "| Restart recovery | Recovery behavior |",
+    "| Application legibility | App proof |",
+    "| Source alignment | Source-aligned docs |",
+    "| Merge cleanup health | Cleanup drift |",
+    "| Daemon/runtime freshness | Runtime freshness |",
+    "| Monitor automation health | Maintenance health |",
+    "| PR publication/handoff completion health | PR and handoff completion |",
+    ""
+  ].join("\n");
 }
 
 function execNode(script: string, cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {

@@ -101,9 +101,9 @@ The remaining Harness gaps are real:
 - Public defaults currently prioritize avoiding surprise side effects over
   throughput. That is acceptable for a self-hosted/public toolkit, but it must
   remain documented and configurable.
-- The quality/garbage-collection loop exists as maintenance seeding and quality
-  docs, but recurring doc-gardening and quality-score refresh are not yet an
-  always-on automation loop.
+- The quality/garbage-collection loop now has reusable maintenance templates,
+  quality docs, and a deterministic `agent-os maintenance seed` helper, but it
+  is not yet an always-on automation loop.
 
 ## 3. Symphony Alignment
 
@@ -305,7 +305,7 @@ Missing or thin:
   launches, stopped daemons, credential preflight, and a persistent local launch
   command. `status`/`inspect` report recoverable partial work, stale PR or CI
   heads, unpushed commits, and a next safe action.
-- Recurring doc-gardening and quality-score refresh loops.
+- Always-on scheduling for doc-gardening and quality-score refresh loops.
 - Template-level checklist for what every project should expose so agents can
   inspect app behavior without human narration.
 
@@ -459,7 +459,8 @@ PR G: Improve agent legibility checklist for future projects.
 - Add template/runbook guidance for startup, logs, smoke tests, metrics, traces,
   screenshots/video, browser inspection, CI logs, validation artifacts, quality
   score, doc-gardening, and cleanup.
-- Add maintenance issue templates where useful.
+- Maintain recurring issue templates for doc-gardening, quality, drift, and
+  cleanup reporting.
 - Keep checks lightweight unless a mechanical invariant is obvious.
 
 After PRs C-G, validate Stage 9A durable retry/startup reconstruction in

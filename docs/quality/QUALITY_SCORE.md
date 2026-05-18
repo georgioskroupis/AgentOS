@@ -4,13 +4,18 @@ Use this as a lightweight rubric for harnessed repositories.
 
 | Area | Target |
 | --- | --- |
-| Context | `AGENTS.md`, architecture, workflow, and product docs exist |
-| Validation | One local command verifies the common quality gates |
-| Workflow | Ticket lifecycle and handoff expectations are documented |
+| Context | `AGENTS.md`, architecture, workflow, product docs, and targeted context packs give agents the smallest current source of truth |
+| Validation | One local command verifies common gates, validation evidence records command attempts, and unchanged-head reuse is explicit |
+| Observability | `status`, `inspect`, run artifacts, sanitized logs, validation timing, CI state, and app proof point operators to the next safe action |
+| Lifecycle | Workflow states, lifecycle ownership, Linear comments, handoff outcomes, and tracker-write boundaries are documented and enforced |
+| Review loops | Required reviewers, reviewer artifacts, fixer iterations, review budgets, and human escalation paths are explicit |
+| Restart recovery | Dead/stalled runs, durable retries, startup reconstruction, stale locks, and capacity waits recover without duplicate work |
 | Application legibility | Start, health, smoke, logs, metrics, traces, CI logs, and UI/browser proof are documented when applicable |
-| Skills | Planning, implementation, bug fixing, review, CI diagnostics, QA smoke, docs, tests, and cleanup workflows are reusable and versioned |
-| Safety | Public behavior, dependencies, and security changes require justification |
-| Orchestration | Linear polling, lifecycle comments, repo-local tracker tools, retries, workspace isolation, audit/no-op handoff, Wiggum review, merge shepherding, and registry-wide scheduling/status are executable |
+| Source alignment | Harness, skills, prompts, workflow policy, and docs stay aligned with current implementation and source-faithful boundaries |
+| Merge cleanup health | Merged PRs, Linear state, durable issue state, local/remote branches, and workspace cleanup drift are operator-visible |
+| Daemon/runtime freshness | Daemon liveness, credential preflight, repo-local env, stale PID files, root `main`, `origin/main`, and daemon start SHA are checked |
+| Monitor automation health | Recurring maintenance templates detect stale docs, runbooks, architecture, skills, prompts, workspaces, locks, retries, PRs, and daemon state |
+| PR publication/handoff completion health | Local committed issue branches, pushed origin heads, validation/handoff/PR body artifacts, recorded PR metadata, and `agent_pr_creation_failed` outcomes are reconciled |
 
 ## Minimum Passing Harness
 
