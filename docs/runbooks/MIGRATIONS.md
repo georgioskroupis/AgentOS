@@ -42,6 +42,8 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
 - New harness installs should use `trust_mode: ci-locked`,
   `automation.profile: conservative`, `automation.repair_policy: conservative`,
   `github.merge_mode: manual`, and `github.allow_human_merge_override: false`.
+  That combination keeps high-throughput landing disabled: no approved-PR
+  auto-promotion toward merge readiness and no auto-merge behavior.
 - Codex App Server approval and user-input event policies should default to
   `deny`.
 - Existing dogfood workflows may opt into `trust_mode: local-trusted` and
@@ -50,6 +52,11 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   `automation.profile: high-throughput` and
   `automation.repair_policy: mechanical-first` to declare bounded repair-loop
   intent without granting additional trust capability.
+- High-throughput landing requires all three gates together: a trust mode with
+  PR/network and GitHub merge capability,
+  `automation.profile: high-throughput`, and `github.merge_mode: shepherd` or
+  `auto`. Missing gates should be treated as blocked landing instead of falling
+  back to implicit auto-ready or auto-merge behavior.
 - Workflows should declare `lifecycle.mode`. Missing values resolve to
   `orchestrator-owned` for backward compatibility. `agent-owned` is
   experimental and strict-validation-gated until tracker tools, idempotency,

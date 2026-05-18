@@ -209,6 +209,14 @@ Harness-style cheap correction loops and has configured the needed trust mode
 and tools. These automation settings do not grant network, merge, tracker, or
 approval/user-input capability by themselves.
 
+High-throughput landing is enabled only when all landing gates are explicit:
+`trust_mode` permits PR/network and GitHub merge capability,
+`automation.profile` is `high-throughput`, and `github.merge_mode` is
+`shepherd` or `auto`. Public template defaults stay
+`ci-locked`/`conservative`/`manual`, so approved PRs are not auto-promoted
+toward merge readiness and merge shepherding is not started by default. Partial
+opt-ins are blocked landing, not implicit auto-ready or auto-merge behavior.
+
 Runtime repair stays bounded by `review.max_iterations`. Automated review
 findings may trigger focused fixer turns on the existing PR. CI repair is only
 attempted under `automation.repair_policy: mechanical-first` when failed

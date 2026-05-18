@@ -7,6 +7,7 @@ import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, type PullReque
 import { readGitHubReviewContext } from "./github-context.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
 import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls, reviewTargetPullRequests } from "./issue-state.js";
+import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./landing-policy.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
@@ -681,6 +682,14 @@ export class Orchestrator {
       const repoRoot = resolve(this.options.repoRoot);
       const targetValid = await this.validateDispatchPullRequestTarget(issue, mergeTarget.url);
       if (!targetValid) return true;
+      const landing = evaluateLandingPolicyForConfig(this.config);
+      if (!landing.enabled) {
+        const message = `approved PR landing ${formatLandingPolicyResult(landing)}`;
+        await this.recordIssueState(issue, { phase: state.phase, mergeTargetUrl: mergeTarget.url, mergeTargetRole: mergeTarget.role ?? "primary", stopReason: message, nextRetryAt: undefined, retryAttempt: undefined });
+        await this.logger.write({ type: `landing_${landing.status}`, issueId: issue.id, issueIdentifier: issue.identifier, message, payload: { prUrl: mergeTarget.url, landing } });
+        await this.moveIssue(issue, this.config.tracker.reviewState);
+        return true;
+      }
       const github = new GitHubClient(this.config.github.command);
       const pr = await github.getPullRequest(mergeTarget.url, repoRoot).catch(async (error: Error) => {
         await this.logger.write({
@@ -2735,9 +2744,7 @@ function isNoPrHandoffApproved(state: IssueState): boolean { return state.phase 
 
 function isLocallySettledIssueState(state: IssueState): boolean { return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required"; }
 
-function isLocallyCompletedState(state: IssueState): boolean {
-  return state.phase === "completed" || state.outcome === "already_satisfied";
-}
+function isLocallyCompletedState(state: IssueState): boolean { return state.phase === "completed" || state.outcome === "already_satisfied"; }
 
 function completedDispatchStopReason(state: IssueState): string {
   if (state.outcome === "already_satisfied") return "work is already satisfied by prior AgentOS handoff";
@@ -2774,21 +2781,15 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function completionMarker(issue: Issue): string {
-  return issue.updated_at ?? `${issue.state}:${issue.title}`;
-}
-function displayAttempt(attempt: number | null): number {
-  return (attempt ?? 0) + 1;
-}
+function completionMarker(issue: Issue): string { return issue.updated_at ?? `${issue.state}:${issue.title}`; }
+function displayAttempt(attempt: number | null): number { return (attempt ?? 0) + 1; }
 
 function isStateIn(state: string, states: string[]): boolean {
   const normalized = state.toLowerCase();
   return states.map((item) => item.toLowerCase()).includes(normalized);
 }
 
-function runningAllowedStates(config: ServiceConfig): string[] {
-  return [...config.tracker.activeStates, config.tracker.runningState].filter((state): state is string => Boolean(state));
-}
+function runningAllowedStates(config: ServiceConfig): string[] { return [...config.tracker.activeStates, config.tracker.runningState].filter((state): state is string => Boolean(state)); }
 
 function isRecoverablePartialWorkState(state: IssueState): boolean {
   const error = state.lastError?.toLowerCase() ?? "";

@@ -251,6 +251,14 @@ escalation when the failure is tool-addressable. This profile does not grant
 network, tracker, merge, or approval capability by itself; generic MCP
 elicitation and user-input requests remain denied by `codex` policy.
 
+High-throughput landing is a separate switchboard for automatic approved-PR
+promotion toward merge readiness. It is enabled only when `trust_mode` permits
+PR/network and GitHub merge capability, `automation.profile` is
+`high-throughput`, and `github.merge_mode` is `shepherd` or `auto`.
+Conservative/manual defaults keep auto-ready and auto-merge behavior disabled;
+partial opt-ins are treated as blocked landing until the missing gate is made
+explicit.
+
 Runtime repair remains bounded by `review.max_iterations`. Automated review
 findings can trigger focused fixer turns on the existing PR, and CI failures are
 diagnosed from PR/check status plus failed GitHub Actions logs. AgentOS only
