@@ -18,6 +18,7 @@ const requiredDocs = [
   "docs/quality/QUALITY_SCORE.md",
   "docs/runbooks/README.md",
   "docs/runbooks/LINEAR_SETUP.md",
+  "docs/runbooks/MAINTENANCE.md",
   "docs/runbooks/ROLLOUT.md",
   "docs/runbooks/MIGRATIONS.md",
   "docs/runbooks/DOGFOODING.md",
@@ -34,6 +35,8 @@ checkDocsIndexCoverage();
 checkMarkdownLinks();
 checkCommandReferences();
 checkSourceAlignmentCurrency();
+checkQualityScoreRubric();
+checkMaintenanceTemplates();
 
 if (failures.length > 0) {
   for (const failure of failures) console.error(`docs: ${failure}`);
@@ -119,6 +122,76 @@ function checkSourceAlignmentCurrency() {
   }
 }
 
+function checkQualityScoreRubric() {
+  const text = read("docs/quality/QUALITY_SCORE.md");
+  if (text == null) return;
+  for (const area of [
+    "Context",
+    "Validation",
+    "Observability",
+    "Lifecycle",
+    "Review loops",
+    "Restart recovery",
+    "Application legibility",
+    "Source alignment",
+    "Merge cleanup health",
+    "Daemon/runtime freshness",
+    "Monitor automation health",
+    "PR publication/handoff completion health"
+  ]) {
+    if (!new RegExp(`\\|\\s*${escapeRegExp(area)}\\s*\\|`, "i").test(text)) {
+      fail(`docs/quality/QUALITY_SCORE.md missing rubric area ${area}`, "Keep the quality score structurally aligned with AgentOS maintenance health categories.");
+    }
+  }
+}
+
+function checkMaintenanceTemplates() {
+  const requiredTemplates = [
+    "templates/maintenance/doc-gardening.md",
+    "templates/maintenance/stale-runbook-detection.md",
+    "templates/maintenance/quality-score-refresh.md",
+    "templates/maintenance/architecture-drift-scan.md",
+    "templates/maintenance/obsolete-skill-cleanup.md",
+    "templates/maintenance/stale-pr-branch-report.md",
+    "templates/maintenance/merged-pr-cleanup-drift-report.md",
+    "templates/maintenance/stale-daemon-repo-sha-report.md",
+    "templates/maintenance/stale-workspace-lock-retry-report.md",
+    "templates/maintenance/automation-prompt-drift-report.md",
+    "templates/maintenance/unpublished-issue-branch-failed-pr-creation-report.md"
+  ];
+  const contents = [];
+  for (const path of requiredTemplates) {
+    const text = read(path);
+    if (text == null) {
+      fail(`missing maintenance template ${path}`, "Restore the recurring maintenance issue template or update the maintenance seed contract.");
+      continue;
+    }
+    contents.push(text);
+  }
+  contents.push(read("docs/runbooks/MAINTENANCE.md") ?? "");
+  const combined = contents.join("\n").toLowerCase();
+  for (const snippet of [
+    "more than one active issue",
+    "in progress",
+    "human review",
+    "merging",
+    "prs merged while",
+    "checks are failing",
+    "root `main` is behind `origin/main`",
+    "daemon",
+    "stale workspace locks",
+    "dirty source state",
+    "committed work not pushed to origin",
+    "validation, handoff, or pr body artifacts",
+    "agent_pr_creation_failed",
+    "hard-coded roadmap"
+  ]) {
+    if (!combined.includes(snippet)) {
+      fail(`maintenance templates missing health-check signal: ${snippet}`, "Keep the recurring health-check templates generic and broad enough for AgentOS drift reporting.");
+    }
+  }
+}
+
 function topLevelCliCommands(text) {
   const commands = [
     ...[...text.matchAll(/\bprogram\s*(?:\.\s*|\n\s*\.\s*)command\("([^"]+)"/g)].map((match) => match[1]),
@@ -178,6 +251,10 @@ function read(path) {
   if (!existsSync(fullPath)) return null;
   if (!statSync(fullPath).isFile()) return null;
   return readFileSync(fullPath, "utf8");
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function fail(message, fix) {

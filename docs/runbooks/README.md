@@ -16,3 +16,4 @@ Key runbooks:
 - `GITHUB_CI.md`
 - `MIGRATIONS.md`
 - `DOGFOODING.md`
+- `MAINTENANCE.md`

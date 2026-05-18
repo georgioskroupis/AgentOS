@@ -19,6 +19,7 @@ Start with:
 - `docs/planning/SOURCE_ALIGNMENT_AUDIT.md`
 - `docs/runbooks/README.md`
 - `docs/runbooks/LINEAR_SETUP.md`
+- `docs/runbooks/MAINTENANCE.md`
 - `docs/runbooks/ROLLOUT.md`
 - `docs/runbooks/MIGRATIONS.md`
 - `docs/runbooks/DOGFOODING.md`

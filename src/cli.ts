@@ -15,6 +15,7 @@ import {
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
 import { daemonLaunchCommand, getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
+import { seedMaintenanceIssues } from "./maintenance.js";
 import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
 import { formatOperatorRecoveryRecord, recordOperatorRecovery } from "./recovery.js";
@@ -168,6 +169,18 @@ project
   .action(async (name, options) => {
     await removeProject(name, options.registry);
     console.log(`project removed: ${name}`);
+  });
+
+const maintenance = program.command("maintenance").description("Seed recurring AgentOS maintenance work");
+
+maintenance
+  .command("seed")
+  .requiredOption("--team <team>", "Linear team id or key")
+  .option("--project <name>", "Linear project name", "AgentOS")
+  .option("--state <name>", "Linear state for generated maintenance issues", "Backlog")
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .action(async (options) => {
+    await runMaintenanceSeedCommand(options);
   });
 
 const orchestrator = program.command("orchestrator").description("Run the Symphony-style scheduler");
@@ -508,24 +521,7 @@ linear
   .option("--state <name>", "Linear state for generated maintenance issues", "Backlog")
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .action(async (options) => {
-    const client = await linearClientFromWorkflow(options.workflow);
-    const teams = await client.listTeams();
-    const team = teams.find((candidate) => candidate.id === options.team || candidate.key === options.team);
-    if (!team) throw new Error(`Linear team not found: ${options.team}`);
-    const states = await client.listWorkflowStates(team.id);
-    const state = states.find((candidate) => candidate.name.toLowerCase() === String(options.state).toLowerCase());
-    if (!state) throw new Error(`Linear state not found for team ${team.key}: ${options.state}`);
-    const project = (await client.findProject(options.project)) ?? (await client.createProject(options.project, team.id));
-    for (const item of maintenanceIssues) {
-      const issue = await client.createIssue({
-        teamId: team.id,
-        title: item.title,
-        description: item.description,
-        projectId: project.id,
-        stateId: state.id
-      });
-      console.log(`created maintenance issue: ${issue.identifier} ${issue.title}`);
-    }
+    await runMaintenanceSeedCommand(options);
   });
 
 program
@@ -580,6 +576,18 @@ async function withProjectRunnerLock<T>(repoRoot: string, owner: string, action:
 async function linearClientFromWorkflow(workflowPath: string): Promise<LinearClient> {
   const { config } = await workflowConfigFromRepoEnv(workflowPath);
   return new LinearClient(config.tracker);
+}
+
+async function runMaintenanceSeedCommand(options: { team: string; project: string; state: string; workflow: string }): Promise<void> {
+  const client = await linearClientFromWorkflow(options.workflow);
+  const result = await seedMaintenanceIssues(client, {
+    team: options.team,
+    project: options.project,
+    state: options.state
+  });
+  for (const issue of result.issues) {
+    console.log(`created maintenance issue: ${issue.identifier} ${issue.title}`);
+  }
 }
 
 async function workflowConfigFromRepoEnv(workflowPath: string): Promise<{
@@ -682,55 +690,6 @@ const roadmapTitles = [
   "Implement observability",
   "Dogfood AgentOS on its own Linear issues",
   "Write rollout docs"
-];
-
-const maintenanceIssues = [
-  {
-    title: "Doc-gardening pass",
-    description: [
-      "Goal: scan repository docs for stale workflow, command, architecture, and product guidance.",
-      "",
-      "Acceptance criteria:",
-      "- Compare docs against current code behavior.",
-      "- Update only stale or missing source-of-truth docs.",
-      "- Run `npm run agent-check`.",
-      "- Handoff includes changed docs, validation, and follow-up issues."
-    ].join("\n")
-  },
-  {
-    title: "Refresh quality score",
-    description: [
-      "Goal: refresh `docs/quality/QUALITY_SCORE.md` against current harness capabilities.",
-      "",
-      "Acceptance criteria:",
-      "- Review context, validation, workflow, skills, safety, and orchestration rows.",
-      "- Add concrete gaps as follow-up Linear issues instead of expanding scope.",
-      "- Run `npm run agent-check`."
-    ].join("\n")
-  },
-  {
-    title: "Detect workflow naming drift",
-    description: [
-      "Goal: find stale state names, canceled spelling variants, and duplicate workflow concepts.",
-      "",
-      "Acceptance criteria:",
-      "- Run or improve executable drift checks.",
-      "- Remove stale `Ready` wording from docs/templates if found.",
-      "- Preserve `Canceled` as the only spelling.",
-      "- Run `npm run agent-check`."
-    ].join("\n")
-  },
-  {
-    title: "Scan for small refactor candidates",
-    description: [
-      "Goal: identify duplicate helpers, stale adapters, or small code paths that harm agent legibility.",
-      "",
-      "Acceptance criteria:",
-      "- Keep any implementation changes small and behavior-preserving.",
-      "- File follow-up issues for broad refactors.",
-      "- Run `npm run agent-check`."
-    ].join("\n")
-  }
 ];
 
 function roadmapDescription(index: number): string {

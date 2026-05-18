@@ -28,6 +28,8 @@ layers:
 - `src/context-budget.ts` estimates prompt size, records included-section
   diagnostics, and enforces per-turn/cumulative context budgets before
   implementation, reviewer, and fixer turns.
+- `src/maintenance.ts` loads reusable maintenance issue templates and seeds
+  recurring Linear maintenance work through the CLI.
 - `src/scope-report.ts` builds pre-dispatch reports and dispatch advice from issue state,
   recent Linear comments, trusted human decisions, run artifacts, runtime state,
   PR metadata, validation/handoff evidence, and workspace recovery diagnostics.
@@ -76,6 +78,7 @@ src/linear.ts integrates with Linear GraphQL.
 src/github.ts shells through gh for PR status and squash merge workflows.
 src/context-pack.ts builds bounded implementation, review, fix, and CI-repair prompt packs from issue text, authoritative decisions, selected PR metadata, diffs, findings, validation, and sanitized logs.
 src/context-budget.ts records shared context diagnostics and enforces configured prompt budgets for long implementation/review/fix runs.
+src/maintenance.ts loads templates/maintenance issue templates and backs agent-os maintenance seed plus the linear seed-maintenance compatibility path.
 src/scope-report.ts builds pre-dispatch scope reports and dispatch advice for active candidate issues.
 src/runtime-state.ts persists active-run, retry-queue, claimed-issue, daemon freshness, and startup recovery state.
 src/runner/app-server.ts targets Codex App Server through JSON-RPC.
@@ -84,5 +87,5 @@ src/registry-orchestrator.ts coordinates registry-wide orchestration across mult
 scripts/agent-check.sh is the primary project harness check and validates required files, shell syntax, harness contract, typecheck, tests, and build when node_modules exists.
 GitHub Actions CI is present and documented as running npm ci followed by npm run agent-check.
 
-Public surfaces: package.json scripts, package.json bin entrypoint agent-os, bin/agent-os CLI commands, src/ modules and exported TypeScript APIs, templates/base-harness/ installed harness files, templates/profiles/ profile-specific docs and quality guidance, skills/*/SKILL.md reusable workflows, scripts/agent-check.sh, scripts/check-harness-contract.mjs, scripts/agent-smoke-test.sh, scripts/agent-quality-report.sh, scripts/agent-capture-logs.sh, WORKFLOW.md orchestration configuration and prompt contract, ARCHITECTURE.md repository architecture contract, docs/ product, architecture, runbook, decision, security, generated, and quality documentation, .github/workflows/ci.yml.
+Public surfaces: package.json scripts, package.json bin entrypoint agent-os, bin/agent-os CLI commands, src/ modules and exported TypeScript APIs, templates/base-harness/ installed harness files, templates/profiles/ profile-specific docs and quality guidance, templates/maintenance/ recurring issue templates, skills/*/SKILL.md reusable workflows, scripts/agent-check.sh, scripts/check-harness-contract.mjs, scripts/agent-smoke-test.sh, scripts/agent-quality-report.sh, scripts/agent-capture-logs.sh, WORKFLOW.md orchestration configuration and prompt contract, ARCHITECTURE.md repository architecture contract, docs/ product, architecture, runbook, decision, security, generated, and quality documentation, .github/workflows/ci.yml.
 <!-- AGENTOS:END -->
