@@ -85,6 +85,87 @@ describe("issue inspection", () => {
     expect(output).toContain("npm run agent-check: exitCode 1");
   });
 
+  it("summarizes context-only decision authority failures with operator next actions", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-decision-authority-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "needs-input",
+          lastHumanDecision: {
+            type: "fix_findings",
+            source: "linear-comment",
+            actor: "Supervisor",
+            trusted: false,
+            commentId: "comment-context-only",
+            decidedAt: "2026-05-17T00:00:00.000Z"
+          },
+          updatedAt: "2026-05-17T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-1");
+
+    expect(output).toContain("Decision authority: context-only");
+    expect(output).toContain("assign the issue to this actor");
+    expect(output).toContain("lifecycle.trusted_decision_actors");
+  });
+
+  it("marks stale planning scope reports as historical once an authoritative continuation is active", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-historical-scope-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "streaming-turn",
+          lifecycleStatus: "human_continuation",
+          lastHumanDecision: {
+            type: "fix_findings",
+            source: "linear-comment",
+            trusted: true,
+            commentId: "comment-authoritative",
+            decidedAt: "2026-05-17T00:10:00.000Z"
+          },
+          scopeReport: {
+            recordedAt: "2026-05-17T00:00:00.000Z",
+            scopeSize: "large",
+            likelyLarge: true,
+            score: 12,
+            largeThreshold: 5,
+            mediumThreshold: 2,
+            scoringTextSource: "issue_active_sections",
+            scoringReasons: [{ score: 7, reason: "touches 7 likely subsystem(s)" }],
+            ignoredSections: [],
+            planningReentry: { status: "missing", reason: "prior planning pause needs an authoritative decision", decisionCommentId: null, activeScopePresent: false, activeScopeBounded: false, decompositionEvidencePresent: false },
+            dispatchAdvice: { shouldBlock: true, reason: "planning re-entry needs bounded active scope", nextSafeAction: "record trusted Active-Scope" }
+          },
+          updatedAt: "2026-05-17T00:10:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-1");
+
+    expect(output).toContain("Scope report: historical/non-blocking large");
+    expect(output).toContain("prior dispatch advice is stale");
+    expect(output).not.toContain("Scope dispatch advice: blocked");
+  });
+
   it("labels validation, CI, and review artifact freshness against the selected head", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-head-freshness-"));
     const repo = join(root, "alpha");
@@ -585,6 +666,40 @@ describe("issue inspection", () => {
     expect(output).not.toContain("AG-2: status warning");
     expect(output).not.toContain("AG-3: status warning");
     expect(output).toContain("AG-1: local full-suite validation timing failure recorded separately; focused test passed; GitHub CI passed at abc123");
+  });
+
+  it("summarizes plugin/cache stderr warning noise without dumping raw logs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-warning-noise-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "needs-input",
+          updatedAt: "2026-05-17T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await new JsonlLogger(repo).write({
+      type: "review_codex_stderr",
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      message: "Plugin manifest warning noisy details that should not appear in status output"
+    });
+
+    const statusOutput = await getStatus(repo);
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+
+    expect(statusOutput).toContain("AG-1: runtime warning noise - 1 plugin/cache stderr warning event(s) recorded");
+    expect(statusOutput).not.toContain("noisy details");
+    expect(inspectOutput).toContain("Runtime warning summary: 1 plugin/cache stderr warning event(s) recorded");
+    expect(inspectOutput).not.toContain("noisy details");
   });
 
   it("does not recommend redispatch after old fix-findings once a PR is approved", async () => {

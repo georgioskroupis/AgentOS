@@ -163,7 +163,9 @@ workspaces, unpushed branch heads, stale PR heads, and CI evidence recorded for
 a different local head, including a next safe action for the operator. Terminal
 state contradictions and post-merge cleanup drift are surfaced as status
 warnings so operators can reconcile durable state without starting duplicate
-work.
+work. They also surface context-budget estimates, validation reuse/budget
+evidence, Codex capacity waits, daemon freshness, and concise plugin/cache
+warning summaries without dumping raw prompt or stderr content.
 
 ### `recovery record <issue>`
 

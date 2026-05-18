@@ -9,8 +9,9 @@ import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceReco
 import { formatReviewRunnerFailures } from "./review.js";
 import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking } from "./review-budget.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
+import { contextBudgetDetails, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
-import type { IssueState, ScopeReportState, ValidationCommandState, ValidationState } from "./types.js";
+import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
 
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
   const root = resolve(repo);
@@ -33,7 +34,7 @@ export async function getStatus(repo = process.cwd(), limit = 20): Promise<strin
       ? entries
           .map((entry) => {
             const issue = entry.issueIdentifier ? ` ${entry.issueIdentifier}` : "";
-            const message = entry.message ? ` - ${entry.message}` : "";
+            const message = entry.message ? ` - ${recentEventMessage(entry)}` : "";
             return `${entry.timestamp} ${entry.type}${issue}${message}`;
           })
           .join("\n")
@@ -118,7 +119,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     formatSplitRecommendation(state?.splitRecommendation, { advisory: state?.reviewStatus === "approved" }),
     state?.reviewRunnerFailures?.length ? `Review runner failures:\n${formatReviewRunnerFailures(state.reviewRunnerFailures)}` : "Review runner failures: none recorded",
     humanDecisionDetails(state),
-    scopeReportDetails(state?.scopeReport),
+    scopeReportDetails(state),
     appProofDetails(state),
     operatorRecoveryDetails(state),
     shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
@@ -126,6 +127,8 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
     state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
     statusDiagnostics.length ? `Status warnings:\n${statusDiagnostics.map(formatIssueStatusDiagnostic).join("\n")}` : "Status warnings: none",
+    runtimeWarningDetails(entries, identifier),
+    contextBudgetDetails(state),
     validationDetails(state),
     state?.lastError ? `Last error: ${state.lastError}` : null,
     state?.stopReason ? `Stop reason: ${state.stopReason}` : null,
@@ -134,7 +137,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     "",
     "Recent events:",
     entries.length
-      ? entries.map((entry) => `${entry.timestamp} ${entry.type}${entry.message ? ` - ${entry.message}` : ""}`).join("\n")
+      ? entries.map((entry) => `${entry.timestamp} ${entry.type}${entry.message ? ` - ${recentEventMessage(entry)}` : ""}`).join("\n")
       : "No recent events for this issue."
   ].filter((line): line is string => line !== null);
   return lines.join("\n");
@@ -215,6 +218,7 @@ function validationDetails(state: IssueState | null): string {
     validation.failedHistoricalAttempts?.length ? `Failed historical attempts:\n${commandLines(validation.failedHistoricalAttempts)}` : null,
     headLines.length ? `Evidence heads:\n${headLines.join("\n")}` : null,
     validation.githubCi ? `GitHub CI: ${validation.githubCi.status}${validation.githubCi.headSha ? ` (${validation.githubCi.headSha})` : ""}` : null,
+    validation.budget ? `Validation budget: ${validation.budget.status} - ${validation.budget.summary}` : null,
     validation.errors?.length ? `Validation errors:\n${validation.errors.map((error) => `- ${error}`).join("\n")}` : null
   ].filter((line): line is string => line !== null);
   return lines.join("\n");
@@ -227,6 +231,7 @@ function humanDecisionDetails(state: IssueState | null): string | null {
     `Human decision: ${decision.type}`,
     `Decision source: ${decision.source}`,
     `Decision authority: ${isAuthoritativeHumanDecision(decision) ? "authoritative" : "context-only"}`,
+    !isAuthoritativeHumanDecision(decision) ? "Decision authority next action: assign the issue to this actor, add the actor to lifecycle.trusted_decision_actors, or provide a new authoritative structured decision." : null,
     decision.actor ? `Decision actor: ${decision.actor}` : null,
     `Decision time: ${decision.decidedAt}`,
     decision.prHeadSha ? `Decision PR head SHA: ${decision.prHeadSha}` : null,
@@ -235,32 +240,6 @@ function humanDecisionDetails(state: IssueState | null): string | null {
     decision.findings ? `Decision findings: ${decision.findings}` : null
   ].filter((line): line is string => line !== null);
   return lines.join("\n");
-}
-
-function scopeReportDetails(report: ScopeReportState | null | undefined): string {
-  if (!report) return "Scope report: none recorded";
-  const lines = [
-    `Scope report: ${report.scopeSize}${report.likelyLarge ? " (likely large)" : ""}`,
-    `Scope score: ${report.score == null ? "unclear" : `${report.score}/${report.largeThreshold}`} (medium threshold ${report.mediumThreshold}, large threshold ${report.largeThreshold})`,
-    `Scope scoring source: ${report.scoringTextSource}`,
-    report.scoringReasons.length ? `Scope scoring reasons:\n${formatScopeScoreReasons(report.scoringReasons)}` : "Scope scoring reasons: none",
-    report.ignoredSections.length ? `Ignored scope sections: ${report.ignoredSections.join(", ")}` : null,
-    `Planning re-entry: ${report.planningReentry.status} - ${report.planningReentry.reason}`,
-    `Scope dispatch advice: ${report.dispatchAdvice.shouldBlock ? "blocked" : "allowed"}${report.dispatchAdvice.reason ? ` - ${report.dispatchAdvice.reason}` : ""}`,
-    `Scope next safe action: ${report.dispatchAdvice.nextSafeAction}`
-  ].filter((line): line is string => line !== null);
-  return lines.join("\n");
-}
-
-function scopeReportStatusSuffix(report: ScopeReportState | null | undefined): string {
-  if (!report) return "";
-  const score = report.score == null ? "unclear" : `${report.score}/${report.largeThreshold}`;
-  const reasons = report.scoringReasons.length ? `; reasons ${report.scoringReasons.map((reason) => `+${reason.score} ${reason.reason}`).join("; ")}` : "";
-  return `; scope score ${score}; source ${report.scoringTextSource}${reasons}`;
-}
-
-function formatScopeScoreReasons(reasons: ScopeReportState["scoringReasons"]): string {
-  return reasons.map((reason) => `- +${reason.score} ${reason.reason}`).join("\n");
 }
 
 function appProofDetails(state: IssueState | null): string | null {
@@ -325,6 +304,7 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if (statusDiagnostics.length) return `status warning - ${statusDiagnostics[0].message}; next: ${statusDiagnostics[0].nextAction}`;
   const withEvidence = (line: string) => appendEvidenceStatus(issue, line);
   if (runtimeActive) return withEvidence(`running (${runtimeActive.phase ?? issue.phase ?? "active"})`);
+  if (retry && (retry.errorCategory === "capacity-wait" || issue.errorCategory === "capacity-wait")) return withEvidence(`capacity wait until ${retry.dueAt}; next: wait for the Codex usage reset time before redispatch`);
   if (retry) return withEvidence(`retrying after ${retry.error ?? issue.lastError ?? "unknown error"}; next retry ${retry.dueAt}`);
   if (isReviewSplitRecommendationBlocking(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
   const latestRunnerFailure = latestReviewRunnerFailure(issue);
@@ -351,7 +331,10 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
     return withEvidence(`waiting on Human Review${issue.lastError ? ` - ${issue.lastError}` : ""}`);
   }
   if (issue.phase === "merge") return withEvidence("waiting on merge");
+  if (issue.nextRetryAt && issue.errorCategory === "capacity-wait") return withEvidence(`capacity wait until ${issue.nextRetryAt}; next: wait for the Codex usage reset time before redispatch`);
   if (issue.nextRetryAt) return withEvidence(`retrying after ${issue.lastError ?? "unknown error"}; next retry ${issue.nextRetryAt}`);
+  const warningNoise = runtimeWarningSummary(logs, issue.issueIdentifier);
+  if (warningNoise) return withEvidence(`runtime warning noise - ${warningNoise.summary}; next: ${warningNoise.nextAction}`);
   if (issue.validation) {
     const validation = validationStatusPhrase(issue.validation);
     if (validation) return withEvidence(validation);
@@ -398,6 +381,8 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (recovery?.recoverable) return recovery.nextSafeAction;
   const terminalAction = cleanTerminalNextSafeAction(issue);
   if (terminalAction) return terminalAction;
+  if (issue.contextBudget?.status === "exceeded") return "reduce prompt context by narrowing Active-Scope, pruning large artifacts, or splitting follow-up work before redispatch";
+  if (issue.errorCategory === "capacity-wait" && issue.nextRetryAt) return `wait until ${issue.nextRetryAt}, then let AgentOS redispatch without incrementing the normal retry budget`;
   const decision = latestAuthoritativeHumanDecision([
     ...(issue.humanDecisions ?? []),
     ...(issue.lastHumanDecision ? [issue.lastHumanDecision] : [])
@@ -477,6 +462,12 @@ const TERMINAL_LIFECYCLE_STATUSES = new Set<NonNullable<IssueState["lifecycleSta
 function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null, retry: RuntimeRetryEntry | null = null, active: RuntimeActiveRun | null = null): IssueStatusDiagnostic[] {
   const diagnostics: IssueStatusDiagnostic[] = [];
   const terminal = isTerminalIssueState(issue);
+  if (issue.contextBudget?.status === "exceeded") {
+    diagnostics.push({
+      message: `context budget exceeded: ${issue.contextBudget.exceededReasons?.join("; ") ?? issue.contextBudget.summary}`,
+      nextAction: "reduce prompt context by narrowing Active-Scope, pruning large artifacts, or splitting follow-up work before redispatch"
+    });
+  }
   if (terminal && active) {
     diagnostics.push({
       message: `active-run drift: terminal issue still has active runtime state${active.runId ? ` for ${active.runId}` : ""}${active.phase ? ` (${active.phase})` : ""}`,

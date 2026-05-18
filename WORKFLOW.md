@@ -34,6 +34,15 @@ agent:
   max_turns: 20
   max_retry_attempts: 3
   max_retry_backoff_ms: 300000
+context_budget:
+  enabled: true
+  max_prompt_tokens: 200000
+  max_cumulative_tokens: 1000000
+  large_section_tokens: 8000
+validation_budget:
+  enabled: true
+  full_validation_command: npm run agent-check
+  max_full_validation_runs_per_head: 1
 codex:
   command: npx -y @openai/codex@0.125.0 app-server
   approval_policy: never
@@ -239,6 +248,20 @@ classifies the failure as mechanical with logs available and the configured
 `trust_mode` permits PR/network repair; missing logs, ambiguous requirements,
 denied approval/user-input, trust-mode capability gaps, or repeated findings
 escalate to `Human Review`.
+
+Context and validation budgets are enforced before expensive repeat work:
+
+- `context_budget` records estimated prompt size, cumulative run prompt volume,
+  large included sections, and why each large section was included for
+  implementation, reviewer, and fixer turns. Exceeded budgets stop the turn for
+  operator action instead of retrying the same oversized prompt.
+- `validation_budget` allows one full `npm run agent-check` proof per unchanged
+  head by default. Additional focused checks may be recorded separately, and
+  matching prior full-suite evidence may be reused when the repo head is
+  unchanged.
+- Codex usage-limit errors with explicit reset times are classified as
+  `capacity-wait`; AgentOS schedules the next attempt at the reset time without
+  consuming the normal retry budget.
 
 ## Target Repository Lifecycle
 

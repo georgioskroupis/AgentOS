@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { exists, readText } from "./fs-utils.js";
-import type { Issue, ReviewFinding, ValidationState } from "./types.js";
+import type { Issue, ReviewFinding, ValidationBudgetConfig, ValidationState } from "./types.js";
 import { findingHash } from "./review.js";
 
 export interface ValidationEvidence {
@@ -47,6 +47,7 @@ export async function verifyValidationEvidence(input: {
   selectedHeadSha?: string | null;
   allowReusableRunEvidence?: boolean;
   expectedCommands?: string[];
+  validationBudget?: ValidationBudgetConfig;
   now?: Date;
 }): Promise<ValidationEvidenceCheck> {
   const now = input.now ?? new Date();
@@ -90,7 +91,7 @@ export async function verifyValidationEvidence(input: {
   if (evidence.finalResult) validateFinalResult(evidence.finalResult, errors, now);
   if (evidence.githubCi) validateGithubCi(evidence.githubCi, errors);
 
-  const expectedCommands = input.expectedCommands ?? defaultExpectedCommands;
+  const expectedCommands = input.expectedCommands ?? [input.validationBudget?.fullValidationCommand ?? defaultExpectedCommands[0]];
   const acceptedCommands: ValidationCommandEvidence[] = [];
   const acceptedCommandSet = new Set<string>();
   const failedHistoricalAttempts: ValidationCommandEvidence[] = [];
@@ -127,10 +128,22 @@ export async function verifyValidationEvidence(input: {
   const workspaceHead = await gitHead(input.workspacePath);
   const selectedHeadSha = input.selectedHeadSha ?? null;
   const reusableHead = workspaceHead ?? selectedHeadSha;
-  if (input.runId && evidence.runId !== input.runId && !isReusableRunEvidence(evidence, reusableHead, input.allowReusableRunEvidence === true)) {
+  const reusedRunEvidence = Boolean(input.runId && evidence.runId !== input.runId && isReusableRunEvidence(evidence, reusableHead, input.allowReusableRunEvidence === true));
+  if (input.runId && evidence.runId !== input.runId && !reusedRunEvidence) {
     errors.push(`runId mismatch: expected ${input.runId}`);
   }
   if (workspaceHead && evidence.repoHead !== workspaceHead) errors.push(`repoHead mismatch: expected ${workspaceHead}`);
+  const budget = validationBudgetState({
+    config: input.validationBudget,
+    fullValidationCommand: expectedCommands[0],
+    acceptedCommands,
+    repoHead: evidence.repoHead ?? reusableHead ?? null,
+    currentRunId: input.runId ?? null,
+    evidenceRunId: evidence.runId ?? null,
+    reused: reusedRunEvidence,
+    evaluatedAt: checkedAt
+  });
+  if (budget.status === "exceeded") errors.push(budget.summary);
 
   return {
     state: {
@@ -143,10 +156,43 @@ export async function verifyValidationEvidence(input: {
       additionalPassingCommands: additionalPassingCommands.length ? additionalPassingCommands : undefined,
       failedHistoricalAttempts,
       ...(evidence.githubCi ? { githubCi: evidence.githubCi } : {}),
+      budget,
       errors: errors.length ? errors : undefined,
       checkedAt
     },
     evidence
+  };
+}
+
+function validationBudgetState(input: {
+  config?: ValidationBudgetConfig;
+  fullValidationCommand: string;
+  acceptedCommands: ValidationCommandEvidence[];
+  repoHead: string | null;
+  currentRunId: string | null;
+  evidenceRunId: string | null;
+  reused: boolean;
+  evaluatedAt: string;
+}): NonNullable<ValidationState["budget"]> {
+  const enabled = input.config?.enabled ?? true;
+  const maxFullValidationRunsPerHead = input.config?.maxFullValidationRunsPerHead ?? 1;
+  const fullValidationRunsForHead = input.acceptedCommands.filter((command) => command.name === input.fullValidationCommand).length;
+  const exceeded = enabled && fullValidationRunsForHead > maxFullValidationRunsPerHead;
+  const status = exceeded ? "exceeded" : input.reused ? "reused" : "fresh";
+  return {
+    status,
+    evaluatedAt: input.evaluatedAt,
+    fullValidationCommand: input.fullValidationCommand,
+    maxFullValidationRunsPerHead,
+    fullValidationRunsForHead,
+    repoHead: input.repoHead,
+    currentRunId: input.currentRunId,
+    evidenceRunId: input.evidenceRunId,
+    summary: exceeded
+      ? `${input.fullValidationCommand}: full validation rerun budget exceeded for repoHead ${input.repoHead ?? "unknown"} (${fullValidationRunsForHead}/${maxFullValidationRunsPerHead}); reuse unchanged-head evidence or record focused checks separately`
+      : input.reused
+        ? `Reused passing ${input.fullValidationCommand} evidence from matching repoHead ${input.repoHead ?? "unknown"}; duplicate full validation was not required.`
+        : `Fresh ${input.fullValidationCommand} evidence recorded for repoHead ${input.repoHead ?? "unknown"}.`
   };
 }
 

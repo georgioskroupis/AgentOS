@@ -73,7 +73,13 @@ Use this as a lightweight rubric for harnessed repositories.
 - Implementation re-entry, automated review, fixer, and mechanical CI repair
   turns receive targeted context packs with bounded issue text, selected PR
   metadata, diff excerpts, current findings, validation summaries, sanitized
-  logs, and artifact references instead of historic transcripts.
+  logs, and artifact references instead of historic transcripts. Context-budget
+  diagnostics estimate prompt size, list included large sections with reasons,
+  and enforce configured per-turn/cumulative limits.
+- Validation evidence distinguishes focused checks, full local harness proof,
+  matching unchanged-head reuse, and CI proof. Duplicate full-suite runs for the
+  same head are budgeted so small follow-up fixes do not repeat expensive
+  `npm run agent-check` work without new information.
 - GitHub CI exists and the merge shepherd requires at least one successful check
   before merging the selected primary target and moving `Merging` issues to
   `Done`; post-merge cleanup failures are operator-visible warnings, not

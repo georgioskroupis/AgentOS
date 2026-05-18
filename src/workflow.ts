@@ -6,7 +6,7 @@ import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, readText } from "./fs-utils.js";
 import { parseLifecycleConfig, validateLifecycleConfig } from "./lifecycle.js";
 import { defaultThreadSandboxForTrustMode, defaultTurnSandboxPolicyForTrustMode, parseGitHubMergeMode, parseTrustMode, trustCapabilities, validateTrustCompatibility } from "./trust.js";
-import type { CodexEventPolicy, Issue, ReviewBudgetConfig, ServiceConfig, WorkflowDefinition } from "./types.js";
+import type { CodexEventPolicy, ContextBudgetConfig, Issue, ReviewBudgetConfig, ServiceConfig, ValidationBudgetConfig, WorkflowDefinition } from "./types.js";
 
 const defaultActiveStates = ["Todo", "In Progress"];
 const defaultTerminalStates = ["Closed", "Canceled", "Duplicate", "Done"];
@@ -54,6 +54,8 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
   const workspace = objectAt(cfg, "workspace");
   const hooks = objectAt(cfg, "hooks");
   const agent = objectAt(cfg, "agent");
+  const contextBudget = objectAt(cfg, "context_budget");
+  const validationBudget = objectAt(cfg, "validation_budget");
   const codex = objectAt(cfg, "codex");
   const github = objectAt(cfg, "github");
   const workflowDir = dirname(workflow.workflowPath);
@@ -104,6 +106,8 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       maxRetryBackoffMs: positiveIntAt(agent, "max_retry_backoff_ms", 300_000),
       maxConcurrentAgentsByState: stateConcurrencyMap(agent.max_concurrent_agents_by_state)
     },
+    contextBudget: contextBudgetConfigAt(contextBudget),
+    validationBudget: validationBudgetConfigAt(validationBudget),
     codex: {
       command: stringAt(codex, "command", DEFAULT_CODEX_APP_SERVER_COMMAND),
       approvalPolicy: codex.approval_policy,
@@ -195,6 +199,15 @@ export function validateWorkflowDefinition(workflow: WorkflowDefinition, env: No
   const automation = validateAutomationConfig(config.automation);
   errors.push(...automation.errors);
   warnings.push(...automation.warnings);
+  if (config.contextBudget.enabled) {
+    if (config.contextBudget.maxPromptTokens <= 0) errors.push("context_budget.max_prompt_tokens must be positive when context budget is enabled");
+    if (config.contextBudget.maxCumulativeTokens <= 0) errors.push("context_budget.max_cumulative_tokens must be positive when context budget is enabled");
+    if (config.contextBudget.largeSectionTokens <= 0) errors.push("context_budget.large_section_tokens must be positive when context budget is enabled");
+  }
+  if (config.validationBudget.enabled) {
+    if (!config.validationBudget.fullValidationCommand.trim()) errors.push("validation_budget.full_validation_command is required when validation budget is enabled");
+    if (config.validationBudget.maxFullValidationRunsPerHead < 1) errors.push("validation_budget.max_full_validation_runs_per_head must be at least 1 when validation budget is enabled");
+  }
 
   if (strict) {
     if (!config.tracker.apiKey) errors.push("tracker.api_key did not resolve from the environment");
@@ -283,6 +296,23 @@ function reviewBudgetConfigAt(value: Record<string, unknown>, maxIterations: num
     repeatedBroadCategoryThreshold: nonNegativeIntAt(value, "repeated_broad_category_threshold", 2),
     lateNewBlockingFindingAfterApproval: booleanAt(value, "late_new_blocking_finding_after_approval", true),
     broadCategories: stringListAt(value, "broad_categories", ["architecture", "lifecycle", "orchestration", "status", "workflow"])
+  };
+}
+
+function contextBudgetConfigAt(value: Record<string, unknown>): ContextBudgetConfig {
+  return {
+    enabled: booleanAt(value, "enabled", true),
+    maxPromptTokens: positiveIntAt(value, "max_prompt_tokens", 200_000),
+    maxCumulativeTokens: positiveIntAt(value, "max_cumulative_tokens", 1_000_000),
+    largeSectionTokens: positiveIntAt(value, "large_section_tokens", 8_000)
+  };
+}
+
+function validationBudgetConfigAt(value: Record<string, unknown>): ValidationBudgetConfig {
+  return {
+    enabled: booleanAt(value, "enabled", true),
+    fullValidationCommand: stringAt(value, "full_validation_command", "npm run agent-check"),
+    maxFullValidationRunsPerHead: positiveIntAt(value, "max_full_validation_runs_per_head", 1)
   };
 }
 

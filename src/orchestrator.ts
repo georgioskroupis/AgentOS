@@ -1,5 +1,7 @@
 import { join, resolve } from "node:path";
 import { exists } from "./fs-utils.js";
+import { detectCapacityWait } from "./capacity-wait.js";
+import { contextBudgetExceededMessage } from "./context-budget.js";
 import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPreflightResult, type RepoEnvLoadResult } from "./env.js";
 import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, type PullRequestStatus } from "./github.js";
 import { readGitHubReviewContext } from "./github-context.js";
@@ -15,7 +17,10 @@ import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
+import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
+import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
+import { capacityWaitScheduledCommentBody, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody } from "./orchestrator-lifecycle-comments.js";
 import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
@@ -34,7 +39,7 @@ import { logPreDispatchScopeReport, scopeReportStateFromReport, type PreDispatch
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 export interface OrchestratorOptions {
   repoRoot: string;
   workflowPath: string;
@@ -273,6 +278,20 @@ export class Orchestrator {
         payload: { phase, runId }
       })
       .catch(() => undefined);
+  }
+
+  private async recordContextBudget(issue: Issue, runId: string | null | undefined, kind: ContextBudgetTurnKind, prompt: string): Promise<ContextBudgetState> {
+    return recordContextBudgetForIssue({
+      repoRoot: resolve(this.options.repoRoot),
+      config: this.config.contextBudget,
+      issue,
+      runId,
+      kind,
+      prompt,
+      logger: this.logger,
+      recordIssueState: (target, patch) => this.recordIssueState(target, patch),
+      writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry)
+    });
   }
 
   private async phaseTimingRunId(issue: Issue, explicitRunId?: string | null): Promise<string | null> {
@@ -1105,7 +1124,7 @@ export class Orchestrator {
         if (handoff) {
           const validationVerificationStartedAt = new Date().toISOString();
           try {
-            validation = await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId, allowReusableRunEvidence: true });
+            validation = await verifyValidationEvidence({ issue, handoff, workspacePath: workspace.path, runId, allowReusableRunEvidence: true, validationBudget: this.config.validationBudget });
             await this.writePhaseTimingEvent(issue, {
               phase: "validation",
               status: validation.state.status === "passed" ? "completed" : "failed",
@@ -1221,6 +1240,10 @@ export class Orchestrator {
       await this.recordIssueState(issue, { phase: "prompt" });
       const prompt = await this.implementationPrompt(issue, attempt, turnNumber, runId);
       await this.runArtifacts.writePrompt(runId, prompt);
+      const promptBudget = await this.recordContextBudget(issue, runId, "implementation", prompt);
+      if (promptBudget.status === "exceeded") {
+        return { status: "canceled", error: contextBudgetExceededMessage(promptBudget) };
+      }
       await this.recordIssueState(issue, { phase: "streaming-turn" });
       const implementationTiming = await this.startRunPhase(runId, issue, "implementation", `implementation turn ${turnNumber}`, { turnNumber, maxTurns: this.config.agent.maxTurns });
       try {
@@ -1759,7 +1782,8 @@ export class Orchestrator {
         reviewTargetUrls,
         reviewRunnerFailures,
         reviewBudget: budgetDecision.budget,
-        splitRecommendation: budgetDecision.splitRecommendation ?? undefined
+        splitRecommendation: budgetDecision.splitRecommendation ?? undefined,
+        ...(reviewerResult.contextBudget ? { contextBudget: reviewerResult.contextBudget } : {})
       });
 
       await this.logger.write({
@@ -1861,18 +1885,32 @@ export class Orchestrator {
       let fixResult: AgentRunResult;
       try {
         const fixContextKind = blocking.some((finding) => finding.reviewer === "checks") ? "ci-repair" : "fixer";
+        const fixerPrompt = fixPrompt({
+          issue,
+          prUrl: reviewPr,
+          reviewTargets: reviewTargetUrls,
+          iteration,
+          findings: blocking,
+          handoffPath: join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
+          feedbackSummary: githubContext.feedback,
+          contextPack: buildTargetedContextPack({ kind: fixContextKind, issue, state: latestState, pullRequests: githubContext.entries, findings: blocking, validation: latestState?.validation, feedback: githubContext.feedback, artifactRefs: [join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`)], runId, iteration })
+        });
+        const fixerBudget = await this.recordContextBudget(issue, runId, "fixer", fixerPrompt);
+        if (fixerBudget.status === "exceeded") {
+          latestState = await this.recordIssueState(issue, {
+            phase: "fix",
+            reviewStatus: "human_required",
+            contextBudget: fixerBudget,
+            lastError: contextBudgetExceededMessage(fixerBudget),
+            errorCategory: "fix"
+          });
+          await this.commentIssue(issue, `### AgentOS review fix needs human judgment\n\nThe focused fixer prompt exceeded the configured context budget.\n\n- PR: ${reviewPr}\n- ${fixerBudget.summary}`);
+          if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, "failed", { iteration, reason: "context_budget_exceeded" });
+          return latestState;
+        }
         fixResult = await this.runner.run({
           issue,
-          prompt: fixPrompt({
-            issue,
-            prUrl: reviewPr,
-            reviewTargets: reviewTargetUrls,
-            iteration,
-            findings: blocking,
-            handoffPath: join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
-            feedbackSummary: githubContext.feedback,
-            contextPack: buildTargetedContextPack({ kind: fixContextKind, issue, state: latestState, pullRequests: githubContext.entries, findings: blocking, validation: latestState?.validation, feedback: githubContext.feedback, artifactRefs: [join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`)], runId, iteration })
-          }),
+          prompt: fixerPrompt,
           attempt,
           workspace,
           config: this.config,
@@ -1935,7 +1973,7 @@ export class Orchestrator {
           });
           return latestState;
         }
-        const validation = await verifyValidationEvidence({ issue, handoff: updatedHandoff, workspacePath: workspace.path, runId, selectedHeadSha: joinedHeadShas(githubContext.entries), allowReusableRunEvidence: true });
+        const validation = await verifyValidationEvidence({ issue, handoff: updatedHandoff, workspacePath: workspace.path, runId, selectedHeadSha: joinedHeadShas(githubContext.entries), allowReusableRunEvidence: true, validationBudget: this.config.validationBudget });
         const updated = issueStateFromHandoff(issue, updatedHandoff);
         const fixPatch = { phase: "fix" as const, reviewIteration: iteration, lastFixedSha: joinedHeadShas(githubContext.entries), reviewTargetMode, validation: validation.state };
         if (updated) {
@@ -2320,6 +2358,20 @@ export class Orchestrator {
 
   private async handleFailedRun(issue: Issue, workspace: Workspace, previousAttempt: number | null, error: string, runId: string): Promise<void> {
     const safeError = summarizeText(error).inline;
+    const capacityWait = detectCapacityWait(safeError);
+    if (capacityWait) {
+      const retry = await this.scheduleCapacityWait(issue, previousAttempt, safeError, capacityWait.resetAt, runId, workspace);
+      await this.recordIssueState(issue, {
+        lastError: safeError,
+        errorCategory: "capacity-wait",
+        lifecycleStatus: "implementation_failure",
+        stopReason: `capacity_wait until ${capacityWait.resetAt}: ${safeError}`,
+        retryAttempt: retry.attempt,
+        nextRetryAt: new Date(retry.dueAtMs).toISOString()
+      });
+      await this.markLinearCapacityWaitScheduled(issue, workspace, retry, capacityWait.reason);
+      return;
+    }
     if (isHumanInputStop(error)) {
       this.completedMarkers.set(issue.id, completionMarker(issue));
       await this.writeRunEvent(runId, {
@@ -2414,6 +2466,21 @@ export class Orchestrator {
     return retry;
   }
 
+  private async scheduleCapacityWait(issue: Issue, previousAttempt: number | null, error: string | null, resetAt: string, runId?: string, workspace?: Workspace): Promise<RetryEntry> {
+    return scheduleCapacityWaitRetry({
+      issue,
+      previousAttempt,
+      error,
+      resetAt,
+      runId,
+      workspace,
+      retries: this.retries,
+      runtimeState: this.runtimeState,
+      maxAttempts: this.config.agent.maxRetryAttempts,
+      writePhaseTimingEvent: (target, event) => this.writePhaseTimingEvent(target, event)
+    });
+  }
+
   private async finishRetryBackoff(retry: RetryEntry, issue: Issue, status: Exclude<RunTimingStatus, "running" | "waiting">, reason: string, finishedAt = new Date().toISOString()): Promise<void> {
     await this.finishOpenRunPhase(retry.runId, issue, "retry-backoff", status, finishedAt, retryBackoffFinishMetadata(retry, reason));
   }
@@ -2421,20 +2488,7 @@ export class Orchestrator {
   private async markLinearStarted(issue: Issue, workspace: Workspace, attempt: number | null): Promise<boolean> {
     const moveResult = await this.moveIssue(issue, this.config.tracker.runningState);
     if (moveResult === "blocked") return false;
-    await this.commentIssue(
-      issue,
-      [
-        "### AgentOS started",
-        "",
-        "The Symphony loop picked up this issue and started a Codex run.",
-        "",
-        `- Attempt: ${displayAttempt(attempt)}`,
-        `- Workspace: \`${workspace.path}\``,
-        `- Branch: \`agent/${workspace.workspaceKey}\``,
-        "- Logs: `.agent-os/runs/agent-os.jsonl`"
-      ].join("\n"),
-      "run_started"
-    );
+    await this.commentIssue(issue, runStartedCommentBody(workspace, displayAttempt(attempt)), "run_started");
     return true;
   }
 
@@ -2497,20 +2551,11 @@ export class Orchestrator {
   }
 
   private async markLinearRetryScheduled(issue: Issue, workspace: Workspace, retry: RetryEntry): Promise<void> {
-    await this.commentIssue(
-      issue,
-      [
-        "### AgentOS retry scheduled",
-        "",
-        "Codex did not complete the run successfully. The Symphony loop will retry automatically.",
-        "",
-        `- Next retry: ${retry.attempt} of ${this.config.agent.maxRetryAttempts}`,
-        `- Retry after: ${new Date(retry.dueAtMs).toISOString()}`,
-        `- Workspace: \`${workspace.path}\``,
-        `- Error: ${retry.error ?? "unknown"}`
-      ].join("\n"),
-      "retry_scheduled"
-    );
+    await this.commentIssue(issue, retryScheduledCommentBody(workspace, retry, this.config.agent.maxRetryAttempts), "retry_scheduled");
+  }
+
+  private async markLinearCapacityWaitScheduled(issue: Issue, workspace: Workspace, retry: RetryEntry, reason: string): Promise<void> {
+    await this.commentIssue(issue, capacityWaitScheduledCommentBody(workspace, retry, this.config.agent.maxRetryAttempts, reason), "capacity_wait_scheduled");
   }
 
   private async markLinearFailed(issue: Issue, workspace: Workspace, attempt: number | null, error: string): Promise<void> {
@@ -2520,21 +2565,12 @@ export class Orchestrator {
     }).catch(() => null);
     await this.commentIssue(
       issue,
-      [
-        "### AgentOS needs human input",
-        "",
-        "Codex could not complete this issue within the configured retry budget.",
-        "",
-        `- Last attempt: ${displayAttempt(attempt)}`,
-        `- Workspace: \`${workspace.path}\``,
-        `- Error: ${error}`,
-        recovery ? "" : null,
-        recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null,
-        "",
-        "Please adjust the issue, repo, or workflow instructions before returning it to an active state."
-      ]
-        .filter((line): line is string => line !== null)
-        .join("\n"),
+      runFailedCommentBody({
+        workspace,
+        attemptLabel: displayAttempt(attempt),
+        error,
+        recoveryText: recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null
+      }),
       "run_failed"
     );
     await this.moveIssue(issue, this.config.tracker.needsInputState);
@@ -2550,17 +2586,7 @@ export class Orchestrator {
   }
 
   private async markLinearRecoveryNeeded(issue: Issue, recovery: WorkspaceRecoveryDiagnostics): Promise<void> {
-    await this.commentIssue(
-      issue,
-      [
-        "### AgentOS recovery needed",
-        "",
-        "AgentOS found recoverable partial work and refused to start a fresh implementation turn.",
-        "",
-        formatRecoveryDiagnostics(recovery).join("\n")
-      ].join("\n"),
-      "recovery_needed"
-    );
+    await this.commentIssue(issue, recoveryNeededCommentBody(formatRecoveryDiagnostics(recovery).join("\n")), "recovery_needed");
     await this.moveIssue(issue, this.config.tracker.needsInputState);
     await this.writePhaseTimingEvent(issue, {
       phase: "needs-input",
@@ -2576,21 +2602,7 @@ export class Orchestrator {
   }
 
   private async markLinearNeedsInput(issue: Issue, workspace: Workspace, attempt: number | null, error: string): Promise<void> {
-    await this.commentIssue(
-      issue,
-      [
-        "### AgentOS needs human input",
-        "",
-        "Codex requested elicitation, approval, user input, or interactive confirmation. Current policy denies those requests by default, so AgentOS stopped the run instead of waiting indefinitely.",
-        "",
-        `- Attempt: ${displayAttempt(attempt)}`,
-        `- Workspace: \`${workspace.path}\``,
-        `- Error: ${error}`,
-        "",
-        "Please handle the requested input manually before returning this issue to an active state."
-      ].join("\n"),
-      "run_needs_input"
-    );
+    await this.commentIssue(issue, needsInputCommentBody(workspace, displayAttempt(attempt), error), "run_needs_input");
     await this.moveIssue(issue, this.config.tracker.needsInputState);
     await this.writePhaseTimingEvent(issue, {
       phase: "needs-input",
@@ -2607,18 +2619,7 @@ export class Orchestrator {
     const marker = `${issue.updated_at ?? ""}:${reason}`;
     if (this.mergeWaitingMarkers.get(issue.id) === marker) return;
     this.mergeWaitingMarkers.set(issue.id, marker);
-    await this.commentIssue(
-      issue,
-      [
-        "### AgentOS merge waiting",
-        "",
-        "The issue is in `Merging`, but the pull request is not ready yet.",
-        "",
-        `- PR: ${prUrl}`,
-        `- Reason: ${reason}`
-      ].join("\n"),
-      "merge_waiting"
-    );
+    await this.commentIssue(issue, mergeWaitingCommentBody(prUrl, reason), "merge_waiting");
     await this.logger.write({
       type: "merge_waiting",
       issueId: issue.id,

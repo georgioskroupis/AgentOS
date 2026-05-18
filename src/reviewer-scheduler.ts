@@ -1,12 +1,13 @@
 import { basename, dirname, join } from "node:path";
 import { buildTargetedContextPack } from "./context-pack.js";
+import { contextBudgetExceededMessage, evaluateContextBudget } from "./context-budget.js";
 import { ensureDir } from "./fs-utils.js";
 import type { GitHubReviewContext } from "./github-context.js";
 import type { JsonlLogger } from "./logging.js";
 import { joinedHeadShas } from "./orchestrator-review-helpers.js";
-import { blockingFindings, reviewArtifactPath, reviewArtifactRelativePath, reviewerPrompt } from "./review.js";
+import { blockingFindings, reviewArtifactPath, reviewArtifactRelativePath, reviewerPrompt, reviewRunnerFailureArtifact, writeReviewArtifact } from "./review.js";
 import { runReviewerWithArtifactRetry, type ReviewerRunOutcome } from "./reviewer-runner.js";
-import type { AgentRunner, Issue, IssueState, ReviewRunnerFailure, ReviewStateReviewer, ServiceConfig, Workspace } from "./types.js";
+import type { AgentRunner, ContextBudgetState, Issue, IssueState, ReviewRunnerFailure, ReviewStateReviewer, ServiceConfig, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 
 interface OrderedReviewerOutcome extends ReviewerRunOutcome {
@@ -19,6 +20,7 @@ export interface ReviewerIterationResult {
   reviewRunnerFailures: ReviewRunnerFailure[];
   terminalReviewerFailure: ReviewRunnerFailure | null;
   tokenTotal: number;
+  contextBudget: ContextBudgetState | null;
 }
 
 export async function runReviewerIteration(input: {
@@ -43,6 +45,7 @@ export async function runReviewerIteration(input: {
   const reviewerConcurrency = reviewerConcurrencyFor(input.config, input.reviewers.length);
   const parallelReviewers = reviewerConcurrency > 1;
   const headSha = joinedHeadShas(input.githubContext.entries);
+  let latestContextBudget = input.latestState?.contextBudget ?? null;
   const runReviewerBatch = async (batchReviewers: string[], stopOnTerminal: boolean): Promise<OrderedReviewerOutcome[]> => {
     const runReviewer = async (reviewer: string): Promise<OrderedReviewerOutcome> => {
       const canonicalArtifactRelativePath = reviewArtifactRelativePath(input.issue.identifier, input.iteration, reviewer);
@@ -76,6 +79,45 @@ export async function runReviewerIteration(input: {
           iteration: input.iteration
         })
       });
+      const contextBudget = evaluateContextBudget({
+        config: input.config.contextBudget,
+        kind: "reviewer",
+        prompt,
+        runId: input.runId,
+        previous: latestContextBudget
+      });
+      latestContextBudget = contextBudget;
+      await input.logger.write({
+        type: "context_budget",
+        issueId: input.issue.id,
+        issueIdentifier: input.issue.identifier,
+        message: contextBudget.summary,
+        payload: contextBudget
+      });
+      if (contextBudget.status === "exceeded") {
+        const failure: ReviewRunnerFailure = {
+          reviewer,
+          iteration: input.iteration,
+          attempt: 1,
+          maxAttempts: 1,
+          classification: "non_mechanical",
+          reason: "context_budget_exceeded",
+          message: contextBudgetExceededMessage(contextBudget),
+          artifactPath: canonicalArtifactPath,
+          retryable: false,
+          exhausted: false,
+          recordedAt: new Date().toISOString()
+        };
+        await writeReviewArtifact(canonicalArtifactPath, reviewRunnerFailureArtifact(failure));
+        await input.logger.write({
+          type: "review_runner_failed",
+          issueId: input.issue.id,
+          issueIdentifier: input.issue.identifier,
+          message: `${reviewer}: ${failure.reason}`,
+          payload: failure
+        });
+        return { artifact: null, canonicalArtifactPath, failures: [failure], terminalFailure: failure, tokenTotal: 0, reviewer };
+      }
       const outcome = await runReviewerWithArtifactRetry({
         issue: input.issue,
         prompt,
@@ -151,7 +193,8 @@ export async function runReviewerIteration(input: {
     reviewerStates: reviewerStatesFor(reviewerOutcomes, input.iteration),
     reviewRunnerFailures: reviewerOutcomes.flatMap((outcome) => outcome.failures),
     terminalReviewerFailure: terminalReviewerFailures[0] ?? null,
-    tokenTotal: reviewerOutcomes.reduce((total, outcome) => total + outcome.tokenTotal, 0)
+    tokenTotal: reviewerOutcomes.reduce((total, outcome) => total + outcome.tokenTotal, 0),
+    contextBudget: latestContextBudget
   };
 }
 

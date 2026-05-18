@@ -60,6 +60,8 @@ describe("workspace", () => {
         maxRetryBackoffMs: 1000,
         maxConcurrentAgentsByState: new Map()
       },
+      contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
+      validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
       codex: {
         command: "codex app-server",
         approvalEventPolicy: "deny",
@@ -163,6 +165,8 @@ function serviceConfig(root: string): ServiceConfig {
       maxRetryBackoffMs: 1000,
       maxConcurrentAgentsByState: new Map()
     },
+    contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
+    validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
     codex: {
       command: "codex app-server",
       approvalEventPolicy: "deny",
