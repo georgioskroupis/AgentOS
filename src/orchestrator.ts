@@ -135,9 +135,9 @@ export class Orchestrator {
     validateDispatchConfig(this.config);
     retryDispatched = await this.dispatchDueRetries(remainingDispatchCapacity());
     dispatched += retryDispatched;
-    if (this.config.github.mergeMode !== "manual") {
-      await this.shepherdMergingIssues();
-    }
+    const landing = evaluateLandingPolicyForConfig(this.config);
+    if (landing.enabled) await this.shepherdMergingIssues();
+    else if (this.config.github.mergeMode !== "manual") await this.logger.write({ type: `landing_${landing.status}`, message: `merge shepherd ${formatLandingPolicyResult(landing)}`, payload: { landing } });
     const candidates = await this.tracker.fetchCandidates(this.config.tracker.activeStates);
     for (const issue of candidates) {
       if (remainingDispatchCapacity() <= 0) break;

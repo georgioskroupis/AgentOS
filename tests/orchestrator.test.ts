@@ -4676,7 +4676,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -4794,6 +4794,56 @@ describe("orchestrator", () => {
     expect(events.filter((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "ci-wait")).toHaveLength(2);
   });
 
+  it("does not start merge shepherding when landing gates are only partially enabled", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-landing-blocked-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const queriedStates: string[][] = [];
+    const logger = new JsonlLogger(repo);
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        queriedStates.push(states);
+        if (states.includes("Merging")) throw new Error("merge shepherd should not start without all landing gates");
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move() {
+        throw new Error("issue should not move when landing is blocked");
+      },
+      async comment() {
+        throw new Error("issue should not be commented when landing is blocked globally");
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called when landing is blocked");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(queriedStates).toEqual([["Ready"]]);
+    const logs = await logger.tail(50);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        type: "landing_blocked",
+        message: expect.stringContaining("automation.profile=conservative is not high-throughput")
+      })
+    );
+  });
+
   it("does not fail merge shepherding when prior run timing artifacts are missing", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-missing-run-"));
     await initGitRemote(repo);
@@ -4801,7 +4851,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -4879,7 +4929,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -4983,7 +5033,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await new IssueStateStore(repo).write({
@@ -5043,7 +5093,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await writeFile(
@@ -5130,7 +5180,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await new IssueStateStore(repo).write({
@@ -5176,7 +5226,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await new IssueStateStore(repo).write({
@@ -5256,7 +5306,7 @@ describe("orchestrator", () => {
 
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  delete_branch: true\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  delete_branch: true\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -5333,7 +5383,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -5416,7 +5466,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -5516,7 +5566,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -5574,7 +5624,7 @@ describe("orchestrator", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -5643,7 +5693,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -5711,7 +5761,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -5814,7 +5864,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -7349,7 +7399,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -7421,7 +7471,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -7513,7 +7563,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -7605,7 +7655,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -7727,7 +7777,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -7870,7 +7920,7 @@ describe("orchestrator", () => {
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: true\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: true\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
