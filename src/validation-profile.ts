@@ -119,6 +119,7 @@ function validationRelevantConfig(config: ServiceConfig, riskProfile: string): u
     validationBudget: config.validationBudget,
     codex: {
       command: config.codex.command,
+      approvalPolicy: config.codex.approvalPolicy,
       approvalEventPolicy: config.codex.approvalEventPolicy,
       userInputPolicy: config.codex.userInputPolicy,
       threadSandbox: config.codex.threadSandbox,

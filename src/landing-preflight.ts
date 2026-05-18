@@ -150,24 +150,26 @@ function landingHeadFreshness(
     reasons.push("GitHub checks are failing for the selected PR head");
     guidance.push("repair the failing checks before landing");
   }
-  if (validation?.budget?.status === "reused") {
+  if (validation) {
     const expectedProfile = validationReuseProfileForConfig(config);
     const profile = compareValidationReuseProfiles(expectedProfile, validation.reuseProfile);
     if (profile.status !== "matched") {
       reasons.push(
         profile.status === "missing"
-          ? "reused validation evidence is missing workflow/config, trust, automation, and risk profile metadata"
-          : `reused validation evidence profile is stale: ${profile.reasons.join("; ")}`
+          ? "validation evidence is missing workflow/config, trust, automation, and risk profile metadata"
+          : `validation evidence profile is stale: ${profile.reasons.join("; ")}`
       );
       guidance.push("rerun validation under the current workflow/config, trust, automation, and risk profile before landing");
     }
-    const localFinishedAt = latestCommandFinishedAt(validation, validation.budget.fullValidationCommand);
-    const localFreshnessError = validationTimestampFreshnessError(`${validation.budget.fullValidationCommand} reuse`, localFinishedAt, now);
+    const fullValidationCommand = validation.budget?.fullValidationCommand ?? config.validationBudget.fullValidationCommand;
+    const validationLabel = validation.budget?.status === "reused" ? `${fullValidationCommand} reuse` : fullValidationCommand;
+    const localFinishedAt = latestCommandFinishedAt(validation, fullValidationCommand);
+    const localFreshnessError = validationTimestampFreshnessError(validationLabel, localFinishedAt, now);
     if (localFreshnessError) {
       reasons.push(localFreshnessError);
       guidance.push("rerun local validation before landing");
     }
-    const ciFreshnessError = validationTimestampFreshnessError("GitHub CI reuse", ci?.checkedAt, now);
+    const ciFreshnessError = validationTimestampFreshnessError(ci?.reused ? "GitHub CI reuse" : "GitHub CI", ci?.checkedAt, now);
     if (ciFreshnessError) {
       reasons.push(ciFreshnessError);
       guidance.push("refresh GitHub Actions status for the selected PR head before landing");

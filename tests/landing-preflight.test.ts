@@ -96,8 +96,19 @@ describe("landing preflight", () => {
     expect(patched.validation?.githubCi?.reused).toBe(true);
   });
 
-  it("blocks reused validation evidence when stale or recorded for another config and risk profile", () => {
+  it("blocks validation evidence when stale or missing current profile metadata", () => {
     const serviceConfig = config();
+    const missingProfileState = issueState({ validationHead: "abc123", ciHead: "abc123", ciStatus: "passed" });
+    delete missingProfileState.validation!.reuseProfile;
+    const missingProfile = evaluateLandingPreflight({
+      config: serviceConfig,
+      daemon: { startedAt: "2026-05-18T00:00:00.000Z", workflowPath: "WORKFLOW.md", freshnessStatus: "fresh" },
+      credentials: credentials(),
+      state: missingProfileState,
+      pullRequest: pullRequest({ headSha: "abc123", checks: "passed" }),
+      requireFreshness: true,
+      now: LANDING_NOW
+    });
     const stale = evaluateLandingPreflight({
       config: serviceConfig,
       daemon: { startedAt: "2026-05-18T00:00:00.000Z", workflowPath: "WORKFLOW.md", freshnessStatus: "fresh" },
@@ -133,12 +144,22 @@ describe("landing preflight", () => {
       now: LANDING_NOW
     });
 
+    expect(missingProfile.status).toBe("blocked");
+    expect(missingProfile.reasons.join("\n")).toContain("validation evidence is missing workflow/config");
     expect(stale.status).toBe("blocked");
     expect(stale.reasons.join("\n")).toContain("npm run agent-check reuse evidence is stale");
     expect(stale.reasons.join("\n")).toContain("GitHub CI reuse evidence is stale");
     expect(changedProfile.status).toBe("blocked");
     expect(changedProfile.reasons.join("\n")).toContain("workflow/config hash changed");
     expect(changedProfile.reasons.join("\n")).toContain("risk profile changed");
+  });
+
+  it("changes the reuse profile when codex approval policy changes", () => {
+    const baseline = config();
+    const changed = config();
+    changed.codex = { ...changed.codex, approvalPolicy: "on-request" };
+
+    expect(validationReuseProfileForConfig(changed).workflowConfigHash).not.toBe(validationReuseProfileForConfig(baseline).workflowConfigHash);
   });
 });
 
@@ -207,7 +228,8 @@ function issueState(input: { validationHead: string; ciHead: string | null; ciSt
       finalStatus: "passed",
       repoHead: input.validationHead,
       checkedAt: "2026-05-18T00:00:00.000Z",
-      githubCi: { status: input.ciStatus, headSha: input.ciHead, checkedAt: "2026-05-18T00:00:00.000Z" }
+      githubCi: { status: input.ciStatus, headSha: input.ciHead, checkedAt: "2026-05-18T00:00:00.000Z" },
+      reuseProfile: validationReuseProfileForConfig(config())
     },
     updatedAt: "2026-05-18T00:00:00.000Z"
   };
@@ -221,7 +243,7 @@ function reusedIssueState(
   state.validation = {
     ...state.validation!,
     acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: input.validationFinishedAt, finishedAt: input.validationFinishedAt }],
-    githubCi: { status: "passed", headSha: input.ciHead, checkedAt: input.ciCheckedAt },
+    githubCi: { status: "passed", headSha: input.ciHead, checkedAt: input.ciCheckedAt, reused: true },
     budget: {
       status: "reused",
       evaluatedAt: "2026-05-18T00:07:00.000Z",
