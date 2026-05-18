@@ -46,13 +46,16 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
 
   const runtime = await new RuntimeStateStore(root).read();
   if (runtime.daemon?.preflightStatus && runtime.daemon.preflightStatus !== "ready") {
+    const githubAuthMissing = runtime.daemon.credentialPreflight?.github.auth === "missing";
     return {
       status: "blocked_preflight",
       pid,
       pidPath,
       logPath,
       message: runtime.daemon.preflightMessage ?? runtime.daemon.preflightStatus,
-      nextSafeAction: runtime.daemon.repoEnvPath
+      nextSafeAction: githubAuthMissing
+        ? `run gh auth status for the configured github.command, then authenticate and restart the daemon with: ${launchCommand}`
+        : runtime.daemon.repoEnvPath
         ? `fix ${runtime.daemon.repoEnvPath}, then restart the daemon with: ${launchCommand}`
         : `provide required environment, then restart the daemon with: ${launchCommand}`
     };

@@ -9,6 +9,7 @@ import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceReco
 import { formatReviewRunnerFailures } from "./review.js";
 import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking } from "./review-budget.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
+import { daemonCredentialDetails, daemonRuntimeDetails } from "./status-daemon.js";
 import { contextBudgetDetails, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationCommandState, ValidationState } from "./types.js";
@@ -25,6 +26,7 @@ export async function getStatus(repo = process.cwd(), limit = 20): Promise<strin
   const lines = [
     `Daemon: ${daemon.status} - ${daemon.message}`,
     `Next safe action: ${daemon.nextSafeAction}`,
+    ...daemonRuntimeDetails(runtime.daemon),
     "",
     "Issues:",
     issueLines.length ? issueLines.join("\n") : "No issues recorded.",
@@ -81,6 +83,7 @@ export async function getRegistryStatus(registryPath = "agent-os.yml", limit = 2
     if (runtime.daemon?.preflightStatus) {
       lines.push(`  Daemon preflight: ${runtime.daemon.preflightStatus}${runtime.daemon.preflightMessage ? ` - ${runtime.daemon.preflightMessage}` : ""}`);
       if (runtime.daemon.repoEnvStatus) lines.push(`  Repo env: ${runtime.daemon.repoEnvStatus}${runtime.daemon.repoEnvPath ? ` (${runtime.daemon.repoEnvPath})` : ""}`);
+      lines.push(...daemonCredentialDetails(runtime.daemon).map((line) => `  ${line}`));
     }
 
     const recoveries = await Promise.all(issues.map((issue) => inspectWorkspaceRecovery(paths.repoRoot, issue).catch(() => null)));
@@ -124,6 +127,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     operatorRecoveryDetails(state),
     shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
     state ? `Next safe action: ${statusDiagnostics[0]?.nextAction ?? nextSafeAction(state, recovery)}` : null,
+    ...daemonRuntimeDetails(runtime.daemon),
     state?.mergeTargetUrl ? `Merge target: ${state.mergeTargetUrl}${state.mergeTargetRole ? ` (${state.mergeTargetRole})` : ""}` : null,
     state?.mergeCleanupWarnings?.length ? `Merge cleanup warnings:\n${state.mergeCleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : null,
     statusDiagnostics.length ? `Status warnings:\n${statusDiagnostics.map(formatIssueStatusDiagnostic).join("\n")}` : "Status warnings: none",

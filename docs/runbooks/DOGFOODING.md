@@ -42,9 +42,20 @@ AGENT_OS_SOURCE_REPO=/path/to/agent-os
 orchestration, and setup load this file before workflow environment resolution.
 Startup health reports whether the file is missing, malformed, stale, or
 loaded, and the daemon refuses to dispatch when required Linear credentials,
-GitHub merge command configuration, or Codex command configuration are missing.
+GitHub merge command/authentication, or Codex command configuration are missing.
 Use `bin/agent-os status --registry` or `bin/agent-os inspect <issue> --repo .`
 to see the recorded preflight and next safe action.
+
+High-throughput landing also runs a deterministic freshness preflight before
+approved PR promotion or merge shepherding. The preflight reports tracker
+credential availability, GitHub command/auth availability, Codex command
+availability, daemon main freshness, selected PR head, validation `repoHead`,
+and GitHub check head. It blocks landing when the daemon was started before
+`main` advanced, validation was recorded for a different head, the check head is
+missing/stale/failing, or required credentials are unavailable. Operator actions
+are intentionally mechanical: authenticate `gh`, set `LINEAR_API_KEY`, restart
+the daemon from current `main`, rerun validation on the selected PR head, or
+wait for GitHub Actions to finish on that head.
 
 For local continuous dogfood, use the durable launch helper instead of a bare
 `nohup` process:

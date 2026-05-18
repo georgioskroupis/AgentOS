@@ -8,6 +8,7 @@ import { readGitHubReviewContext } from "./github-context.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
 import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls, reviewTargetPullRequests } from "./issue-state.js";
 import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./landing-policy.js";
+import { landingFreshnessPatch } from "./landing-preflight.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { LinearClient } from "./linear.js";
@@ -17,6 +18,7 @@ import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequest
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
+import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment, runLandingShepherdGate } from "./orchestrator-landing-preflight.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
@@ -103,7 +105,7 @@ export class Orchestrator {
     this.repoEnv = resolvedEnv.repoEnv;
     this.workflow = await loadWorkflow(this.options.workflowPath);
     this.config = resolveServiceConfig(this.workflow, resolvedEnv.env);
-    this.preflight = daemonPreflight(this.config, this.repoEnv);
+    this.preflight = await daemonPreflightWithLandingCredentialCheck(this.config, daemonPreflight(this.config, this.repoEnv), resolve(this.options.repoRoot));
     if (this.options.maxConcurrentAgents != null && Number.isInteger(this.options.maxConcurrentAgents) && this.options.maxConcurrentAgents > 0) {
       this.config.agent.maxConcurrentAgents = Math.min(this.config.agent.maxConcurrentAgents, this.options.maxConcurrentAgents);
     }
@@ -135,9 +137,7 @@ export class Orchestrator {
     validateDispatchConfig(this.config);
     retryDispatched = await this.dispatchDueRetries(remainingDispatchCapacity());
     dispatched += retryDispatched;
-    const landing = evaluateLandingPolicyForConfig(this.config);
-    if (landing.enabled) await this.shepherdMergingIssues();
-    else if (this.config.github.mergeMode !== "manual") await this.logger.write({ type: `landing_${landing.status}`, message: `merge shepherd ${formatLandingPolicyResult(landing)}`, payload: { landing } });
+    await runLandingShepherdGate({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, logger: this.logger, shepherd: () => this.shepherdMergingIssues() });
     const candidates = await this.tracker.fetchCandidates(this.config.tracker.activeStates);
     for (const issue of candidates) {
       if (remainingDispatchCapacity() <= 0) break;
@@ -704,6 +704,9 @@ export class Orchestrator {
         await this.classifyAlreadyMergedIssue(issue, state, "dispatch skipped because approved PR is already merged");
         return true;
       }
+      const refreshedState = pr ? await this.recordIssueState(issue, landingFreshnessPatch(state, pr, this.config.github.requireChecks)) : state;
+      const landingBlock = pr && refreshedState ? await approvedPrLandingPreflightBlock({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, state: refreshedState, pullRequest: pr, mergeTarget }) : null;
+      if (landingBlock) { await this.recordIssueState(issue, landingBlock.statePatch); await this.logger.write({ type: `landing_preflight_${landingBlock.status}`, issueId: issue.id, issueIdentifier: issue.identifier, message: landingBlock.message, payload: landingBlock.payload }); if (landingBlock.status === "blocked") await this.moveIssue(issue, this.config.tracker.reviewState); return true; }
       const readiness = pr ? evaluateMergeReadiness(pr, this.config.github.requireChecks) : null;
       const message = readiness?.ready
         ? "approved PR is merge-ready; moved issue to Merging instead of redispatching implementation"
@@ -2078,17 +2081,7 @@ export class Orchestrator {
     try {
       if (state && !mergePr && isNoPrHandoffApproved(state) && mergeEligiblePrs.length === 0) {
         timingMetadata = { result: "approved no-PR handoff" };
-        await this.commentIssue(
-          issue,
-          [
-            "### AgentOS merge shepherd",
-            "",
-            "No merge-eligible pull request output was selected for this issue. Treating the Linear `Merging` move as approval of the handoff without a merge.",
-            "",
-            state.prs?.length ? formatPullRequestTargets(state.prs) : "- PRs: none",
-            "- Result: moving issue to Done"
-          ].join("\n")
-        );
+        await this.commentIssue(issue, noPrMergeApprovalComment(state));
         await this.moveIssue(issue, this.config.github.doneState);
         await this.logger.write({
           type: "merge_no_pr_succeeded",
@@ -2128,8 +2121,9 @@ export class Orchestrator {
         const repoRoot = resolve(this.options.repoRoot);
         await assertPullRequestUrlMatchesRepo(repoRoot, mergePr);
         const pr = await github.getPullRequest(mergePr, repoRoot);
-        await stateStore.merge(issue.identifier, {
+        state = await stateStore.merge(issue.identifier, {
           ...state,
+          ...landingFreshnessPatch(state, pr, this.config.github.requireChecks),
           mergeTargetUrl: mergePr,
           mergeTargetRole: mergeTarget?.role ?? "primary",
           updatedAt: new Date().toISOString()
@@ -2146,6 +2140,9 @@ export class Orchestrator {
           await this.moveIssue(issue, this.config.github.doneState);
           return;
         }
+
+        const landingBlock = await mergeShepherdLandingPreflightBlock({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, state, pullRequest: pr, prUrl: mergePr });
+        if (landingBlock) { timingStatus = landingBlock.timingStatus; timingLabel = landingBlock.timingLabel; timingMetadata = landingBlock.timingMetadata; if (landingBlock.status === "waiting") await this.markMergeWaiting(issue, mergePr, landingBlock.reason, state.lastRunId); else await this.markMergeFailed(issue, landingBlock.reason, { prUrl: mergePr, runId: state.lastRunId }); return; }
 
         const validationBlockReason = this.config.review.enabled ? approvedReviewValidationBlockReason(state) : null;
         if (validationBlockReason) {

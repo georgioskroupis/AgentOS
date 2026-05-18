@@ -261,9 +261,9 @@ export class GitHubClient {
 export async function verifyGitHubCli(command = "gh", cwd = process.cwd()): Promise<{ ok: boolean; details: string }> {
   try {
     const details = await runShell(`${command} auth status`, cwd);
-    return { ok: true, details };
+    return { ok: true, details: redactText(details) };
   } catch (error) {
-    return { ok: false, details: error instanceof Error ? error.message : String(error) };
+    return { ok: false, details: redactText(error instanceof Error ? error.message : String(error)) };
   }
 }
 

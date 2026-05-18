@@ -3,11 +3,24 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeChecks } from "../src/github.js";
+import { evaluateMergeReadiness, GitHubClient, summarizeCheckDiagnostics, summarizeChecks, verifyGitHubCli } from "../src/github.js";
 
 const fixture = resolve("tests/fixtures/fake-gh.mjs");
 
 describe("GitHubClient", () => {
+  it("redacts GitHub auth status failures", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-auth-"));
+    const statePath = join(dir, "state.json");
+    const secret = `ghp_${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    await writeFile(statePath, JSON.stringify({ authError: `GH_TOKEN=${secret} authentication failed` }), "utf8");
+
+    const result = await verifyGitHubCli(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`, dir);
+
+    expect(result.ok).toBe(false);
+    expect(result.details).toContain("[REDACTED]");
+    expect(result.details).not.toContain(secret);
+  });
+
   it("reads pull request status and merges without branch deletion side effects", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
     const statePath = join(dir, "state.json");
