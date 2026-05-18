@@ -41,6 +41,21 @@ capability the selected trust mode does not allow:
 `github.merge_mode: manual` is the public default. In that mode AgentOS can
 prepare review handoffs, but it will not shepherd or merge PRs automatically.
 
+## Landing Gates
+
+High-throughput landing is the automatic path that can move an already approved
+PR-backed issue toward merge readiness. It is enabled only when all three gates
+are explicit:
+
+- `trust_mode` permits PR/network access and GitHub merge capability.
+- `automation.profile: high-throughput` declares the operator wants the faster
+  landing posture.
+- `github.merge_mode` is `shepherd` or `auto`.
+
+The public/default `ci-locked` + `conservative` + `manual` combination reports
+landing as disabled. Partial opt-ins report landing as blocked with the missing
+gate reasons instead of silently enabling auto-ready or auto-merge behavior.
+
 ## Defaults
 
 AgentOS pins the Codex App Server command by default:
