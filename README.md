@@ -20,8 +20,8 @@ bin/agent-os check ../my-project
   fixing, PR review, CI diagnostics, QA smoke validation, docs, tests, and
   cleanup.
 - `bin/agent-os` applies and validates the harness.
-- `src/` contains the TypeScript CLI, Linear adapter, workspace manager, and
-  Symphony-style orchestrator.
+- `src/` contains the TypeScript CLI, Linear adapter, planned child/follow-up
+  issue helper, workspace manager, and Symphony-style orchestrator.
 - `docs/` captures the operating model behind the toolkit.
 
 ## Commands
@@ -244,6 +244,17 @@ same reusable maintenance templates.
 
 ```bash
 bin/agent-os linear seed-maintenance --team <team-key-or-id> --project AgentOS
+```
+
+### `linear plan-issues`
+
+Creates or updates planned Linear child and follow-up issues from a YAML or JSON
+plan file. Generated issues are reused by hidden idempotency marker, inherit the
+parent assignee unless an assignee or trusted actor is supplied, and can write
+`blocked_by`/`unblocks` relationships.
+
+```bash
+scripts/agent-linear-plan-issues.sh --file .agent-os/planned-issues.yml --parent VER-53 --state Todo
 ```
 
 ### `linear lifecycle`

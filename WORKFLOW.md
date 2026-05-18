@@ -169,6 +169,7 @@ scripts/agent-linear-comment.sh <issue> --event <event> --file <comment.md>
 scripts/agent-linear-move.sh <issue> "<allowed state>"
 scripts/agent-linear-pr.sh <issue> <pull-request-url>
 scripts/agent-linear-handoff.sh <issue> --file .agent-os/handoff-<issue>.md
+scripts/agent-linear-plan-issues.sh --file .agent-os/planned-issues.yml --parent <issue> --state Todo
 ```
 
 Those wrappers are non-interactive, call a trusted AgentOS CLI from
@@ -184,6 +185,16 @@ Lifecycle `--file` arguments must be relative paths inside the repository, and
 `record-handoff` reads only `.agent-os/handoff-<resolved issue>.md`. PR metadata
 must point at GitHub pull requests in the current repository before it is stored
 or posted.
+
+Approved planning/decomposition output can use `scripts/agent-linear-plan-issues.sh`
+to create or update small Linear child and follow-up issues from a repo-local
+YAML/JSON plan file. Every generated issue must carry an idempotency marker,
+compact `Active scope`, ignored background/context sections, a small acceptance
+criteria set, inherited parent assignee or explicit assignee/trusted actor
+continuity, and optional machine-readable decomposition evidence linking
+siblings and the parent. The helper may write parent, `blocked_by`, and
+`unblocks` relationships requested by the plan, but it does not change
+scheduler behavior.
 
 ## Human Decision Re-Entry
 

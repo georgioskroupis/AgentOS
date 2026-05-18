@@ -39,6 +39,21 @@ bin/agent-os linear seed-roadmap --team <team-key-or-id> --project AgentOS
 Only the first roadmap issue should start in the active state; later issues stay
 out of that state until the previous item is complete.
 
+## Planned Child/Follow-Up Issues
+
+After a supervisor approves a decomposition plan, create or update generated
+issues from a repo-local YAML/JSON plan file:
+
+```bash
+scripts/agent-linear-plan-issues.sh --file .agent-os/planned-issues.yml --parent VER-53 --state Todo
+```
+
+Plan entries may use `child_issues`, `follow_up_issues`, or mixed `issues`.
+Each entry should include a stable `marker`, `title`, compact `scope`, and a
+small `acceptance_criteria` list. The helper reuses existing generated issues by
+marker, inherits the parent assignee unless an assignee or trusted actor is set,
+and writes requested `blocked_by`/`unblocks` relationships.
+
 ## Live AgentOS Project
 
 - Workspace/team: `VerityStudio` (`VER`)

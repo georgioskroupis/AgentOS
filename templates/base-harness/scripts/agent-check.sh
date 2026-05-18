@@ -33,6 +33,7 @@ required=(
   "scripts/agent-linear-move.sh"
   "scripts/agent-linear-pr.sh"
   "scripts/agent-linear-handoff.sh"
+  "scripts/agent-linear-plan-issues.sh"
   "scripts/agent-start-app.sh"
   "scripts/agent-smoke-test.sh"
   "scripts/agent-capture-logs.sh"

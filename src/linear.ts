@@ -1,5 +1,7 @@
 import type { Issue, IssueComment, IssueTracker, LifecycleDuplicateCommentBehavior, ServiceConfig } from "./types.js";
 import { latestIssueComments } from "./issue-state.js";
+import { redactText } from "./redaction.js";
+import type { LinearPlannedIssueReference, LinearPlannedIssueWriteInput, PlannedIssueRelationType } from "./linear-planned-issues.js";
 
 type FetchLike = typeof fetch;
 
@@ -82,6 +84,11 @@ export interface LinearIssueReference {
   identifier: string;
   state: string;
   team: LinearTeam;
+  title?: string;
+  url?: string | null;
+  assigneeId?: string | null;
+  assigneeEmail?: string | null;
+  project?: LinearProject | null;
 }
 
 export type LinearCommentWriteResult = "created" | "updated" | "skipped";
@@ -231,10 +238,15 @@ export class LinearClient implements IssueTracker {
     description: string;
     projectId?: string;
     stateId?: string;
-  }): Promise<{ id: string; identifier: string; title: string }> {
-    const data = await this.request<{ issueCreate: { success: boolean; issue: { id: string; identifier: string; title: string } } }>(
+    parentId?: string;
+    assigneeId?: string;
+  }): Promise<LinearPlannedIssueReference> {
+    const data = await this.request<{ issueCreate: { success: boolean; issue: unknown } }>(
       `mutation AgentOSIssueCreate($input: IssueCreateInput!) {
-        issueCreate(input: $input) { success issue { id identifier title } }
+        issueCreate(input: $input) {
+          success
+          issue { id identifier title url state { name } team { id key name } assignee { id email } project { id name slugId } }
+        }
       }`,
       {
         input: {
@@ -242,11 +254,66 @@ export class LinearClient implements IssueTracker {
           title: input.title,
           description: input.description,
           projectId: input.projectId,
-          stateId: input.stateId
+          stateId: input.stateId,
+          parentId: input.parentId,
+          assigneeId: input.assigneeId
         }
       }
     );
-    return data.issueCreate.issue;
+    return normalizeLinearIssueReference(data.issueCreate.issue);
+  }
+
+  async updateIssue(issueId: string, input: LinearPlannedIssueWriteInput): Promise<LinearPlannedIssueReference> {
+    const data = await this.request<{ issueUpdate: { success: boolean; issue: unknown } }>(
+      `mutation AgentOSIssueUpdate($id: String!, $input: IssueUpdateInput!) {
+        issueUpdate(id: $id, input: $input) {
+          success
+          issue { id identifier title url state { name } team { id key name } assignee { id email } project { id name slugId } }
+        }
+      }`,
+      {
+        id: issueId,
+        input: {
+          title: input.title,
+          description: input.description,
+          projectId: input.projectId,
+          stateId: input.stateId,
+          parentId: input.parentId,
+          assigneeId: input.assigneeId
+        }
+      }
+    );
+    return normalizeLinearIssueReference(data.issueUpdate.issue);
+  }
+
+  async createIssueRelation(input: { issueId: string; relatedIssueId: string; type: PlannedIssueRelationType }): Promise<void> {
+    await this.request(
+      `mutation AgentOSIssueRelationCreate($input: IssueRelationCreateInput!) {
+        issueRelationCreate(input: $input) { success }
+      }`,
+      { input }
+    );
+  }
+
+  async findIssueByPlanningMarker(markerText: string): Promise<LinearPlannedIssueReference | null> {
+    let after: string | null = null;
+    do {
+      const data: IssueConnection = await this.request<IssueConnection>(issueQuery("AgentOSIssuesByPlanningMarker"), {
+        filter: { project: projectFilter(this.projectSlug) },
+        first: 100,
+        after
+      });
+      const found = data.issues.nodes.find((node: unknown) => {
+        const raw = node as { description?: unknown };
+        return typeof raw.description === "string" && raw.description.includes(markerText);
+      });
+      if (found) return normalizeLinearIssueReference(found);
+      const pageInfo: IssueConnection["issues"]["pageInfo"] = data.issues.pageInfo;
+      if (!pageInfo?.hasNextPage) break;
+      if (!pageInfo.endCursor) throw new Error("linear_missing_end_cursor");
+      after = pageInfo.endCursor;
+    } while (after);
+    return null;
   }
 
   async comment(issueIdentifierOrId: string, body: string): Promise<void> {
@@ -310,26 +377,23 @@ export class LinearClient implements IssueTracker {
     );
   }
 
-  async findIssueReference(issueIdentifierOrId: string): Promise<LinearIssueReference> {
+  async findIssueReference(issueIdentifierOrId: string): Promise<LinearPlannedIssueReference> {
     const trimmed = issueIdentifierOrId.trim();
     const filter = {
       ...(isLinearIdentifier(trimmed) ? identifierFilter(trimmed) : { id: { eq: trimmed } }),
       project: projectFilter(this.projectSlug)
     };
-    const data = await this.request<{ issues: { nodes: LinearIssueReference[] } }>(
+    const data = await this.request<{ issues: { nodes: unknown[] } }>(
       `query AgentOSFindIssue($filter: IssueFilter) {
         issues(filter: $filter, first: 1) {
-          nodes { id identifier state { name } team { id key name } }
+          nodes { id identifier title url state { name } team { id key name } assignee { id email } project { id name slugId } }
         }
       }`,
       { filter }
     );
     const issue = data.issues.nodes[0];
     if (!issue) throw new Error(`Linear issue not found: ${issueIdentifierOrId}`);
-    return {
-      ...issue,
-      state: String((issue as unknown as { state?: { name?: string } }).state?.name ?? issue.state ?? "")
-    };
+    return normalizeLinearIssueReference(issue);
   }
 
   private async listIssueComments(issueId: string): Promise<LinearCommentNode[]> {
@@ -367,11 +431,11 @@ export class LinearClient implements IssueTracker {
     });
     if (!response.ok) {
       const details = await response.text().catch(() => "");
-      throw new Error(`linear_api_status: ${response.status}${details ? ` ${details.slice(0, 300)}` : ""}`);
+      throw new Error(redactText(`linear_api_status: ${response.status}${details ? ` ${details.slice(0, 300)}` : ""}`));
     }
     const payload = (await response.json()) as GraphQLResponse<T>;
     if (payload.errors?.length) {
-      throw new Error(`linear_graphql_errors: ${payload.errors.map((error) => error.message).join("; ")}`);
+      throw new Error(redactText(`linear_graphql_errors: ${payload.errors.map((error) => error.message).join("; ")}`));
     }
     if (!payload.data) {
       throw new Error("linear_unknown_payload");
@@ -460,6 +524,31 @@ function normalizeLinearIssue(node: unknown): Issue {
     blocked_by: blockedBy,
     created_at: raw.createdAt ?? null,
     updated_at: raw.updatedAt ?? null
+  };
+}
+
+function normalizeLinearIssueReference(node: unknown): LinearPlannedIssueReference {
+  const raw = node as Record<string, any>;
+  return {
+    id: String(raw.id),
+    identifier: String(raw.identifier),
+    title: String(raw.title ?? raw.identifier ?? raw.id),
+    url: typeof raw.url === "string" ? raw.url : null,
+    state: String(raw.state?.name ?? raw.state ?? ""),
+    team: {
+      id: String(raw.team?.id ?? ""),
+      key: String(raw.team?.key ?? ""),
+      name: String(raw.team?.name ?? "")
+    },
+    assigneeId: raw.assignee?.id ?? raw.assigneeId ?? null,
+    assigneeEmail: raw.assignee?.email ?? raw.assigneeEmail ?? null,
+    project: raw.project
+      ? {
+          id: String(raw.project.id),
+          name: String(raw.project.name),
+          slugId: typeof raw.project.slugId === "string" ? raw.project.slugId : undefined
+        }
+      : null
   };
 }
 
