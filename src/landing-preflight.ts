@@ -2,6 +2,7 @@ import type { DaemonPreflightResult } from "./env.js";
 import type { PullRequestStatus } from "./github.js";
 import type { IssueState, ServiceConfig, ValidationState } from "./types.js";
 import type { RuntimeDaemonState } from "./runtime-state.js";
+import { compareValidationReuseProfiles, validationReuseProfileForConfig, validationTimestampFreshnessError } from "./validation-profile.js";
 
 export type LandingPreflightStatus = "ready" | "blocked" | "waiting";
 
@@ -19,6 +20,7 @@ export interface LandingPreflightInput {
   state?: IssueState | null;
   pullRequest?: PullRequestStatus | null;
   requireFreshness?: boolean;
+  now?: Date;
 }
 
 export function evaluateLandingPreflight(input: LandingPreflightInput): LandingPreflightResult {
@@ -47,7 +49,7 @@ export function evaluateLandingPreflight(input: LandingPreflightInput): LandingP
   }
 
   if (input.requireFreshness) {
-    const freshness = landingHeadFreshness(input.state, input.pullRequest);
+    const freshness = landingHeadFreshness(input.config, input.state, input.pullRequest, input.now ?? new Date());
     reasons.push(...freshness.reasons);
     guidance.push(...freshness.guidance);
   }
@@ -67,21 +69,23 @@ export function formatLandingPreflightResult(result: LandingPreflightResult): st
   return `${result.reasons.join("; ")}.${guidance}`;
 }
 
-export function githubCiFromPullRequest(status: PullRequestStatus, requireChecks: boolean): NonNullable<ValidationState["githubCi"]> | null {
+export function githubCiFromPullRequest(status: PullRequestStatus, requireChecks: boolean, now = new Date()): NonNullable<ValidationState["githubCi"]> | null {
   if (!status.headSha) return null;
-  if (status.checkSummary.failing > 0) return { status: "failed", headSha: status.headSha, source: "github", checkedAt: new Date().toISOString() };
-  if (status.checkSummary.pending > 0) return { status: "pending", headSha: status.headSha, source: "github", checkedAt: new Date().toISOString() };
-  if (status.checkSummary.successful > 0) return { status: "passed", headSha: status.headSha, source: "github", checkedAt: new Date().toISOString() };
+  const checkedAt = now.toISOString();
+  if (status.checkSummary.failing > 0) return { status: "failed", headSha: status.headSha, source: "github", checkedAt, reused: false };
+  if (status.checkSummary.pending > 0) return { status: "pending", headSha: status.headSha, source: "github", checkedAt, reused: false };
+  if (status.checkSummary.successful > 0) return { status: "passed", headSha: status.headSha, source: "github", checkedAt, reused: false };
   return requireChecks ? null : null;
 }
 
 export function landingFreshnessPatch(
   state: IssueState,
   pullRequest: PullRequestStatus,
-  requireChecks: boolean
+  requireChecks: boolean,
+  now = new Date()
 ): Pick<Partial<IssueState>, "headSha" | "validation"> {
   const headSha = pullRequest.headSha ?? state.headSha ?? null;
-  const githubCi = githubCiFromPullRequest(pullRequest, requireChecks);
+  const githubCi = githubCiEvidenceForLanding(state.validation?.githubCi ?? null, pullRequest, requireChecks, now);
   return {
     headSha,
     ...(state.validation
@@ -95,7 +99,12 @@ export function landingFreshnessPatch(
   };
 }
 
-function landingHeadFreshness(state: IssueState | null | undefined, pullRequest: PullRequestStatus | null | undefined): Pick<LandingPreflightResult, "reasons" | "guidance"> {
+function landingHeadFreshness(
+  config: ServiceConfig,
+  state: IssueState | null | undefined,
+  pullRequest: PullRequestStatus | null | undefined,
+  now: Date
+): Pick<LandingPreflightResult, "reasons" | "guidance"> {
   const reasons: string[] = [];
   const guidance: string[] = [];
   const selectedHead = pullRequest?.headSha ?? state?.headSha ?? null;
@@ -141,8 +150,55 @@ function landingHeadFreshness(state: IssueState | null | undefined, pullRequest:
     reasons.push("GitHub checks are failing for the selected PR head");
     guidance.push("repair the failing checks before landing");
   }
+  if (validation?.budget?.status === "reused") {
+    const expectedProfile = validationReuseProfileForConfig(config);
+    const profile = compareValidationReuseProfiles(expectedProfile, validation.reuseProfile);
+    if (profile.status !== "matched") {
+      reasons.push(
+        profile.status === "missing"
+          ? "reused validation evidence is missing workflow/config, trust, automation, and risk profile metadata"
+          : `reused validation evidence profile is stale: ${profile.reasons.join("; ")}`
+      );
+      guidance.push("rerun validation under the current workflow/config, trust, automation, and risk profile before landing");
+    }
+    const localFinishedAt = latestCommandFinishedAt(validation, validation.budget.fullValidationCommand);
+    const localFreshnessError = validationTimestampFreshnessError(`${validation.budget.fullValidationCommand} reuse`, localFinishedAt, now);
+    if (localFreshnessError) {
+      reasons.push(localFreshnessError);
+      guidance.push("rerun local validation before landing");
+    }
+    const ciFreshnessError = validationTimestampFreshnessError("GitHub CI reuse", ci?.checkedAt, now);
+    if (ciFreshnessError) {
+      reasons.push(ciFreshnessError);
+      guidance.push("refresh GitHub Actions status for the selected PR head before landing");
+    }
+  }
 
   return { reasons, guidance };
+}
+
+function githubCiEvidenceForLanding(
+  existingCi: NonNullable<ValidationState["githubCi"]> | null,
+  pullRequest: PullRequestStatus,
+  requireChecks: boolean,
+  now: Date
+): NonNullable<ValidationState["githubCi"]> | null {
+  const currentCi = githubCiFromPullRequest(pullRequest, requireChecks, now);
+  if (!currentCi || currentCi.status !== "passed" || !existingCi) return currentCi;
+  if (existingCi.status !== "passed" || !sameSha(existingCi.headSha, currentCi.headSha)) return currentCi;
+  if (validationTimestampFreshnessError("GitHub CI reuse", existingCi.checkedAt, now)) return currentCi;
+  return {
+    ...existingCi,
+    source: existingCi.source ?? "github",
+    reused: true
+  };
+}
+
+function latestCommandFinishedAt(validation: ValidationState, commandName: string): string | null {
+  const matching = (validation.acceptedCommands ?? [])
+    .filter((command) => command.name === commandName)
+    .sort((left, right) => Date.parse(right.finishedAt) - Date.parse(left.finishedAt));
+  return matching[0]?.finishedAt ?? validation.checkedAt ?? null;
 }
 
 function sameSha(left: string | null | undefined, right: string | null | undefined): boolean {

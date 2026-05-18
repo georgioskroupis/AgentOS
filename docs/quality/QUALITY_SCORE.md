@@ -87,7 +87,9 @@ Use this as a lightweight rubric for harnessed repositories.
 - Validation evidence distinguishes focused checks, full local harness proof,
   matching unchanged-head reuse, and CI proof. Duplicate full-suite runs for the
   same head are budgeted so small follow-up fixes do not repeat expensive
-  `npm run agent-check` work without new information.
+  `npm run agent-check` work without new information. Reuse is valid only when
+  the selected head, validation head, workflow/config hash, trust mode,
+  automation profile, repair policy, and validation risk profile still match.
 - GitHub CI exists and the merge shepherd requires at least one successful check
   before merging the selected primary target and moving `Merging` issues to
   `Done`; post-merge cleanup failures are operator-visible warnings, not

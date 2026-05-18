@@ -6,10 +6,18 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { fakeIssue } from "./fixtures/agentos-fakes.js";
 import { validationEvidenceFinding, verifyValidationEvidence, writeValidationEvidence } from "../src/validation.js";
+import type { ValidationReuseProfileState } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
 const VALIDATION_NOW = new Date("2026-05-01T00:00:00.000Z");
 const VALIDATION_NOW_ISO = VALIDATION_NOW.toISOString();
+const REUSE_PROFILE: ValidationReuseProfileState = {
+  workflowConfigHash: "workflow-hash-a",
+  trustMode: "local-trusted",
+  automationProfile: "high-throughput",
+  automationRepairPolicy: "mechanical-first",
+  riskProfile: "review=enabled|githubChecks=required"
+};
 const INTENTIONALLY_STALE_COMMAND = {
   name: "npm run test",
   exitCode: 1,
@@ -162,6 +170,7 @@ describe("validation evidence", () => {
       issueIdentifier: "AG-1",
       runId: "run_previous",
       repoHead,
+      reuseProfile: REUSE_PROFILE,
       status: "passed",
       commands: [freshCommand()]
     });
@@ -182,6 +191,7 @@ describe("validation evidence", () => {
       workspacePath: workspace,
       runId: "run_current",
       allowReusableRunEvidence: true,
+      reuseProfile: REUSE_PROFILE,
       now: VALIDATION_NOW
     });
     expect(reusableResult.state).toMatchObject({
@@ -195,6 +205,40 @@ describe("validation evidence", () => {
         evidenceRunId: "run_previous"
       }
     });
+  });
+
+  it("rejects reused validation evidence when the workflow config or risk profile changed", async () => {
+    const workspace = await gitWorkspace();
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace });
+    const repoHead = stdout.trim();
+    await writeValidationEvidence(join(workspace, ".agent-os", "validation", "AG-1.json"), {
+      schemaVersion: 1,
+      issueIdentifier: "AG-1",
+      runId: "run_previous",
+      repoHead,
+      reuseProfile: REUSE_PROFILE,
+      status: "passed",
+      commands: [freshCommand()]
+    });
+
+    const result = await verifyValidationEvidence({
+      issue: fakeIssue(),
+      handoff: "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json",
+      workspacePath: workspace,
+      runId: "run_current",
+      allowReusableRunEvidence: true,
+      reuseProfile: {
+        ...REUSE_PROFILE,
+        workflowConfigHash: "workflow-hash-b",
+        riskProfile: "review=enabled|githubChecks=required|blocking=P0,P1"
+      },
+      now: VALIDATION_NOW
+    });
+
+    expect(result.state.status).toBe("failed");
+    expect(result.state.errors?.join("\n")).toContain("workflow/config hash changed");
+    expect(result.state.errors?.join("\n")).toContain("risk profile changed");
+    expect(result.state.errors?.join("\n")).toContain("runId mismatch");
   });
 
   it("flags duplicate full validation runs for the same evidence head", async () => {

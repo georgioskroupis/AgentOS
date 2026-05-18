@@ -154,12 +154,14 @@ export async function writeHandoff(workspace: Workspace, issueIdentifier: string
 export async function writePassingHandoff(workspace: Workspace, issueIdentifier: string, prompt: string, body: string, now = new Date()): Promise<void> {
   const validationPath = `.agent-os/validation/${issueIdentifier}.json`;
   const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
+  const reuseProfile = prompt.match(/^Validation reuse profile JSON: (.+)$/m)?.[1];
   await writeHandoff(workspace, issueIdentifier, `${body}\n\nValidation-JSON: ${validationPath}`);
   const timestamp = now.toISOString();
   await writeValidationEvidence(join(workspace.path, validationPath), {
     schemaVersion: 1,
     issueIdentifier,
     runId,
+    ...(reuseProfile ? { reuseProfile: JSON.parse(reuseProfile) } : {}),
     status: "passed",
     commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: timestamp, finishedAt: timestamp }]
   });

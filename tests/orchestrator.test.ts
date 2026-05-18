@@ -7595,6 +7595,10 @@ describe("orchestrator", () => {
           issueIdentifier: "AG-1",
           prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-05-16T00:00:00.000Z" }],
           reviewStatus: "approved",
+          lastError: "stale canceled implementation turn",
+          errorCategory: "canceled",
+          retryAttempt: 2,
+          nextRetryAt: "2026-05-16T00:30:00.000Z",
           validation: {
             status: "passed",
             finalStatus: "passed",
@@ -7666,6 +7670,10 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("Merged successfully");
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.mergedAt).toBeTruthy();
+    expect(state.lastError).toBeUndefined();
+    expect(state.errorCategory).toBeUndefined();
+    expect(state.retryAttempt).toBeUndefined();
+    expect(state.nextRetryAt).toBeUndefined();
   });
 
   it("blocks merge shepherding when landing validation evidence is stale for the selected head", async () => {
@@ -8905,6 +8913,7 @@ async function writePassingHandoff(
   options: { validationStartedAt?: string; validationFinishedAt?: string } = {}
 ): Promise<void> {
   const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
+  const reuseProfile = prompt.match(/^Validation reuse profile JSON: (.+)$/m)?.[1];
   const validationPath = `.agent-os/validation/${issueIdentifier}.json`;
   await mkdir(join(workspacePath, ".agent-os", "validation"), { recursive: true });
   await writeFile(join(workspacePath, ".agent-os", `handoff-${issueIdentifier}.md`), `${body}\n\nValidation-JSON: ${validationPath}`, "utf8");
@@ -8915,6 +8924,7 @@ async function writePassingHandoff(
     schemaVersion: 1,
     issueIdentifier,
     runId,
+    ...(reuseProfile ? { reuseProfile: JSON.parse(reuseProfile) } : {}),
     status: "passed",
     finalResult: {
       status: "passed",

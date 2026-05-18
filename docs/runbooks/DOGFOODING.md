@@ -57,6 +57,13 @@ are intentionally mechanical: authenticate `gh`, set `LINEAR_API_KEY`, restart
 the daemon from current `main`, rerun validation on the selected PR head, or
 wait for GitHub Actions to finish on that head.
 
+Unchanged-head validation reuse is allowed only when the validation evidence
+also carries the current validation reuse profile. That profile records the
+workflow/config hash, trust mode, automation profile, repair policy, and
+validation risk profile. Landing treats profile mismatches or stale reused
+local/CI timestamps as a rerun requirement, and `status`/`inspect` call out
+whether validation evidence was reused or freshly rerun.
+
 For local continuous dogfood, use the durable launch helper instead of a bare
 `nohup` process:
 
@@ -125,6 +132,9 @@ For each issue, record:
 
 - Linear comments are correctly upserted, not duplicated.
 - Validation evidence exists as JSON and verifies as `passed`.
+- Reused validation evidence records the current reuse profile and fresh
+  local/CI timestamps; changed head, config, trust, automation, or risk profile
+  means rerun before landing.
 - Historical failed validation attempts are acceptable only when the final
   authoritative validation result passed.
 - `runs inspect` reports the true status, thread/turn, tokens, rate limits, and

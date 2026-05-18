@@ -276,8 +276,11 @@ Context and validation budgets are enforced before expensive repeat work:
   operator action instead of retrying the same oversized prompt.
 - `validation_budget` allows one full `npm run agent-check` proof per unchanged
   head by default. Additional focused checks may be recorded separately, and
-  matching prior full-suite evidence may be reused when the repo head is
-  unchanged.
+  matching prior full-suite evidence may be reused only when the repo head,
+  workflow/config hash, trust mode, automation profile, repair policy, and
+  validation risk profile are unchanged and the local/CI evidence is still
+  fresh. `status` and `inspect` report whether evidence was reused or freshly
+  rerun.
 - Codex usage-limit errors with explicit reset times are classified as
   `capacity-wait`; AgentOS schedules the next attempt at the reset time without
   consuming the normal retry budget.
@@ -469,7 +472,7 @@ Responsibilities:
    workflow expects a PR, using `scripts/agent-create-pr.sh` or an explicit
    non-interactive `gh pr create` command. Do not use GitHub app/MCP PR creation
    tools.
-8. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, final authoritative `status`, and command entries for every `npm run agent-check` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
+8. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, the AgentOS run context `reuseProfile`, final authoritative `status`, and command entries for every `npm run agent-check` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
 9. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, app proof, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`. Use `App-Proof:` or `Proof-Artifact:` lines for proof files or URLs that should be visible in `agent-os inspect`.
 10. Follow `lifecycle.mode`: in the current `orchestrator-owned` mode, do not
    move or comment on the Linear issue directly; the AgentOS orchestrator owns

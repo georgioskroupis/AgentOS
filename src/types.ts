@@ -414,6 +414,7 @@ export interface ValidationState {
   failedHistoricalAttempts?: ValidationCommandState[];
   githubCi?: ValidationCiState;
   budget?: ValidationBudgetState;
+  reuseProfile?: ValidationReuseProfileState;
 }
 
 export interface ValidationCommandState {
@@ -428,6 +429,15 @@ export interface ValidationCiState {
   headSha?: string | null;
   source?: string;
   checkedAt?: string;
+  reused?: boolean;
+}
+
+export interface ValidationReuseProfileState {
+  workflowConfigHash: string;
+  trustMode: string;
+  automationProfile: string;
+  automationRepairPolicy: string;
+  riskProfile: string;
 }
 
 export interface ValidationBudgetState {
