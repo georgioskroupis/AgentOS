@@ -12,6 +12,10 @@ if (!statePath) {
 const state = JSON.parse(readFileSync(statePath, "utf8"));
 
 if (args[0] === "auth" && args[1] === "status") {
+  if (state.authError) {
+    console.error(state.authError);
+    process.exit(1);
+  }
   console.log("Logged in to github.com");
   process.exit(0);
 }

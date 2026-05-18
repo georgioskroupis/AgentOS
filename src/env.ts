@@ -4,6 +4,7 @@ import type { ServiceConfig } from "./types.js";
 
 export type RepoEnvStatus = "missing" | "loaded" | "malformed" | "stale";
 export type DaemonPreflightStatus = "ready" | "missing_credentials" | "malformed_env" | "stale_env";
+export type CredentialAvailability = "present" | "missing" | "unchecked";
 
 export interface RepoEnvLoadResult {
   path: string;
@@ -32,6 +33,7 @@ export interface DaemonPreflightResult {
   github: {
     command: "configured" | "missing";
     required: boolean;
+    auth: CredentialAvailability;
   };
   codex: {
     command: "configured" | "missing";
@@ -99,11 +101,42 @@ export function daemonPreflight(config: ServiceConfig, repoEnv: RepoEnvLoadResul
     },
     github: {
       command: githubCommand,
-      required: githubRequired
+      required: githubRequired,
+      auth: "unchecked"
     },
     codex: {
       command: codexCommand
     }
+  };
+}
+
+export function withGitHubCredentialPreflight(
+  result: DaemonPreflightResult,
+  auth: Extract<CredentialAvailability, "present" | "missing">
+): DaemonPreflightResult {
+  const errors =
+    auth === "missing"
+      ? [
+          ...result.errors,
+          "github.auth is required for high-throughput landing; run `gh auth login` or provide a valid GH_TOKEN/GITHUB_TOKEN for the configured github.command"
+        ]
+      : result.errors;
+  const status: DaemonPreflightStatus =
+    result.status === "ready" && auth === "missing"
+      ? "missing_credentials"
+      : result.status;
+  const next = {
+    ...result,
+    status,
+    errors,
+    github: {
+      ...result.github,
+      auth
+    }
+  };
+  return {
+    ...next,
+    message: preflightMessage(status, { path: result.repoEnvPath, status: result.repoEnvStatus, values: {}, loadedKeys: result.loadedKeys, errors: [] }, errors)
   };
 }
 

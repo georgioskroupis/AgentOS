@@ -21,7 +21,11 @@ AGENT_OS_SOURCE_REPO=/path/to/agent-os
 
 The daemon loads this file before resolving `WORKFLOW.md`, reports whether it is
 missing, malformed, stale, or loaded, and refuses to dispatch when required
-credentials are unavailable.
+credentials are unavailable. High-throughput landing should also report GitHub
+auth availability, daemon freshness, selected PR head, validation `repoHead`,
+and GitHub check head; fix missing auth, restart stale daemons, rerun validation,
+or wait for checks on the selected head before moving an issue back to
+`Merging`.
 
 ## Human Review Re-Entry
 
