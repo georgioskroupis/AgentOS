@@ -410,6 +410,24 @@ describe("issue inspection", () => {
             signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }],
             recordedAt: "2026-05-16T00:00:00.000Z"
           },
+          ciRetry: {
+            status: "requested",
+            updatedAt: "2026-05-16T00:00:00.000Z",
+            attempts: [
+              {
+                status: "requested",
+                attemptedAt: "2026-05-16T00:00:00.000Z",
+                attempt: 1,
+                maxAttempts: 2,
+                prUrl: "https://github.com/o/r/pull/2",
+                headSha: "abc123",
+                checkNames: ["AgentOS CI"],
+                runIds: ["123"],
+                classification: "flaky_retryable",
+                reason: "supported flaky CI retry 1 of 2"
+              }
+            ]
+          },
           updatedAt: "2026-05-16T00:00:00.000Z"
         },
         null,
@@ -466,6 +484,7 @@ describe("issue inspection", () => {
     const inspectOutput = await inspectIssue(repo, "AG-2");
 
     expect(statusOutput).not.toContain("AG-2: split recommended");
+    expect(statusOutput).not.toContain("AG-2: waiting on flaky CI retry");
     expect(statusOutput).toContain("AG-2: waiting on merge");
     expect(inspectOutput).toContain("Split recommendation: advisory (recommend-only)");
     expect(inspectOutput).not.toContain("Next safe action: record a split-follow-up decision");

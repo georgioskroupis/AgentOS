@@ -296,7 +296,7 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   const terminalStatus = cleanTerminalStatusLine(issue);
   if (terminalStatus) return withEvidence(terminalStatus);
   if (isReviewSplitRecommendationBlocking(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
-  if (issue.ciRetry?.status === "requested") return withEvidence(`waiting on flaky CI retry - ${latestCiRetryAttempt(issue)?.checkNames.join(", ") ?? "checks"}`);
+  if (isActiveCiRetryWait(issue)) return withEvidence(`waiting on flaky CI retry - ${latestCiRetryAttempt(issue)?.checkNames.join(", ") ?? "checks"}`);
   if (issue.ciRetry?.status === "exhausted") return withEvidence(`flaky CI retry exhausted - ${latestCiRetryAttempt(issue)?.attempt ?? 0}/${latestCiRetryAttempt(issue)?.maxAttempts ?? 0}`);
   if (issue.ciRetry?.status === "failed") return withEvidence(`flaky CI retry failed - ${latestCiRetryAttempt(issue)?.error ?? "rerun request failed"}`);
   const mergeWaiting = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_waiting");
@@ -355,7 +355,7 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (isReviewSplitRecommendationBlocking(issue)) {
     return "record a split-follow-up decision or create linked follow-up issue(s) before another broad review/fix iteration";
   }
-  if (issue.ciRetry?.status === "requested") {
+  if (isActiveCiRetryWait(issue)) {
     return "wait for the GitHub Actions rerun to settle, refresh PR status, and continue review only on the selected head";
   }
   if (issue.ciRetry?.status === "exhausted" || issue.ciRetry?.status === "failed") {
@@ -386,6 +386,10 @@ export { daemonLaunchCommand, inspectDaemonHealth };
 
 function hasApprovedPullRequest(issue: IssueState): boolean {
   return issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0;
+}
+
+function isActiveCiRetryWait(issue: IssueState): boolean {
+  return issue.ciRetry?.status === "requested" && issue.reviewStatus !== "approved" && issue.phase !== "completed" && issue.phase !== "merge";
 }
 
 function isSplitRecommendationAdvisory(issue: IssueState | null): boolean {
