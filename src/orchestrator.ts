@@ -19,6 +19,7 @@ import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment, runLandingShepherdGate } from "./orchestrator-landing-preflight.js";
+import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
@@ -26,7 +27,7 @@ import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import { capacityWaitScheduledCommentBody, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody } from "./orchestrator-lifecycle-comments.js";
 import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
-import { gitRevParse, issueFromRunSummary, issueFromState, readHandoff, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
+import { completedDispatchStopReason, completionMarker, displayAttempt, gitRevParse, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, dependencyDispatchStopPatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
@@ -1703,6 +1704,23 @@ export class Orchestrator {
         await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nSelected pull request target is not open.\n\n- PR: ${nonOpen.target.url}\n- State: ${nonOpen.status.state}`);
         return latestState;
       }
+      const flakyRetry = await requestFlakyCiRetriesIfEligible({
+        issue,
+        state: latestState,
+        entries: githubContext.entries,
+        reviewTargetMode,
+        runId,
+        config: this.config,
+        repoRoot: this.options.repoRoot,
+        logger: this.logger,
+        recordIssueState: (patch) => this.recordIssueState(issue, patch),
+        commentIssue: (body) => this.commentIssue(issue, body)
+      });
+      if (flakyRetry.requested || flakyRetry.terminalState) {
+        latestState = flakyRetry.state;
+        return latestState;
+      }
+      const flakyRetryFindings = flakyRetry.findings;
       const reviewers = this.reviewersFor([...new Set(githubContext.entries.flatMap((entry) => entry.status.changedFiles))]);
       const reviewerConcurrency = reviewerConcurrencyFor(this.config, reviewers.length);
       const parallelReviewers = reviewerConcurrency > 1;
@@ -1744,6 +1762,7 @@ export class Orchestrator {
       const findings = [
         ...artifacts.flatMap((entry) => entry.artifact.findings),
         ...githubContext.entries.flatMap((entry) => reviewCheckFindings(entry.status, this.config, entry.checkDiagnostics)),
+        ...flakyRetryFindings,
         ...(validationFinding ? [validationFinding] : [])
       ];
       for (const finding of findings.filter((finding) => finding.reviewer === "checks")) {
@@ -2736,18 +2755,6 @@ export class Orchestrator {
   }
 }
 
-function isNoPrHandoffApproved(state: IssueState): boolean { return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed"); }
-
-function isLocallySettledIssueState(state: IssueState): boolean { return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required"; }
-
-function isLocallyCompletedState(state: IssueState): boolean { return state.phase === "completed" || state.outcome === "already_satisfied"; }
-
-function completedDispatchStopReason(state: IssueState): string {
-  if (state.outcome === "already_satisfied") return "work is already satisfied by prior AgentOS handoff";
-  if (pullRequestUrls(state).length > 0) return "work is already completed locally and has recorded pull request metadata";
-  return "work is already completed locally and should not be redispatched";
-}
-
 function isSupervisorContinuationPaused(state: IssueState | null): boolean {
   if (!state?.lifecycleStatus || !["human_continuation", "supervisor_continuation", "externally_fixed"].includes(state.lifecycleStatus)) return false;
   const decision = latestAuthoritativeDecision(state);
@@ -2776,16 +2783,6 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
     );
   });
 }
-
-function completionMarker(issue: Issue): string { return issue.updated_at ?? `${issue.state}:${issue.title}`; }
-function displayAttempt(attempt: number | null): number { return (attempt ?? 0) + 1; }
-
-function isStateIn(state: string, states: string[]): boolean {
-  const normalized = state.toLowerCase();
-  return states.map((item) => item.toLowerCase()).includes(normalized);
-}
-
-function runningAllowedStates(config: ServiceConfig): string[] { return [...config.tracker.activeStates, config.tracker.runningState].filter((state): state is string => Boolean(state)); }
 
 function isRecoverablePartialWorkState(state: IssueState): boolean {
   const error = state.lastError?.toLowerCase() ?? "";

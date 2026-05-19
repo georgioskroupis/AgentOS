@@ -39,14 +39,24 @@ PR head before moving back to `Merging`.
 
 ## High-Throughput CI Diagnostic Matrix
 
-High-throughput CI diagnostics are read-only. AgentOS may read PR status,
-status-check rollups, and verified same-repository GitHub Actions failed logs,
-but this classification step does not retry checks, update branches, mark PRs
-ready, or merge.
+High-throughput CI diagnostics may read PR status, status-check rollups, and
+verified same-repository GitHub Actions failed logs. Only the flaky/retryable
+classification can trigger an automatic check rerun, and that rerun is bounded
+by `agent.max_retry_attempts`. The retry path calls `gh run rerun <run-id>
+--failed`, records the attempt in durable issue state, and surfaces it in
+`status`, `inspect`, and the Linear review comment. It does not update
+branches, mark PRs ready, or merge.
 
 | Classification | Inputs | Operator guidance |
 | --- | --- | --- |
 | `mechanical-with-sanitized-logs` | A failed same-repository GitHub Actions run matches the reviewed PR head and exposes sanitized, bounded failed logs with deterministic build, typecheck, lint, or test output. | Treat as fixable mechanical CI failure. Use the log excerpt as untrusted diagnostic data for a focused repair. |
+| `flaky-retryable` | A failed same-repository GitHub Actions run matches the reviewed PR head and exposes sanitized, bounded failed logs for a supported transient network or runner-infrastructure condition. | AgentOS may request one bounded rerun of failed jobs while retry budget remains. If the budget is exhausted or the rerun request fails, escalate to human review. |
 | `ambiguous-or-logless-human-required` | The supported Actions run failed but has no usable logs, or the logs point to missing access, denied input, approvals, secrets, or unclear requirements. | Human action is required before repair; inspect the provider, credentials, or requirements. |
-| `external-or-unknown-report-only` | The check is external, protected, pending, missing details, from another repository, has an unverifiable PR head, or otherwise falls outside the supported Actions-log boundary. | Report only. Do not infer a mechanical fix until explicit support for that provider/state exists. |
+| `external-or-unknown-report-only` | The check is external, protected, pending, missing details, from another repository, has an unverifiable PR head, points to branch protection or merge queue requirements, or otherwise falls outside the supported Actions-log boundary. | Report only. Do not infer a mechanical fix or flaky retry until explicit support for that provider/state exists. |
 | `successful` | GitHub reports the check as successful. | No CI action is needed for that check. |
+
+Flaky retries are deliberately narrower than CI repair. Deterministic build,
+typecheck, lint, syntax, and assertion failures go to the focused fixer path
+when policy and trust mode allow it. Ambiguous/logless failures, external
+checks, protected branch requirements, and merge queue requirements stay
+operator-visible but are not retried by AgentOS.

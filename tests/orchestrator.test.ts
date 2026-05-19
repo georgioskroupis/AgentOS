@@ -7131,6 +7131,226 @@ describe("orchestrator", () => {
     expect(state.reviewStatus).toBe("approved");
     expect(state.reviewIteration).toBe(2);
     expect(state.splitRecommendation).toBeUndefined();
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    expect(ghStateAfter.reruns).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("requests bounded flaky CI reruns and records the attempt", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-flaky-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  repair_policy: mechanical-first\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nagent:\n  max_retry_attempts: 2\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 2\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/123"
+            }
+          ],
+          files: [{ path: "src/orchestrator.ts" }]
+        },
+        runLogs: {
+          "123": "npm ERR! network request to registry.npmjs.org failed, reason: ECONNRESET"
+        }
+      }),
+      "utf8"
+    );
+
+    let runnerCalls = 0;
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        runnerCalls += 1;
+        if (input.prompt.startsWith("Do ")) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        return { status: "failed", error: "flaky retry should not start reviewers or fixers in the same pass" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(runnerCalls).toBe(1);
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    expect(ghStateAfter.reruns).toEqual([{ runId: "123", args: ["--failed"] }]);
+    expect(comments.join("\n")).toContain("flaky CI retry requested");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("pending");
+    expect(state.ciRetry).toMatchObject({
+      status: "requested",
+      attempts: [
+        expect.objectContaining({
+          status: "requested",
+          attempt: 1,
+          maxAttempts: 2,
+          prUrl: "https://github.com/o/r/pull/1",
+          headSha: "abc123",
+          checkNames: ["AgentOS CI"],
+          runIds: ["123"],
+          classification: "flaky_retryable"
+        })
+      ]
+    });
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+    expect(inspectOutput).toContain("Flaky CI retry: requested");
+    expect(inspectOutput).toContain("Actions runs: 123");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("escalates flaky CI failures when retry budget is exhausted", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-flaky-exhausted-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  repair_policy: mechanical-first\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nagent:\n  max_retry_attempts: 1\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 1\n  required_reviewers: [self]\n  optional_reviewers: []\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/123"
+            }
+          ],
+          files: [{ path: "src/orchestrator.ts" }]
+        },
+        runLogs: {
+          "123": "npm ERR! network request to registry.npmjs.org failed, reason: ECONNRESET"
+        }
+      }),
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      ciRetry: {
+        status: "requested",
+        updatedAt: "2026-05-18T00:00:00.000Z",
+        attempts: [
+          {
+            status: "requested",
+            attemptedAt: "2026-05-18T00:00:00.000Z",
+            attempt: 1,
+            maxAttempts: 1,
+            prUrl: "https://github.com/o/r/pull/1",
+            headSha: "abc123",
+            checkNames: ["AgentOS CI"],
+            runIds: ["123"],
+            classification: "flaky_retryable",
+            reason: "supported flaky CI retry 1 of 1"
+          }
+        ]
+      },
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    let fixRuns = 0;
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        if (input.prompt.startsWith("You are fixing")) {
+          fixRuns += 1;
+          return { status: "failed", error: "exhausted retry must not run a fixer" };
+        }
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+          reviewer: "self",
+          decision: "approved",
+          ...reviewArtifactScope(input),
+          summary: "approved",
+          findings: []
+        });
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(fixRuns).toBe(0);
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    expect(ghStateAfter.reruns).toBeUndefined();
+    expect(comments.join("\n")).toContain("retry budget is exhausted");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("human_required");
+    expect(state.ciRetry.status).toBe("exhausted");
+    expect(state.findings[0]).toEqual(
+      expect.objectContaining({
+        reviewer: "checks",
+        decision: "human_required",
+        findingHash: expect.stringContaining("checks-flaky-retry-exhausted-")
+      })
+    );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("escalates mechanical CI failures when trust mode cannot update the PR", async () => {
@@ -7416,6 +7636,8 @@ describe("orchestrator", () => {
 
     expect(fixRuns).toBe(0);
     expect(comments.join("\n")).toContain("did not expose logs");
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    expect(ghStateAfter.reruns).toBeUndefined();
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.reviewStatus).toBe("human_required");
     expect(state.findings[0].decision).toBe("human_required");
@@ -7869,6 +8091,7 @@ describe("orchestrator", () => {
       "utf8"
     );
     const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const freshValidationAt = new Date().toISOString();
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
     await writeFile(
       join(repo, ".agent-os", "state", "issues", "AG-1.json"),
@@ -7884,12 +8107,12 @@ describe("orchestrator", () => {
           finalStatus: "passed",
           path: ".agent-os/workspaces/AG-1/.agent-os/validation/AG-1.json",
           repoHead: "current-head",
-          checkedAt: "2026-05-18T00:05:00.000Z",
-          acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-05-18T00:04:00.000Z", finishedAt: "2026-05-18T00:05:00.000Z" }],
+          checkedAt: freshValidationAt,
+          acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: freshValidationAt, finishedAt: freshValidationAt }],
           reuseProfile: validationProfile
         },
         operatorRecovery: {
-          recordedAt: "2026-05-18T00:06:00.000Z",
+          recordedAt: freshValidationAt,
           runId: "run_recovered",
           branch: "agent/AG-1",
           headSha: "current-head",
@@ -7898,7 +8121,7 @@ describe("orchestrator", () => {
           validationPath: ".agent-os/workspaces/AG-1/.agent-os/validation/AG-1.json",
           proofArtifacts: []
         },
-        updatedAt: "2026-05-18T00:06:00.000Z"
+        updatedAt: freshValidationAt
       }),
       "utf8"
     );

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { classifyCiFailureLog, diagnosticClassificationLabel } from "./ci-diagnostics.js";
 import { currentGitHubRepository, parseGitHubPullRequestUrl, sameGitHubRepository, type GitHubRepositoryRef } from "./github-repository.js";
 import { redactText } from "./redaction.js";
 import type { ServiceConfig } from "./types.js";
@@ -39,6 +40,7 @@ export interface CheckDetail {
 
 export type CheckDiagnosticClassification =
   | "mechanical_with_sanitized_logs"
+  | "flaky_retryable"
   | "ambiguous_or_logless_human_required"
   | "external_or_unknown_report_only"
   | "successful";
@@ -50,6 +52,8 @@ export interface CheckDiagnostic {
   operatorGuidance: string;
   /** Sanitized, bounded, untrusted CI output excerpt. */
   log: string | null;
+  /** Verified same-repository GitHub Actions run id when available. */
+  actionsRunId?: string | null;
 }
 
 export interface PullRequestReview {
@@ -213,6 +217,10 @@ export class GitHubClient {
     return diagnostics.filter((diagnostic) => checkDetailState(diagnostic.check) === "failing");
   }
 
+  async rerunFailedActionsRun(runId: string, cwd: string): Promise<void> {
+    await runShell(`${this.command} run rerun ${shellQuote(runId)} --failed`, cwd);
+  }
+
   private async getCheckDiagnostic(check: CheckDetail, status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic> {
     const checkState = checkDetailState(check);
     if (checkState === "successful") {
@@ -261,7 +269,8 @@ export class GitHubClient {
         classification: classification.classification,
         reason: classification.reason,
         operatorGuidance: classification.operatorGuidance,
-        log: sanitizeCiLog(log)
+        log: sanitizeCiLog(log),
+        actionsRunId: run.runId
       };
     } catch (error) {
       return {
@@ -428,7 +437,7 @@ function changedFileNames(value: unknown): string[] {
     .filter((item): item is string => Boolean(item));
 }
 
-type CheckState = "successful" | "pending" | "failing";
+export type CheckState = "successful" | "pending" | "failing";
 
 interface CheckStateInput {
   status?: unknown;
@@ -447,6 +456,10 @@ function classifyCheckState(check: CheckStateInput): CheckState {
 
 function checkDetailState(check: CheckDetail): CheckState {
   return classifyCheckState(check);
+}
+
+export function checkDetailLifecycleState(check: CheckDetail): CheckState {
+  return checkDetailState(check);
 }
 
 function githubRepositoryFromPullRequestUrl(url: string): GitHubRepositoryRef | null {
@@ -499,57 +512,6 @@ function diagnosticErrorReason(prefix: string, error: unknown): string {
 
 function sanitizeDiagnosticText(value: string, maxLength: number): string {
   return singleLine(redactText(value)).slice(0, maxLength).trim();
-}
-
-function classifyCiFailureLog(log: string): Pick<CheckDiagnostic, "classification" | "reason" | "operatorGuidance"> {
-  const text = log.trim();
-  if (!text) {
-    return {
-      classification: "ambiguous_or_logless_human_required",
-      reason: "The failed check did not expose logs.",
-      operatorGuidance: "Human action required: inspect the check provider or rerun validation manually before AgentOS attempts repair."
-    };
-  }
-  if (
-    /ambiguous|unclear requirement|human judgment|manual approval|requires approval|user input|approval request|elicitation|permission denied|resource not accessible|authentication|authorization|missing secret/i.test(
-      text
-    )
-  ) {
-    return {
-      classification: "ambiguous_or_logless_human_required",
-      reason: "The failed check logs point to missing access, denied input, or ambiguous requirements.",
-      operatorGuidance: "Human action required: resolve access, input, or requirement ambiguity before automated CI repair."
-    };
-  }
-  if (
-    /npm run agent-check|npm test|vitest|test failed|tests failed|assertionerror|expected .* received|error TS\d+|typescript|tsc\b|eslint|prettier|lint|syntaxerror|typeerror|referenceerror|build failed|command failed/i.test(
-      text
-    )
-  ) {
-    return {
-      classification: "mechanical_with_sanitized_logs",
-      reason: "Failed check logs contain deterministic build, typecheck, lint, or test output.",
-      operatorGuidance: "Fixable mechanical failure: use the sanitized, bounded, untrusted log excerpt to drive a focused CI repair."
-    };
-  }
-  return {
-    classification: "ambiguous_or_logless_human_required",
-    reason: "The failed check logs were present, but AgentOS could not classify the failure as mechanical.",
-    operatorGuidance: "Human action required: inspect the full CI context before deciding whether a repair turn is safe."
-  };
-}
-
-function diagnosticClassificationLabel(classification: CheckDiagnosticClassification): string {
-  switch (classification) {
-    case "mechanical_with_sanitized_logs":
-      return "mechanical-with-sanitized-logs";
-    case "ambiguous_or_logless_human_required":
-      return "ambiguous-or-logless-human-required";
-    case "external_or_unknown_report_only":
-      return "external-or-unknown-report-only";
-    case "successful":
-      return "successful";
-  }
 }
 
 function singleLine(value: string): string {

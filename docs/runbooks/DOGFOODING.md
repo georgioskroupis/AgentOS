@@ -64,6 +64,15 @@ validation risk profile. Landing treats profile mismatches or stale reused
 local/CI timestamps as a rerun requirement, and `status`/`inspect` call out
 whether validation evidence was reused or freshly rerun.
 
+Flaky CI retry is intentionally bounded. When high-throughput diagnostics
+classify all failed checks for a PR head as supported flaky/retryable
+same-repository GitHub Actions failures, AgentOS may request
+`gh run rerun <run-id> --failed` while `agent.max_retry_attempts` remains
+available. The attempt is recorded under flaky CI retry state and appears in
+`status`/`inspect`. Deterministic mechanical failures use the focused fixer
+path, and ambiguous/logless, external, protected-branch, or merge-queue cases
+are not retried automatically.
+
 For local continuous dogfood, use the durable launch helper instead of a bare
 `nohup` process:
 

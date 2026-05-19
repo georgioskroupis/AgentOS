@@ -320,6 +320,7 @@ export interface IssueState {
   appProof?: AppProofState;
   scopeReport?: ScopeReportState;
   contextBudget?: ContextBudgetState;
+  ciRetry?: CiRetryState;
   validation?: ValidationState;
   updatedAt: string;
 }
@@ -363,6 +364,26 @@ export interface AppProofArtifact {
   label: string;
   value: string;
   source: "handoff" | "manual";
+}
+
+export interface CiRetryState {
+  status: "requested" | "exhausted" | "failed";
+  updatedAt: string;
+  attempts: CiRetryAttemptState[];
+}
+
+export interface CiRetryAttemptState {
+  status: "requested" | "exhausted" | "failed";
+  attemptedAt: string;
+  attempt: number;
+  maxAttempts: number;
+  prUrl: string;
+  headSha?: string | null;
+  checkNames: string[];
+  runIds: string[];
+  classification: "flaky_retryable";
+  reason: string;
+  error?: string;
 }
 
 export interface OperatorRecoveryState {

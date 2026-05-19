@@ -369,6 +369,85 @@ describe("GitHubClient", () => {
     });
   });
 
+  it("classifies supported transient infrastructure failures as flaky retryable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/14",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "AgentOS CI",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/113"
+            }
+          ]
+        },
+        runLogs: {
+          "113": "npm ERR! network request failed with ECONNRESET while downloading package metadata"
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/14", dir);
+    const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      classification: "flaky_retryable",
+      actionsRunId: "113",
+      reason: "Failed check logs match a supported transient infrastructure or network condition."
+    });
+  });
+
+  it("keeps protected branch and merge queue failures out of the flaky retry path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/15",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [
+            {
+              name: "required-check",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              detailsUrl: "https://github.com/o/r/actions/runs/114"
+            }
+          ]
+        },
+        runLogs: {
+          "114": "Merge queue cannot proceed because a required status check is missing on a protected branch."
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/15", dir);
+    const diagnostics = await client.getFailingCheckDiagnostics(status, dir);
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      classification: "external_or_unknown_report_only",
+      log: expect.stringContaining("Merge queue")
+    });
+  });
+
   it("redacts and bounds failed Actions log excerpts before summarizing diagnostics", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-"));
     const statePath = join(dir, "state.json");
