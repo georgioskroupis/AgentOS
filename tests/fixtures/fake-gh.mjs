@@ -41,6 +41,18 @@ if (args[0] === "pr" && args[1] === "merge") {
   process.exit(0);
 }
 
+if (args[0] === "pr" && args[1] === "update-branch") {
+  if (state.updateBranchError) {
+    console.error(state.updateBranchError);
+    process.exit(1);
+  }
+  state.updatedBranches = [...(state.updatedBranches ?? []), { target: args[2], args: args.slice(3) }];
+  if (state.afterUpdateView) state.view = state.afterUpdateView;
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  console.log("Updated branch");
+  process.exit(0);
+}
+
 if (args[0] === "run" && args[1] === "view") {
   const runId = args[2];
   if (args.includes("--json")) {

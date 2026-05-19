@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { planBranchFreshnessUpdate } from "../src/branch-update.js";
 import { evaluateLandingPreflight, githubCiFromPullRequest, landingFreshnessPatch } from "../src/landing-preflight.js";
 import { validationReuseProfileForConfig } from "../src/validation-profile.js";
 import type { DaemonPreflightResult } from "../src/env.js";
@@ -161,6 +162,48 @@ describe("landing preflight", () => {
 
     expect(validationReuseProfileForConfig(changed).workflowConfigHash).not.toBe(validationReuseProfileForConfig(baseline).workflowConfigHash);
   });
+
+  it("classifies stale same-repository AgentOS branches as safe to update", () => {
+    const result = planBranchFreshnessUpdate(config(), pullRequest({ headSha: "abc123", checks: "passed", mergeStateStatus: "BEHIND" }));
+
+    expect(result).toMatchObject({
+      action: "update",
+      mergeStateStatus: "BEHIND"
+    });
+    expect(result.operatorGuidance).toContain("refresh PR head");
+  });
+
+  it("keeps stale branches report-only when the update path is unsafe or not configured", () => {
+    const conservative = config();
+    conservative.automation = { ...conservative.automation, profile: "conservative" };
+    conservative.github = { ...conservative.github, mergeMode: "manual" };
+    const unsafeBranch = planBranchFreshnessUpdate(config(), {
+      ...pullRequest({ headSha: "abc123", checks: "passed", mergeStateStatus: "BEHIND" }),
+      headRefName: "main"
+    });
+    const disabledPolicy = planBranchFreshnessUpdate(conservative, pullRequest({ headSha: "abc123", checks: "passed", mergeStateStatus: "BEHIND" }));
+
+    expect(unsafeBranch.action).toBe("report-only");
+    expect(unsafeBranch.reason).toContain("cannot update it safely");
+    expect(disabledPolicy.action).toBe("report-only");
+    expect(disabledPolicy.reason).toContain("high-throughput landing is not enabled");
+  });
+
+  it("reports merge conflict, protected branch, and merge queue blockers without branch updates", () => {
+    const conflict = planBranchFreshnessUpdate(config(), pullRequest({ headSha: "abc123", checks: "passed", mergeStateStatus: "DIRTY" }));
+    const protectedBranch = planBranchFreshnessUpdate(config(), pullRequest({ headSha: "abc123", checks: "passed", mergeStateStatus: "BLOCKED" }));
+    const mergeQueue = planBranchFreshnessUpdate(config(), {
+      ...pullRequest({ headSha: "abc123", checks: "passed", mergeStateStatus: "CLEAN" }),
+      checkDetails: [{ name: "merge queue", status: "COMPLETED", conclusion: "FAILURE", url: "https://github.com/o/r/actions/runs/1" }]
+    });
+
+    expect(conflict).toMatchObject({ action: "report-only" });
+    expect(conflict.reason).toContain("merge conflicts");
+    expect(protectedBranch).toMatchObject({ action: "report-only" });
+    expect(protectedBranch.reason).toContain("branch protection");
+    expect(mergeQueue).toMatchObject({ action: "report-only" });
+    expect(mergeQueue.reason).toContain("protected branch or merge queue");
+  });
 });
 
 function config(): ServiceConfig {
@@ -260,7 +303,7 @@ function reusedIssueState(
   return state;
 }
 
-function pullRequest(input: { headSha: string | null; checks: "passed" | "pending" | "failed" }): PullRequestStatus {
+function pullRequest(input: { headSha: string | null; checks: "passed" | "pending" | "failed"; mergeStateStatus?: string | null }): PullRequestStatus {
   return {
     url: "https://github.com/o/r/pull/1",
     state: "OPEN",
@@ -271,6 +314,7 @@ function pullRequest(input: { headSha: string | null; checks: "passed" | "pendin
     headRepository: { owner: "o", repo: "r" },
     isCrossRepository: false,
     headSha: input.headSha,
+    mergeStateStatus: input.mergeStateStatus ?? "CLEAN",
     merged: false,
     checkSummary:
       input.checks === "passed"

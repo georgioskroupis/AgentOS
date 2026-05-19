@@ -321,6 +321,7 @@ export interface IssueState {
   scopeReport?: ScopeReportState;
   contextBudget?: ContextBudgetState;
   ciRetry?: CiRetryState;
+  branchUpdate?: BranchUpdateState;
   validation?: ValidationState;
   updatedAt: string;
 }
@@ -383,6 +384,18 @@ export interface CiRetryAttemptState {
   runIds: string[];
   classification: "flaky_retryable";
   reason: string;
+  error?: string;
+}
+
+export interface BranchUpdateState {
+  status: "updated" | "report_only" | "failed";
+  updatedAt: string;
+  prUrl: string;
+  reason: string;
+  operatorGuidance: string;
+  mergeStateStatus?: string | null;
+  beforeHeadSha?: string | null;
+  afterHeadSha?: string | null;
   error?: string;
 }
 

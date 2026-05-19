@@ -61,6 +61,53 @@ describe("GitHubClient", () => {
     expect(state.mergedWith).not.toContain("--delete-branch");
   });
 
+  it("updates a pull request branch through the GitHub CLI boundary", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-update-branch-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/4",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "BEHIND",
+          baseRefName: "main",
+          headRefName: "agent/AG-4",
+          headRepository: { owner: { login: "o" }, name: "r" },
+          isCrossRepository: false,
+          headRefOid: "old-head",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+        },
+        afterUpdateView: {
+          url: "https://github.com/o/r/pull/4",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "CLEAN",
+          baseRefName: "main",
+          headRefName: "agent/AG-4",
+          headRepository: { owner: { login: "o" }, name: "r" },
+          isCrossRepository: false,
+          headRefOid: "new-head",
+          statusCheckRollup: [{ name: "ci", status: "IN_PROGRESS", conclusion: null }]
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    await client.updatePullRequestBranch("https://github.com/o/r/pull/4", dir);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/4", dir);
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+
+    expect(state.updatedBranches).toEqual([{ target: "https://github.com/o/r/pull/4", args: [] }]);
+    expect(status.headSha).toBe("new-head");
+    expect(status.mergeStateStatus).toBe("CLEAN");
+    expect(status.checkSummary.pending).toBe(1);
+  });
+
   it("rejects PRs with no checks when checks are required", () => {
     expect(
       evaluateMergeReadiness(
