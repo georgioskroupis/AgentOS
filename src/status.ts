@@ -124,6 +124,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     state?.reviewRunnerFailures?.length ? `Review runner failures:\n${formatReviewRunnerFailures(state.reviewRunnerFailures)}` : "Review runner failures: none recorded",
     humanDecisionDetails(state),
     scopeReportDetails(state),
+    ciRetryDetails(state),
     appProofDetails(state),
     operatorRecoveryDetails(state),
     shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
@@ -295,6 +296,9 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   const terminalStatus = cleanTerminalStatusLine(issue);
   if (terminalStatus) return withEvidence(terminalStatus);
   if (isReviewSplitRecommendationBlocking(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
+  if (isActiveCiRetryWait(issue)) return withEvidence(`waiting on flaky CI retry - ${latestCiRetryAttempt(issue)?.checkNames.join(", ") ?? "checks"}`);
+  if (issue.ciRetry?.status === "exhausted") return withEvidence(`flaky CI retry exhausted - ${latestCiRetryAttempt(issue)?.attempt ?? 0}/${latestCiRetryAttempt(issue)?.maxAttempts ?? 0}`);
+  if (issue.ciRetry?.status === "failed") return withEvidence(`flaky CI retry failed - ${latestCiRetryAttempt(issue)?.error ?? "rerun request failed"}`);
   const mergeWaiting = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_waiting");
   if (mergeWaiting) return withEvidence(`waiting on CI - ${mergeWaiting.message ?? "selected PR checks are not ready"}`);
   const mergeFailed = [...logs].reverse().find((entry) => entry.issueIdentifier === issue.issueIdentifier && entry.type === "merge_failed");
@@ -351,6 +355,12 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (isReviewSplitRecommendationBlocking(issue)) {
     return "record a split-follow-up decision or create linked follow-up issue(s) before another broad review/fix iteration";
   }
+  if (isActiveCiRetryWait(issue)) {
+    return "wait for the GitHub Actions rerun to settle, refresh PR status, and continue review only on the selected head";
+  }
+  if (issue.ciRetry?.status === "exhausted" || issue.ciRetry?.status === "failed") {
+    return "inspect the failed check and record a human decision before retrying, repairing, or accepting risk";
+  }
   if (hasApprovedPullRequest(issue)) {
     return "mark the PR ready only after fresh validation and green CI, then move the issue to Merging for the shepherd";
   }
@@ -378,6 +388,10 @@ function hasApprovedPullRequest(issue: IssueState): boolean {
   return issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0;
 }
 
+function isActiveCiRetryWait(issue: IssueState): boolean {
+  return issue.ciRetry?.status === "requested" && issue.reviewStatus !== "approved" && issue.phase !== "completed" && issue.phase !== "merge";
+}
+
 function isSplitRecommendationAdvisory(issue: IssueState | null): boolean {
   return Boolean(issue && (issue.reviewStatus === "approved" || isAuthoritativeTerminalIssueState(issue)));
 }
@@ -394,6 +408,30 @@ function validationStatusPhrase(validation: ValidationState): string | null {
   }
   if (validation.status === "failed") return `validation failed${validation.errors?.length ? ` - ${validation.errors.join("; ")}` : ""}`;
   return null;
+}
+
+function ciRetryDetails(state: IssueState | null): string | null {
+  const retry = state?.ciRetry;
+  if (!retry) return "Flaky CI retry: none recorded";
+  const attempts = retry.attempts.slice(-5).map((attempt) =>
+    [
+      `- ${attempt.status} ${attempt.attempt}/${attempt.maxAttempts} at ${attempt.attemptedAt}`,
+      `  PR: ${attempt.prUrl}`,
+      attempt.headSha ? `  Head: ${attempt.headSha}` : null,
+      `  Checks: ${attempt.checkNames.join(", ") || "unknown"}`,
+      `  Actions runs: ${attempt.runIds.join(", ") || "unknown"}`,
+      `  Reason: ${attempt.reason}`,
+      attempt.error ? `  Error: ${attempt.error}` : null
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n")
+  );
+  return [`Flaky CI retry: ${retry.status} (${retry.updatedAt})`, ...attempts].join("\n");
+}
+
+function latestCiRetryAttempt(issue: IssueState): NonNullable<IssueState["ciRetry"]>["attempts"][number] | null {
+  const attempts = issue.ciRetry?.attempts ?? [];
+  return attempts.length ? attempts[attempts.length - 1] : null;
 }
 
 function latestReviewRunnerFailure(issue: IssueState): NonNullable<IssueState["reviewRunnerFailures"]>[number] | null {

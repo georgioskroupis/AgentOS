@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { exists, readText } from "./fs-utils.js";
+import { pullRequestUrls } from "./issue-state.js";
 import type { RunSummary } from "./runs.js";
 import type { RuntimeActiveRun } from "./runtime-state.js";
-import type { Issue, IssueState, Workspace } from "./types.js";
+import type { Issue, IssueState, ServiceConfig, Workspace } from "./types.js";
 
 export function validationFailureMessage(validation: NonNullable<IssueState["validation"]>): string {
   const reason = validation.errors?.length ? validation.errors.join("; ") : `status=${validation.status}`;
@@ -75,3 +76,25 @@ export function gitRevParse(cwd: string, ref: string): Promise<string | null> {
     child.on("close", (code) => resolvePromise(code === 0 ? stdout.trim() || null : null));
   });
 }
+
+export function isNoPrHandoffApproved(state: IssueState): boolean { return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed"); }
+
+export function isLocallySettledIssueState(state: IssueState): boolean { return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required"; }
+
+export function isLocallyCompletedState(state: IssueState): boolean { return state.phase === "completed" || state.outcome === "already_satisfied"; }
+
+export function completedDispatchStopReason(state: IssueState): string {
+  if (state.outcome === "already_satisfied") return "work is already satisfied by prior AgentOS handoff";
+  if (pullRequestUrls(state).length > 0) return "work is already completed locally and has recorded pull request metadata";
+  return "work is already completed locally and should not be redispatched";
+}
+
+export function completionMarker(issue: Issue): string { return issue.updated_at ?? `${issue.state}:${issue.title}`; }
+export function displayAttempt(attempt: number | null): number { return (attempt ?? 0) + 1; }
+
+export function isStateIn(state: string, states: string[]): boolean {
+  const normalized = state.toLowerCase();
+  return states.map((item) => item.toLowerCase()).includes(normalized);
+}
+
+export function runningAllowedStates(config: ServiceConfig): string[] { return [...config.tracker.activeStates, config.tracker.runningState].filter((state): state is string => Boolean(state)); }

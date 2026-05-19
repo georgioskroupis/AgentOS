@@ -30,6 +30,10 @@ layers:
 - `src/context-budget.ts` estimates prompt size, records included-section
   diagnostics, and enforces per-turn/cumulative context budgets before
   implementation, reviewer, and fixer turns.
+- `src/ci-diagnostics.ts` classifies GitHub check logs for retry, repair, or
+  report-only CI handling.
+- `src/ci-retry.ts` plans bounded flaky CI retry attempts from diagnostics,
+  trust, automation policy, selected PR head, and durable issue state.
 - `src/maintenance.ts` loads reusable maintenance issue templates and seeds
   recurring Linear maintenance work through the CLI.
 - `src/scope-report.ts` builds pre-dispatch reports and dispatch advice from issue state,
@@ -41,6 +45,8 @@ layers:
 - `src/runner/app-server.ts` targets Codex App Server through JSON-RPC.
 - `src/orchestrator.ts` schedules issues, runs agents, reconciles state, and
   records observability events.
+- `src/orchestrator-ci-retry.ts` performs bounded flaky GitHub Actions reruns
+  during review orchestration and records operator-visible retry state.
 - `src/registry-orchestrator.ts` coordinates registered projects from
   `agent-os.yml`, applying global/per-project concurrency and per-project
   locks while delegating actual issue dispatch to the single-project
@@ -81,11 +87,14 @@ src/linear-planned-issues.ts creates or updates marker-backed planned child and 
 src/github.ts shells through gh for PR status and squash merge workflows.
 src/context-pack.ts builds bounded implementation, review, fix, and CI-repair prompt packs from issue text, authoritative decisions, selected PR metadata, diffs, findings, validation, and sanitized logs.
 src/context-budget.ts records shared context diagnostics and enforces configured prompt budgets for long implementation/review/fix runs.
+src/ci-diagnostics.ts classifies GitHub check logs for flaky retry, deterministic repair, ambiguous, and report-only handling.
+src/ci-retry.ts plans bounded flaky CI retry attempts from selected PR check diagnostics and durable issue state.
 src/maintenance.ts loads templates/maintenance issue templates and backs agent-os maintenance seed plus the linear seed-maintenance compatibility path.
 src/scope-report.ts builds pre-dispatch scope reports and dispatch advice for active candidate issues.
 src/runtime-state.ts persists active-run, retry-queue, claimed-issue, daemon freshness, and startup recovery state.
 src/runner/app-server.ts targets Codex App Server through JSON-RPC.
 src/orchestrator.ts schedules Linear issues, runs Codex agents, reconciles state, records events, runs automated review, and shepherds merges.
+src/orchestrator-ci-retry.ts owns bounded flaky GitHub Actions rerun requests and durable retry-state recording during review orchestration.
 src/registry-orchestrator.ts coordinates registry-wide orchestration across multiple registered projects while preserving project-local workflow authority.
 scripts/agent-check.sh is the primary project harness check and validates required files, shell syntax, harness contract, typecheck, tests, and build when node_modules exists.
 GitHub Actions CI is present and documented as running npm ci followed by npm run agent-check.

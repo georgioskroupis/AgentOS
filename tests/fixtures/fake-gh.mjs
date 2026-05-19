@@ -65,6 +65,18 @@ if (args[0] === "run" && args[1] === "view") {
   process.exit(0);
 }
 
+if (args[0] === "run" && args[1] === "rerun") {
+  const runId = args[2];
+  if (state.rerunError) {
+    console.error(state.rerunError);
+    process.exit(1);
+  }
+  state.reruns = [...(state.reruns ?? []), { runId, args: args.slice(3) }];
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  console.log(`Rerun requested for ${runId}`);
+  process.exit(0);
+}
+
 if (args[0] === "api" && args[1] === "graphql") {
   console.log(JSON.stringify(state.graphql ?? { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }));
   process.exit(0);
