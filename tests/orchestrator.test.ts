@@ -8080,6 +8080,112 @@ describe("orchestrator", () => {
     expect(ghStateAfter.mergedWith).toBeUndefined();
   });
 
+  it("updates a stale same-repository PR branch and waits for refreshed evidence before merging", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-branch-update-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const validationNow = new Date().toISOString();
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-05-18T00:00:00.000Z" }],
+          reviewStatus: "approved",
+          validation: {
+            status: "passed",
+            finalStatus: "passed",
+            repoHead: "old-head",
+            checkedAt: validationNow,
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+            githubCi: { status: "passed", headSha: "old-head", checkedAt: validationNow },
+            reuseProfile: validationProfile
+          },
+          updatedAt: validationNow
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    const beforeUpdateView = {
+      url: "https://github.com/o/r/pull/1",
+      state: "OPEN",
+      isDraft: false,
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BEHIND",
+      baseRefName: "main",
+      headRefName: "agent/AG-1",
+      headRepository: { owner: { login: "o" }, name: "r" },
+      isCrossRepository: false,
+      headRefOid: "old-head",
+      statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+    };
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: beforeUpdateView,
+        afterUpdateView: {
+          ...beforeUpdateView,
+          mergeStateStatus: "CLEAN",
+          headRefOid: "new-head",
+          statusCheckRollup: [{ name: "ci", status: "IN_PROGRESS", conclusion: null }]
+        }
+      }),
+      "utf8"
+    );
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(ghStateAfter.updatedBranches).toEqual([{ target: "https://github.com/o/r/pull/1", args: [] }]);
+    expect(ghStateAfter.mergedWith).toBeUndefined();
+    expect(moves).toEqual([]);
+    expect(comments.join("\n")).toContain("AgentOS branch freshness");
+    expect(comments.join("\n")).toContain("AgentOS merge waiting");
+    expect(state.branchUpdate).toMatchObject({ status: "updated", beforeHeadSha: "old-head", afterHeadSha: "new-head" });
+    expect(state.headSha).toBe("new-head");
+    expect(state.validation.githubCi).toMatchObject({ status: "pending", headSha: "new-head" });
+  });
+
   it("accepts supervisor-recovered current validation evidence and records the current CI check head", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-recovered-current-"));
     await initGitRemote(repo);

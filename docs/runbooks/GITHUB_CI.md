@@ -60,3 +60,19 @@ typecheck, lint, syntax, and assertion failures go to the focused fixer path
 when policy and trust mode allow it. Ambiguous/logless failures, external
 checks, protected branch requirements, and merge queue requirements stay
 operator-visible but are not retried by AgentOS.
+
+## Branch Freshness
+
+When an issue is in the configured merge state and high-throughput landing is
+explicitly enabled, AgentOS may update a stale PR branch only when GitHub reports
+the PR as `BEHIND`, the PR is open and non-draft, and the head branch is an
+AgentOS-managed same-repository `agent/*` branch. The bounded path runs one
+`gh pr update-branch <pr>` call, refreshes the selected PR head plus GitHub
+check evidence, records branch freshness state, and waits for fresh CI and
+validation evidence before merge progression.
+
+AgentOS reports instead of updating when the PR is cross-repository, the branch
+is not an AgentOS-managed head branch, high-throughput landing is not enabled,
+GitHub reports merge conflicts, or the PR is blocked by protected branch or
+merge queue requirements. Branch freshness does not mark PRs ready, merge PRs,
+or perform post-merge cleanup.

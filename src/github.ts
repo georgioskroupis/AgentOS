@@ -14,6 +14,7 @@ export interface PullRequestStatus {
   headRepository: GitHubRepositoryRef | null;
   isCrossRepository: boolean | null;
   headSha: string | null;
+  mergeStateStatus?: string | null;
   merged: boolean;
   checkSummary: CheckSummary;
   checkDetails: CheckDetail[];
@@ -90,7 +91,7 @@ export class GitHubClient {
 
   async getPullRequest(url: string, cwd: string): Promise<PullRequestStatus> {
     const raw = await runShell(
-      `${this.command} pr view ${shellQuote(url)} --json url,state,isDraft,mergeable,baseRefName,headRefName,headRepository,headRepositoryOwner,isCrossRepository,headRefOid,mergedAt,statusCheckRollup,changedFiles,files,reviewDecision,latestReviews,reviews,comments`,
+      `${this.command} pr view ${shellQuote(url)} --json url,state,isDraft,mergeable,mergeStateStatus,baseRefName,headRefName,headRepository,headRepositoryOwner,isCrossRepository,headRefOid,mergedAt,statusCheckRollup,changedFiles,files,reviewDecision,latestReviews,reviews,comments`,
       cwd
     );
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -105,6 +106,7 @@ export class GitHubClient {
       headRepository: pullRequestHeadRepository(parsed),
       isCrossRepository: typeof parsed.isCrossRepository === "boolean" ? parsed.isCrossRepository : null,
       headSha: typeof parsed.headRefOid === "string" ? parsed.headRefOid : null,
+      mergeStateStatus: typeof parsed.mergeStateStatus === "string" ? parsed.mergeStateStatus : null,
       merged: Boolean(parsed.mergedAt) || String(parsed.state ?? "").toUpperCase() === "MERGED",
       checkSummary: summarizeChecks(rollup),
       checkDetails: summarizeCheckDetails(rollup),
@@ -219,6 +221,10 @@ export class GitHubClient {
 
   async rerunFailedActionsRun(runId: string, cwd: string): Promise<void> {
     await runShell(`${this.command} run rerun ${shellQuote(runId)} --failed`, cwd);
+  }
+
+  async updatePullRequestBranch(url: string, cwd: string): Promise<void> {
+    await runShell(`${this.command} pr update-branch ${shellQuote(url)}`, cwd);
   }
 
   private async getCheckDiagnostic(check: CheckDetail, status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic> {

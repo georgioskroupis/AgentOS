@@ -10,6 +10,7 @@ import { formatReviewRunnerFailures } from "./review.js";
 import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking } from "./review-budget.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
 import { daemonCredentialDetails, daemonRuntimeDetails } from "./status-daemon.js";
+import { branchUpdateDetails } from "./status-branch-update.js";
 import { contextBudgetDetails, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
 import { appendEvidenceStatus, validationDetails } from "./status-validation.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
@@ -125,6 +126,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     humanDecisionDetails(state),
     scopeReportDetails(state),
     ciRetryDetails(state),
+    branchUpdateDetails(state),
     appProofDetails(state),
     operatorRecoveryDetails(state),
     shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,

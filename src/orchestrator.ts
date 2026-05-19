@@ -19,6 +19,7 @@ import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
 import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment, runLandingShepherdGate } from "./orchestrator-landing-preflight.js";
+import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
 import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
@@ -2143,6 +2144,10 @@ export class Orchestrator {
           mergeTargetRole: mergeTarget?.role ?? "primary",
           updatedAt: new Date().toISOString()
         });
+        const branchFreshness = await handleMergeBranchFreshness({ config: this.config, github, repoRoot, issue, state, stateStore, pullRequest: pr, prUrl: mergePr, logger: this.logger, commentIssue: (body, key) => this.commentIssue(issue, body, key) });
+        state = branchFreshness.state;
+        if (branchFreshness.action === "waiting") { ({ timingStatus, timingLabel, timingMetadata } = branchFreshness); await this.markMergeWaiting(issue, mergePr, branchFreshness.reason, state.lastRunId); return; }
+        if (branchFreshness.action === "failed") { ({ timingStatus, timingLabel, timingMetadata } = branchFreshness); await this.markMergeFailed(issue, branchFreshness.reason, { prUrl: mergePr, runId: state.lastRunId }); return; }
         if (pr.merged) {
           const ciWaitFinishedAt = new Date().toISOString();
           await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, result: "already merged" });
