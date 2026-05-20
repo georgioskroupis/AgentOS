@@ -130,7 +130,8 @@ describe("workspace", () => {
       {
         AGENT_OS_SOURCE_REPO: source,
         AGENT_OS_WORKSPACE: workspace,
-        AGENT_OS_WORKSPACE_KEY: "AG-1"
+        AGENT_OS_WORKSPACE_KEY: "AG-1",
+        AGENT_OS_ALLOW_DIRTY_WORKTREE: ""
       },
       false
     );

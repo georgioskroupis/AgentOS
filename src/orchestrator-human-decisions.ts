@@ -1,5 +1,6 @@
 import { isAuthoritativeHumanDecision } from "./issue-state.js";
-import type { HumanDecisionState, IssueState } from "./types.js";
+import { isReviewSplitRecommendationBlocking, reviewSupervisorMergeDecision } from "./review-budget.js";
+import type { HumanDecisionState, Issue, IssueComment, IssueState } from "./types.js";
 
 export const RECENT_LINEAR_COMMENT_LIMIT = 20;
 export const GUARDRAIL_LINEAR_COMMENT_LIMIT = Number.MAX_SAFE_INTEGER;
@@ -36,6 +37,33 @@ export function formatHumanDecision(decision: HumanDecisionState, label = "Struc
 
 export function formatLinearComment(id: string, author: string | null | undefined, timestamp: string | null | undefined, body: string): string {
   return [`- Comment ${id}${author ? ` by ${author}` : ""}${timestamp ? ` at ${timestamp}` : ""}:`, indentBlock(truncateForPrompt(body.trim(), 1200))].join("\n");
+}
+
+export async function refreshMergeShepherdHumanDecisionsIfNeeded(input: {
+  issue: Issue;
+  state: IssueState | null;
+  fetchIssueComments?: (issue: Issue) => Promise<IssueComment[] | null>;
+  ingestHumanDecisions: (issue: Issue, state: IssueState | null, comments: IssueComment[], options: { authoritativeCommentSet?: boolean }) => Promise<IssueState | null>;
+  logger: { write(entry: { type: string; issueId?: string; issueIdentifier?: string; message?: string }): Promise<unknown> };
+}): Promise<IssueState | null> {
+  const needsSupervisorDecision = input.state?.reviewStatus !== "approved" && !reviewSupervisorMergeDecision(input.state);
+  const needsFreshSplitDecision = isReviewSplitRecommendationBlocking(input.state);
+  if (!needsSupervisorDecision && !needsFreshSplitDecision) return input.state;
+  if (!input.fetchIssueComments) return input.state;
+  try {
+    const comments = await input.fetchIssueComments(input.issue);
+    if (!comments) return input.state;
+    return (await input.ingestHumanDecisions(input.issue, input.state, comments, { authoritativeCommentSet: true })) ?? input.state;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await input.logger.write({
+      type: "merge_shepherd_human_decision_refresh_warning",
+      issueId: input.issue.id,
+      issueIdentifier: input.issue.identifier,
+      message
+    });
+    return input.state;
+  }
 }
 
 export function linearCommentKey(event: string, issueIdentifier: string): string {

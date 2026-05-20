@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
-import type { AgentRunResult, AgentRunner, Issue, IssueTracker } from "../src/types.js";
+import type { AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueState, IssueTracker } from "../src/types.js";
 import { commentWithAgentLifecycleTool, recordHandoffWithAgentLifecycleTool } from "../src/agent-lifecycle.js";
 import type { AgentLifecycleTracker } from "../src/agent-lifecycle.js";
 import { JsonlLogger } from "../src/logging.js";
@@ -7977,6 +7977,220 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("automated review is not approved");
   });
 
+  it("permits unapproved review merge when the supervisor decision was already ingested before Merging", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-gate-local-decision-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeMergeShepherdReviewGateWorkflow(workflowPath, ghState);
+    await writeMergeableGhState(ghState);
+    const decision = supervisorProceedDecision({ commentId: "comment-before-merge-move", decidedAt: "2026-05-16T00:02:00.000Z" });
+    await writeMergeReviewGateState(repo, workflowPath, {
+      humanDecisions: [decision],
+      lastHumanDecision: decision,
+      lifecycleStatus: "externally_fixed"
+    });
+    const moves: string[] = [];
+    let commentReads = 0;
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [{ ...mergingIssue, ...supervisorAssignee }] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async fetchIssueComments() {
+        commentReads += 1;
+        throw new Error("comments should not be refreshed when the local decision is current");
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment() {}
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(commentReads).toBe(0);
+    expect(moves).toEqual(["AG-1 -> Done"]);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lastHumanDecision?.type).toBe("proceed_to_merge_after_supervisor_fix");
+    expect(state?.mergedAt).toBeTruthy();
+  });
+
+  it("refreshes Linear comments once before evaluating the unapproved review gate", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-gate-refresh-decision-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeMergeShepherdReviewGateWorkflow(workflowPath, ghState);
+    await writeMergeableGhState(ghState);
+    await writeMergeReviewGateState(repo, workflowPath);
+    const moves: string[] = [];
+    let commentReads = 0;
+    const issue = { ...mergingIssue, ...supervisorAssignee };
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [issue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async fetchIssueComments(issueIdentifier, limit) {
+        commentReads += 1;
+        expect(issueIdentifier).toBe("AG-1");
+        expect(limit).toBe(Number.MAX_SAFE_INTEGER);
+        return [
+          {
+            id: "comment-refresh-proceed",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-16T00:02:00.000Z",
+            body: supervisorProceedCommentBody("fresh supervisor fix approval arrived before the shepherd tick")
+          }
+        ];
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      },
+      async comment() {}
+    };
+    const logger = new JsonlLogger(repo);
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(commentReads).toBe(1);
+    expect(moves).toEqual(["AG-1 -> Done"]);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lastHumanDecision?.type).toBe("proceed_to_merge_after_supervisor_fix");
+    expect(state?.mergedAt).toBeTruthy();
+    const logs = await logger.tail(100);
+    expect(logs.some((entry) => entry.type === "human_decision_recorded" && entry.message === "proceed_to_merge_after_supervisor_fix")).toBe(true);
+  });
+
+  it("falls back to the existing unapproved review bounce when Linear comments are unreachable", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-gate-refresh-unreachable-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeMergeShepherdReviewGateWorkflow(workflowPath, ghState);
+    await writeMergeableGhState(ghState);
+    await writeMergeReviewGateState(repo, workflowPath);
+    const moves: string[] = [];
+    const comments: string[] = [];
+    let commentReads = 0;
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [{ ...mergingIssue, ...supervisorAssignee }] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async fetchIssueComments() {
+        commentReads += 1;
+        throw new Error("Linear unavailable");
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const logger = new JsonlLogger(repo);
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(commentReads).toBe(1);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("automated review is not approved");
+    const logs = await logger.tail(100);
+    expect(logs.some((entry) => entry.type === "linear_comment_read_failed" && entry.message === "Linear unavailable")).toBe(true);
+    expect(logs.some((entry) => entry.type === "merge_shepherd_human_decision_refresh_warning" && entry.message === "Linear unavailable")).toBe(true);
+  });
+
+  it("keeps the existing unapproved review bounce when the refresh finds no decision comment", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-gate-refresh-empty-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeMergeShepherdReviewGateWorkflow(workflowPath, ghState);
+    await writeMergeableGhState(ghState);
+    await writeMergeReviewGateState(repo, workflowPath);
+    const moves: string[] = [];
+    const comments: string[] = [];
+    let commentReads = 0;
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [{ ...mergingIssue, ...supervisorAssignee }] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async fetchIssueComments() {
+        commentReads += 1;
+        return [];
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(commentReads).toBe(1);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("automated review is not approved");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lastHumanDecision).toBeUndefined();
+  });
+
   it("permits merge when an approved review has only advisory split telemetry", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-advisory-split-"));
     await initGitRemote(repo);
@@ -9632,6 +9846,82 @@ describe("orchestrator", () => {
     expect(prompt).toContain("continue from the existing artifacts");
   });
 });
+
+async function writeMergeShepherdReviewGateWorkflow(workflowPath: string, ghState: string): Promise<void> {
+  await writeFile(
+    workflowPath,
+    `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+    "utf8"
+  );
+}
+
+async function writeMergeableGhState(ghState: string, headSha = "abc123"): Promise<void> {
+  await writeFile(
+    ghState,
+    JSON.stringify({
+      view: {
+        url: "https://github.com/o/r/pull/1",
+        state: "OPEN",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        headRefOid: headSha,
+        statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+      }
+    }),
+    "utf8"
+  );
+}
+
+async function writeMergeReviewGateState(repo: string, workflowPath: string, patch: Partial<IssueState> = {}, headSha = "abc123"): Promise<void> {
+  const validationProfile = await reuseProfileForWorkflow(workflowPath);
+  const validationNow = new Date().toISOString();
+  await new IssueStateStore(repo).write({
+    schemaVersion: 1,
+    issueId: readyIssue.id,
+    issueIdentifier: readyIssue.identifier,
+    prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-05-16T00:00:00.000Z" }],
+    reviewStatus: "changes_requested",
+    validation: {
+      status: "passed",
+      finalStatus: "passed",
+      repoHead: headSha,
+      checkedAt: validationNow,
+      acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+      reuseProfile: validationProfile
+    },
+    updatedAt: "2026-05-16T00:01:00.000Z",
+    ...patch
+  });
+}
+
+function supervisorProceedDecision(overrides: Partial<HumanDecisionState> = {}): HumanDecisionState {
+  return {
+    type: "proceed_to_merge_after_supervisor_fix",
+    source: "linear-comment",
+    trusted: true,
+    actor: "Supervisor",
+    actorId: "user-supervisor",
+    actorEmail: "supervisor@example.com",
+    commentId: "comment-proceed",
+    decidedAt: "2026-05-16T00:02:00.000Z",
+    validationEvidence: ".agent-os/validation/AG-1.json",
+    ciState: "passed",
+    findings: "resolved",
+    summary: "supervisor fix landed and merge can proceed",
+    ...overrides
+  };
+}
+
+function supervisorProceedCommentBody(summary: string): string {
+  return [
+    "AgentOS-Human-Decision: proceed-to-merge-after-supervisor-fix",
+    "PR-Head-SHA: abc123",
+    "Validation-JSON: .agent-os/validation/AG-1.json",
+    "CI-State: passed",
+    "Findings: resolved",
+    `Decision-Summary: ${summary}`
+  ].join("\n");
+}
 
 async function reuseProfileForWorkflow(workflowPath: string) {
   const workflow = await loadWorkflow(workflowPath);

@@ -29,7 +29,7 @@ import { capacityWaitScheduledCommentBody, mergeWaitingCommentBody, needsInputCo
 import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, gitRevParse, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
-import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
+import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, dependencyDispatchStopPatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
@@ -2087,11 +2087,13 @@ export class Orchestrator {
     let state = await stateStore.read(issue.identifier);
     await this.finishOpenRunPhase(state?.lastRunId, issue, "human-wait", "completed", timingStartNoLaterThan(issue.updated_at, timingStartedAt), { reason: "issue entered merge state" });
     if (this.config.review.enabled) {
-      const needsSupervisorDecision = state?.reviewStatus !== "approved" && !reviewSupervisorMergeDecision(state);
-      const needsFreshSplitDecision = isReviewSplitRecommendationBlocking(state);
-      if (needsSupervisorDecision || needsFreshSplitDecision) {
-        state = (await this.ingestHumanDecisions(issue, state)) ?? state;
-      }
+      state = await refreshMergeShepherdHumanDecisionsIfNeeded({
+        issue,
+        state,
+        fetchIssueComments: (target) => this.fetchDispatchGuardrailIssueComments(target),
+        ingestHumanDecisions: (target, current, comments, options) => this.ingestHumanDecisions(target, current, comments, options),
+        logger: this.logger
+      });
     }
     const mergeTarget = mergeTargetPullRequest(state);
     const mergePr = mergeTarget?.url ?? null;
