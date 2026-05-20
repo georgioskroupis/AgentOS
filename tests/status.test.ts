@@ -1627,6 +1627,93 @@ describe("issue inspection", () => {
     expect(configuredDoneStateOutput).not.toContain("terminal workspace warning");
     expect(configuredDoneStateOutput).not.toContain("Workspace recovery: workspace missing");
   });
+
+  it("renders branch freshness details for updated and report-only branch-update decisions", async () => {
+    // VER-94 certification: operator-visible status/inspect output explains each
+    // branch-update decision clearly (updated vs report-only). Covers
+    // branchUpdateDetails() wired into inspectIssue().
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-branch-update-"));
+    const stateRoot = join(repo, ".agent-os", "state", "issues");
+    await mkdir(stateRoot, { recursive: true });
+
+    await writeFile(
+      join(stateRoot, "AG-UPD.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-upd",
+          issueIdentifier: "AG-UPD",
+          branchUpdate: {
+            status: "updated",
+            updatedAt: "2026-05-19T20:13:47.000Z",
+            prUrl: "https://github.com/o/r/pull/70",
+            reason: "The pull request branch is stale and eligible for a bounded same-repository update.",
+            operatorGuidance: "Run one safe branch update, then refresh PR head, checks, and validation freshness before merge progression.",
+            mergeStateStatus: "BEHIND",
+            beforeHeadSha: "old-head-1234567890ab",
+            afterHeadSha: "new-head-1234567890ab"
+          },
+          updatedAt: "2026-05-19T20:13:47.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      join(stateRoot, "AG-RPT.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-rpt",
+          issueIdentifier: "AG-RPT",
+          branchUpdate: {
+            status: "report_only",
+            updatedAt: "2026-05-19T20:14:00.000Z",
+            prUrl: "https://github.com/o/r/pull/71",
+            reason: "The pull request has merge conflicts.",
+            operatorGuidance: "Report only: resolve the merge conflict outside AgentOS' bounded branch update path.",
+            mergeStateStatus: "DIRTY",
+            beforeHeadSha: "abc1234567890def"
+          },
+          updatedAt: "2026-05-19T20:14:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      join(stateRoot, "AG-NONE.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-none",
+          issueIdentifier: "AG-NONE",
+          updatedAt: "2026-05-19T20:15:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const updatedOutput = await inspectIssue(repo, "AG-UPD");
+    expect(updatedOutput).toContain("Branch freshness: updated (2026-05-19T20:13:47.000Z)");
+    expect(updatedOutput).toContain("- PR: https://github.com/o/r/pull/70");
+    expect(updatedOutput).toContain("- Head before: old-head-123");
+    expect(updatedOutput).toContain("- Head after: new-head-123");
+    expect(updatedOutput).toContain("- GitHub merge state: BEHIND");
+
+    const reportOnlyOutput = await inspectIssue(repo, "AG-RPT");
+    expect(reportOnlyOutput).toContain("Branch freshness: report_only (2026-05-19T20:14:00.000Z)");
+    expect(reportOnlyOutput).toContain("- GitHub merge state: DIRTY");
+    expect(reportOnlyOutput).toContain("- Reason: The pull request has merge conflicts.");
+    expect(reportOnlyOutput).toContain("- Next: Report only: resolve the merge conflict");
+
+    const noneOutput = await inspectIssue(repo, "AG-NONE");
+    expect(noneOutput).toContain("Branch freshness: none recorded");
+  });
 });
 
 function run(command: string, args: string[], cwd: string): Promise<void> {

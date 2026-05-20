@@ -8186,6 +8186,210 @@ describe("orchestrator", () => {
     expect(state.validation.githubCi).toMatchObject({ status: "pending", headSha: "new-head" });
   });
 
+  it("reports merge conflicts as report-only during branch-update planning and does not run gh pr update-branch", async () => {
+    // VER-94 certification: end-to-end coverage of the merge-conflict report-only path.
+    // The shepherd must NOT invoke `gh pr update-branch` when MergeStateStatus is DIRTY,
+    // and the issue state must record `branchUpdate.status: report_only` so inspect/status
+    // surface the operator action clearly.
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-branch-conflict-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const validationNow = new Date().toISOString();
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-05-18T00:00:00.000Z" }],
+          reviewStatus: "approved",
+          validation: {
+            status: "passed",
+            finalStatus: "passed",
+            repoHead: "abc123",
+            checkedAt: validationNow,
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+            githubCi: { status: "passed", headSha: "abc123", checkedAt: validationNow },
+            reuseProfile: validationProfile
+          },
+          updatedAt: validationNow
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "CONFLICTING",
+          mergeStateStatus: "DIRTY",
+          baseRefName: "main",
+          headRefName: "agent/AG-1",
+          headRepository: { owner: { login: "o" }, name: "r" },
+          isCrossRepository: false,
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    // Conflict path: no gh pr update-branch side-effect and no merge attempt.
+    expect(ghStateAfter.updatedBranches).toBeUndefined();
+    expect(ghStateAfter.mergedWith).toBeUndefined();
+    // Issue state records the report-only decision so inspect/status can render it.
+    expect(state.branchUpdate).toMatchObject({ status: "report_only", mergeStateStatus: "DIRTY" });
+    expect(state.branchUpdate.reason.toLowerCase()).toContain("merge conflict");
+    // Operator-visible Linear comment includes the freshness header + the report-only decision.
+    const combined = comments.join("\n");
+    expect(combined).toContain("AgentOS branch freshness");
+    expect(combined).toContain("Decision: report-only");
+  });
+
+  it("reports protected branch / merge queue requirements as report-only during branch-update planning", async () => {
+    // VER-94 certification: end-to-end coverage of the BLOCKED report-only path
+    // (protected branch / merge queue / required hooks). Mirrors the merge-conflict
+    // test above but exercises planBranchFreshnessUpdate's BLOCKED branch.
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-branch-blocked-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const validationProfile = await reuseProfileForWorkflow(workflowPath);
+    const validationNow = new Date().toISOString();
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: "2026-05-18T00:00:00.000Z" }],
+          reviewStatus: "approved",
+          validation: {
+            status: "passed",
+            finalStatus: "passed",
+            repoHead: "abc123",
+            checkedAt: validationNow,
+            acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }],
+            githubCi: { status: "passed", headSha: "abc123", checkedAt: validationNow },
+            reuseProfile: validationProfile
+          },
+          updatedAt: validationNow
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "BLOCKED",
+          baseRefName: "main",
+          headRefName: "agent/AG-1",
+          headRepository: { owner: { login: "o" }, name: "r" },
+          isCrossRepository: false,
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for Merging issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(ghStateAfter.updatedBranches).toBeUndefined();
+    expect(ghStateAfter.mergedWith).toBeUndefined();
+    expect(state.branchUpdate).toMatchObject({ status: "report_only", mergeStateStatus: "BLOCKED" });
+    expect(state.branchUpdate.reason.toLowerCase()).toContain("branch protection");
+    const combined = comments.join("\n");
+    expect(combined).toContain("AgentOS branch freshness");
+    expect(combined).toContain("protected branch or merge queue");
+  });
+
   it("accepts supervisor-recovered current validation evidence and records the current CI check head", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-recovered-current-"));
     await initGitRemote(repo);
