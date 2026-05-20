@@ -136,6 +136,9 @@ export function formatSplitRecommendation(recommendation: ReviewSplitRecommendat
   return lines.join("\n");
 }
 
+// This reads only the durable local issue state. Callers that use it as a
+// merge gate must account for the comment-poller lag by refreshing Linear
+// comments before treating a missing decision as authoritative.
 export function reviewSupervisorMergeDecision(state: Pick<IssueState, "humanDecisions" | "lastHumanDecision"> | null | undefined): HumanDecisionState | null {
   const decision = latestAuthoritativeHumanDecision([
     ...(state?.humanDecisions ?? []),
