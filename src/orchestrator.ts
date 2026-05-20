@@ -645,7 +645,8 @@ export class Orchestrator {
     });
     if (linearComments === "failed") return null;
     state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined, { authoritativeCommentSet: Boolean(linearComments) });
-    const scopeReport = await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments, logger: this.logger });
+    // Scope reports only gate dispatch; authoritative lifecycle blocks should
+    // short-circuit before emitting repeat noise.
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
       return null;
     }
@@ -668,6 +669,7 @@ export class Orchestrator {
       });
       return null;
     }
+    const scopeReport = await logPreDispatchScopeReport({ repoRoot: resolve(this.options.repoRoot), issue: latest, state, runtime: await this.runtimeState.read(), workspaceRoot: this.config.workspace.root, linearComments, logger: this.logger });
     if (await this.dispatchGuardrail(latest, state, scopeReport)) {
       return null;
     }

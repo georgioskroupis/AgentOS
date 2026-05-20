@@ -2422,6 +2422,88 @@ describe("orchestrator", () => {
     expect(state?.stopReason).toContain("supervisor continuation or external fix is active");
   });
 
+  it("VER-98: skips pre_dispatch_scope_report emission when supervisor continuation has already paused dispatch", async () => {
+    // Before VER-98 the orchestrator computed and emitted a scope report on
+    // every poll tick for paused issues — observed during VER-93 supervised
+    // dogfood as ~60 identical pre_dispatch_scope_report events for a single
+    // externally_fixed issue in a 30-minute window. The fix moves
+    // classifyAlreadyMergedIssue and isSupervisorContinuationPaused above
+    // logPreDispatchScopeReport so the report is only emitted for issues
+    // that are actually dispatch-eligible. Existing positive tests (around
+    // lines 307 / 550 / 693) already assert pre_dispatch_scope_report fires
+    // for dispatchable issues; this test asserts the inverse for paused ones.
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ver98-paused-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "review",
+      lifecycleStatus: "externally_fixed",
+      lastHumanDecision: {
+        type: "proceed_to_merge_after_supervisor_fix",
+        source: "linear-comment",
+        actor: "Supervisor",
+        actorId: "user-supervisor",
+        actorEmail: "supervisor@example.com",
+        trusted: true,
+        decidedAt: "2026-05-05T00:01:00.000Z",
+        commentId: "comment-1"
+      },
+      updatedAt: "2026-05-05T00:01:00.000Z"
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      }
+    };
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for paused issue");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+    // Two consecutive ticks: the issue stays paused across both. Neither tick
+    // should emit pre_dispatch_scope_report, but both must still emit
+    // dispatch_skipped so operator visibility is preserved.
+    await orchestrator.runOnce(true);
+    await orchestrator.runOnce(true);
+
+    const jsonl = await readFile(join(repo, ".agent-os", "runs", "agent-os.jsonl"), "utf8");
+    const events = jsonl
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { type: string; issueIdentifier?: string; message?: string });
+    const ver1Events = events.filter((e) => e.issueIdentifier === readyIssue.identifier);
+    const dispatchSkippedEvents = ver1Events.filter((e) => e.type === "dispatch_skipped");
+    const scopeReportEvents = ver1Events.filter((e) => e.type === "pre_dispatch_scope_report");
+    expect(scopeReportEvents).toHaveLength(0);
+    // Operator-visible dispatch_skipped must still fire on every tick so
+    // status / inspect output keeps explaining why the issue is paused.
+    expect(dispatchSkippedEvents.length).toBeGreaterThanOrEqual(2);
+    for (const event of dispatchSkippedEvents) {
+      expect(event.message).toContain("supervisor continuation or external fix is active");
+    }
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.lifecycleStatus).toBe("externally_fixed");
+    expect(state?.stopReason).toContain("supervisor continuation or external fix is active");
+  });
+
   it("records missing credential preflight and refuses dispatch before tracker reads", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-preflight-missing-"));
     const workflowPath = join(repo, "WORKFLOW.md");
