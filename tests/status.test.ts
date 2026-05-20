@@ -7,7 +7,7 @@ import { RegistryStateStore } from "../src/registry.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
 import { reviewArtifactPath, writeReviewArtifact } from "../src/review.js";
-import { getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
+import { getDaemonStatus, getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
 
 const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
 
@@ -652,8 +652,8 @@ describe("issue inspection", () => {
       currentGitSha: "new",
       currentMainGitSha: "new",
       workflowPath: join(repo, "WORKFLOW.md"),
-      freshnessStatus: "main_advanced",
-      freshnessMessage: "main advanced from old to new; restart required",
+      freshnessStatus: "stale",
+      freshnessMessage: "main advanced from old to new; run git pull && bin/agent-os daemon restart",
       preflightStatus: "missing_credentials",
       preflightMessage: "tracker.api_key is required after environment resolution",
       repoEnvPath: join(repo, ".agent-os", "env"),
@@ -772,7 +772,7 @@ describe("issue inspection", () => {
     expect(output).toContain("alpha: transient_tracker_error");
     expect(output).toContain("Config: trust=danger; lifecycle=orchestrator-owned; automation=high-throughput/mechanical-first");
     expect(output).toContain("Error: tracker_network - fetch failed");
-    expect(output).toContain("Daemon: main_advanced - main advanced from old to new; restart required");
+    expect(output).toContain("Daemon: stale - main advanced from old to new; run git pull && bin/agent-os daemon restart");
     expect(output).toContain("Daemon preflight: missing_credentials - tracker.api_key is required after environment resolution");
     expect(output).toContain("Repo env: missing");
     expect(output).toContain("AG-2: waiting on CI - 1 GitHub check(s) still pending");
@@ -887,6 +887,22 @@ describe("issue inspection", () => {
     expect(healthy.status).toBe("healthy");
     expect(healthy.message).toContain("credential preflight is ready");
     expect(healthy.nextSafeAction).toContain("no operator action required");
+
+    await new RuntimeStateStore(repo).setDaemon({
+      startedAt: "2026-05-05T00:00:00.000Z",
+      startMainGitSha: "old",
+      currentMainGitSha: "new",
+      workflowPath: join(repo, "WORKFLOW.md"),
+      freshnessStatus: "stale",
+      freshnessMessage: "main advanced from old to new; run git pull && bin/agent-os daemon restart",
+      preflightStatus: "ready"
+    });
+    const stale = await inspectDaemonHealth(repo);
+    expect(stale.status).toBe("stale_freshness");
+    expect(stale.nextSafeAction).toBe("run git pull && bin/agent-os daemon restart");
+    const daemonStatus = await getDaemonStatus(repo);
+    expect(daemonStatus).toContain("Daemon: stale_freshness - main advanced from old to new; run git pull && bin/agent-os daemon restart");
+    expect(daemonStatus).toContain("Daemon freshness: stale - main advanced from old to new; run git pull && bin/agent-os daemon restart");
   });
 
   it("shows recoverable partial work, stale PR heads, stale CI heads, and one next action", async () => {

@@ -12,7 +12,7 @@ export interface RuntimeDaemonState {
   currentGitSha?: string | null;
   currentMainGitSha?: string | null;
   workflowPath: string;
-  freshnessStatus?: "fresh" | "main_advanced";
+  freshnessStatus?: "fresh" | "stale" | "main_advanced";
   freshnessMessage?: string | null;
   preflightStatus?: DaemonPreflightResult["status"];
   preflightMessage?: string | null;

@@ -39,6 +39,27 @@ describe("landing preflight", () => {
     expect(result.guidance.join("\n")).toContain("rerun validation");
   });
 
+  it("blocks landing when daemon freshness is stale", () => {
+    const result = evaluateLandingPreflight({
+      config: config(),
+      daemon: {
+        startedAt: "2026-05-18T00:00:00.000Z",
+        workflowPath: "WORKFLOW.md",
+        freshnessStatus: "stale",
+        freshnessMessage: "main advanced from old to new; run git pull && bin/agent-os daemon restart"
+      },
+      credentials: credentials(),
+      state: issueState({ validationHead: "abc123", ciHead: "abc123", ciStatus: "passed" }),
+      pullRequest: pullRequest({ headSha: "abc123", checks: "passed" }),
+      requireFreshness: true,
+      now: LANDING_NOW
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.reasons.join("\n")).toContain("main advanced from old to new");
+    expect(result.guidance.join("\n")).toContain("git pull && bin/agent-os daemon restart");
+  });
+
   it("blocks unknown check heads and waits on pending check heads", () => {
     const unknown = evaluateLandingPreflight({
       config: config(),
@@ -237,7 +258,8 @@ function config(): ServiceConfig {
     hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 120000 },
     agent: { maxConcurrentAgents: 1, maxTurns: 1, maxRetryAttempts: 1, maxRetryBackoffMs: 1, maxConcurrentAgentsByState: new Map() },
     codex: { command: "codex app-server", approvalPolicy: "never", approvalEventPolicy: "deny", userInputPolicy: "deny", threadSandbox: "danger-full-access", turnSandboxPolicy: { type: "dangerFullAccess", networkAccess: true }, turnTimeoutMs: 1000, readTimeoutMs: 1000, stallTimeoutMs: 1000, passThrough: {} },
-    github: { command: "gh", mergeMode: "shepherd", mergeMethod: "squash", mergeTarget: "primary", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
+    github: { command: "gh", mergeMode: "shepherd", mergeMethod: "squash", mergeTarget: "primary", baseBranch: "main", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
+    daemon: { mainBranchRefreshIntervalTicks: 5 },
     review: { enabled: true, targetMode: "merge-eligible", maxIterations: 1, parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, requiredReviewers: ["self"], optionalReviewers: [], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], budget: { enabled: true, mode: "recommend-only", maxReviewElapsedMs: 1, maxReviewIterations: 1, maxFixerIterations: 1, maxBlockingFindings: 1, maxP1P2Findings: 1, maxChangedFiles: 1, maxValidationReruns: 1, maxReviewTokens: 1, repeatedBroadCategoryThreshold: 1, lateNewBlockingFindingAfterApproval: true, broadCategories: [] } },
     contextBudget: { enabled: true, maxPromptTokens: 1000, maxCumulativeTokens: 1000, largeSectionTokens: 100 },
     validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 }

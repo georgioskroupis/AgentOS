@@ -148,6 +148,10 @@ export interface ServiceConfig {
     doneState: string;
     allowHumanMergeOverride: boolean;
     mergeTarget?: MergeTargetMode;
+    baseBranch: string;
+  };
+  daemon: {
+    mainBranchRefreshIntervalTicks: number;
   };
   review: {
     enabled: boolean;

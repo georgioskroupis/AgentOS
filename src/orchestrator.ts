@@ -11,6 +11,7 @@ import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./lan
 import { landingFreshnessPatch } from "./landing-preflight.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
+import { initialDaemonFreshnessState, isDaemonFreshnessStale, refreshDaemonFreshness } from "./daemon-freshness.js";
 import { LinearClient } from "./linear.js";
 import { summarizeText } from "./output-capture.js";
 import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
@@ -28,7 +29,7 @@ import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
 import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
-import { completedDispatchStopReason, completionMarker, displayAttempt, gitRevParse, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
+import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, dependencyDispatchStopPatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
@@ -90,8 +91,7 @@ export class Orchestrator {
   private startupCleanupDone = false;
   private startupReconstructionDone = false;
   private daemonStartedAt = new Date().toISOString();
-  private daemonStartGitSha: string | null = null;
-  private daemonStartMainGitSha: string | null = null;
+  private daemonFreshness = initialDaemonFreshnessState();
   private freshnessWarningMarker: string | null = null;
   private repoEnv: RepoEnvLoadResult | null = null;
   private preflight: DaemonPreflightResult | null = null;
@@ -307,43 +307,43 @@ export class Orchestrator {
     return runId;
   }
 
-  private async refreshDaemonRuntimeState(): Promise<void> {
+  private async refreshDaemonRuntimeState(options: { forceMainRefresh?: boolean } = {}): Promise<void> {
     const repoRoot = resolve(this.options.repoRoot);
-    this.daemonStartGitSha ??= await gitRevParse(repoRoot, "HEAD");
-    this.daemonStartMainGitSha ??= await gitRevParse(repoRoot, "main").then((sha) => sha ?? gitRevParse(repoRoot, "origin/main"));
-    const currentGitSha = await gitRevParse(repoRoot, "HEAD");
-    const currentMainGitSha = await gitRevParse(repoRoot, "main").then((sha) => sha ?? gitRevParse(repoRoot, "origin/main"));
-    const mainAdvanced = Boolean(this.daemonStartMainGitSha && currentMainGitSha && this.daemonStartMainGitSha !== currentMainGitSha);
-    const freshnessMessage = mainAdvanced
-      ? `main advanced from ${this.daemonStartMainGitSha} to ${currentMainGitSha}; restart the long-running AgentOS daemon after self-modifying code lands`
-      : null;
+    const freshness = await refreshDaemonFreshness({
+      state: this.daemonFreshness,
+      repoRoot,
+      mainBranch: this.config.github.baseBranch,
+      refreshIntervalTicks: this.config.daemon.mainBranchRefreshIntervalTicks,
+      forceMainRefresh: options.forceMainRefresh
+    });
+    this.daemonFreshness = freshness;
     await this.runtimeState.setDaemon({
       startedAt: this.daemonStartedAt,
-      startGitSha: this.daemonStartGitSha,
-      startMainGitSha: this.daemonStartMainGitSha,
-      currentGitSha,
-      currentMainGitSha,
+      startGitSha: freshness.startGitSha,
+      startMainGitSha: freshness.startMainGitSha,
+      currentGitSha: freshness.currentGitSha,
+      currentMainGitSha: freshness.currentMainGitSha,
       workflowPath: this.workflow.workflowPath,
-      freshnessStatus: mainAdvanced ? "main_advanced" : "fresh",
-      freshnessMessage,
+      freshnessStatus: freshness.freshnessStatus,
+      freshnessMessage: freshness.freshnessMessage,
       preflightStatus: this.preflight?.status,
       preflightMessage: this.preflight?.message ?? null,
       repoEnvPath: this.preflight?.repoEnvPath ?? this.repoEnv?.path ?? null,
       repoEnvStatus: this.preflight?.repoEnvStatus ?? this.repoEnv?.status,
       credentialPreflight: this.preflight ?? undefined
     });
-    if (freshnessMessage && this.freshnessWarningMarker !== freshnessMessage) {
-      this.freshnessWarningMarker = freshnessMessage;
+    if (freshness.freshnessMessage && this.freshnessWarningMarker !== freshness.freshnessMessage) {
+      this.freshnessWarningMarker = freshness.freshnessMessage;
       await this.logger.write({
         type: "daemon_freshness_warning",
-        message: freshnessMessage,
+        message: freshness.freshnessMessage,
         payload: {
           daemonStartedAt: this.daemonStartedAt,
           workflowPath: this.workflow.workflowPath,
-          startGitSha: this.daemonStartGitSha,
-          startMainGitSha: this.daemonStartMainGitSha,
-          currentGitSha,
-          currentMainGitSha
+          startGitSha: freshness.startGitSha,
+          startMainGitSha: freshness.startMainGitSha,
+          currentGitSha: freshness.currentGitSha,
+          currentMainGitSha: freshness.currentMainGitSha
         }
       });
     }
@@ -378,7 +378,7 @@ export class Orchestrator {
     let retriesRebuilt = 0;
     let terminalIssues = 0;
     let locksReleased = 0;
-    let freshnessWarnings = runtime.daemon?.freshnessStatus === "main_advanced" ? 1 : 0;
+    let freshnessWarnings = isDaemonFreshnessStale(runtime.daemon?.freshnessStatus) ? 1 : 0;
 
     const lockRecoveries = await recoverWorkspaceLocks(this.config.workspace.root).catch(async (error: Error) => {
       await this.logger.write({ type: "startup_recovery_warning", message: `workspace lock recovery failed: ${error.message}` });
@@ -2255,6 +2255,7 @@ export class Orchestrator {
         await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, reason: "checks ready" });
         await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
         await github.mergePullRequest(mergePr, this.config.github, repoRoot);
+        await this.refreshDaemonRuntimeState({ forceMainRefresh: true });
         const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
         timingMetadata = { prUrl: mergePr, mergeMethod: this.config.github.mergeMethod, cleanupWarnings };
         await this.recordIssueState(issue, {
@@ -2782,14 +2783,10 @@ function lifecycleStatusForHumanDecision(decision: HumanDecisionState): Lifecycl
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolvePromise) => {
     const timer = setTimeout(resolvePromise, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolvePromise();
-      },
-      { once: true }
-    );
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolvePromise();
+    }, { once: true });
   });
 }
 

@@ -2,7 +2,7 @@ import { access, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { RuntimeStateStore } from "./runtime-state.js";
 
-export type DaemonHealthStatus = "healthy" | "blocked_preflight" | "stopped" | "stale_pid" | "failed_launch";
+export type DaemonHealthStatus = "healthy" | "blocked_preflight" | "stale_freshness" | "stopped" | "stale_pid" | "failed_launch";
 
 export interface DaemonHealth {
   status: DaemonHealthStatus;
@@ -58,6 +58,17 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
         : runtime.daemon.repoEnvPath
         ? `fix ${runtime.daemon.repoEnvPath}, then restart the daemon with: ${launchCommand}`
         : `provide required environment, then restart the daemon with: ${launchCommand}`
+    };
+  }
+
+  if (runtime.daemon?.freshnessStatus === "stale" || runtime.daemon?.freshnessStatus === "main_advanced") {
+    return {
+      status: "stale_freshness",
+      pid,
+      pidPath,
+      logPath,
+      message: runtime.daemon.freshnessMessage ?? "daemon base branch advanced after this process started",
+      nextSafeAction: "run git pull && bin/agent-os daemon restart"
     };
   }
 

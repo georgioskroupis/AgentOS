@@ -129,6 +129,7 @@ function validationRelevantConfig(config: ServiceConfig, riskProfile: string): u
       stallTimeoutMs: config.codex.stallTimeoutMs
     },
     github: config.github,
+    daemon: config.daemon,
     review: config.review,
     riskProfile
   };

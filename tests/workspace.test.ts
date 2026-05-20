@@ -71,7 +71,8 @@ describe("workspace", () => {
         stallTimeoutMs: 1000,
         passThrough: {}
       },
-      github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
+      github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false, baseBranch: "main" },
+      daemon: { mainBranchRefreshIntervalTicks: 5 },
       review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, budget: defaultReviewBudget }
     };
 
@@ -177,7 +178,8 @@ function serviceConfig(root: string): ServiceConfig {
       stallTimeoutMs: 1000,
       passThrough: {}
     },
-    github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
+    github: { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false, baseBranch: "main" },
+    daemon: { mainBranchRefreshIntervalTicks: 5 },
     review: { enabled: true, maxIterations: 3, requiredReviewers: ["self", "correctness", "tests", "architecture"], optionalReviewers: ["security"], requireAllBlockingResolved: true, blockingSeverities: ["P0", "P1", "P2"], parallelReviewers: false, maxConcurrentReviewers: 1, skipOptionalReviewersAfterBlockingRequired: false, budget: defaultReviewBudget }
   };
 }

@@ -463,8 +463,10 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
       requireChecks: true,
       deleteBranch: true,
       doneState: "Done",
-      allowHumanMergeOverride: false
+      allowHumanMergeOverride: false,
+      baseBranch: "main"
     },
+    daemon: { mainBranchRefreshIntervalTicks: 5 },
     review: {
       enabled: false,
       maxIterations: 1,

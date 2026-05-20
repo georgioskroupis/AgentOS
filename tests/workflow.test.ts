@@ -63,7 +63,11 @@ describe("workflow", () => {
       deleteBranch: true,
       doneState: "Done",
       allowHumanMergeOverride: false,
-      mergeTarget: "primary"
+      mergeTarget: "primary",
+      baseBranch: "main"
+    });
+    expect(config.daemon).toMatchObject({
+      mainBranchRefreshIntervalTicks: 5
     });
     expect(config.review).toMatchObject({
       enabled: true,

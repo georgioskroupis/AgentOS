@@ -13,7 +13,7 @@ import {
   recordHandoffWithAgentLifecycleTool
 } from "./agent-lifecycle.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
-import { daemonLaunchCommand, getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "./status.js";
+import { daemonLaunchCommand, getDaemonStatus, getRegistryStatus, getStatus, inspectIssue } from "./status.js";
 import { LinearClient } from "./linear.js";
 import {
   formatLinearPlanError,
@@ -300,11 +300,7 @@ daemon
   .command("status")
   .option("--repo <path>", "repository path", process.cwd())
   .action(async (options) => {
-    const health = await inspectDaemonHealth(options.repo);
-    console.log(`Daemon: ${health.status} - ${health.message}`);
-    console.log(`PID file: ${health.pidPath}`);
-    console.log(`Log file: ${health.logPath}`);
-    console.log(`Next safe action: ${health.nextSafeAction}`);
+    console.log(await getDaemonStatus(options.repo));
   });
 
 daemon

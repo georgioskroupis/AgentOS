@@ -3751,18 +3751,23 @@ describe("orchestrator", () => {
 
   it("reports daemon freshness when main advances under a long-running orchestrator", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-freshness-"));
+    const remote = `${repo}-origin.git`;
+    const other = await mkdtemp(join(tmpdir(), "agent-os-orch-freshness-remote-"));
+    await run("git", ["init", "--bare", remote], repo);
     await run("git", ["init", "-b", "main"], repo);
     await run("git", ["config", "user.email", "agentos@example.test"], repo);
     await run("git", ["config", "user.name", "AgentOS Test"], repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\ndaemon:\n  main_branch_refresh_interval_ticks: 1\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await writeFile(join(repo, "README.md"), "initial\n", "utf8");
     await run("git", ["add", "WORKFLOW.md", "README.md"], repo);
     await run("git", ["commit", "-m", "initial"], repo);
+    await run("git", ["remote", "add", "origin", remote], repo);
+    await run("git", ["push", "-u", "origin", "main"], repo);
     const logger = new JsonlLogger(repo);
     const tracker: IssueTracker = {
       async fetchCandidates() {
@@ -3786,16 +3791,40 @@ describe("orchestrator", () => {
     });
 
     await orchestrator.runOnce(true);
-    await writeFile(join(repo, "README.md"), "advanced\n", "utf8");
-    await run("git", ["add", "README.md"], repo);
-    await run("git", ["commit", "-m", "advance main"], repo);
+    const initialRuntime = await new RuntimeStateStore(repo).read();
+    expect(initialRuntime.daemon?.freshnessStatus).toBe("fresh");
+    await run("git", ["clone", "--branch", "main", remote, other], repo);
+    await run("git", ["config", "user.email", "agentos@example.test"], other);
+    await run("git", ["config", "user.name", "AgentOS Test"], other);
+    await writeFile(join(other, "README.md"), "advanced\n", "utf8");
+    await run("git", ["add", "README.md"], other);
+    await run("git", ["commit", "-m", "advance main"], other);
+    await run("git", ["push", "origin", "main"], other);
     await orchestrator.runOnce(true);
 
     const logs = await logger.tail(20);
     expect(logs.some((entry) => entry.type === "daemon_freshness_warning" && entry.message?.includes("main advanced"))).toBe(true);
     const runtime = await new RuntimeStateStore(repo).read();
-    expect(runtime.daemon?.freshnessStatus).toBe("main_advanced");
+    expect(runtime.daemon?.freshnessStatus).toBe("stale");
+    expect(runtime.daemon?.freshnessMessage).toContain("git pull && bin/agent-os daemon restart");
     expect(runtime.daemon?.workflowPath).toBe(workflowPath);
+
+    await run("git", ["pull", "--ff-only"], repo);
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+    const restartedRuntime = await new RuntimeStateStore(repo).read();
+    expect(restartedRuntime.daemon?.freshnessStatus).toBe("fresh");
+    expect(restartedRuntime.daemon?.freshnessMessage).toBeNull();
   });
 
   it("blocks landing when daemon main freshness is stale", async () => {
@@ -3808,7 +3837,7 @@ describe("orchestrator", () => {
     await writeFile(ghState, JSON.stringify({ view: {} }), "utf8");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\ndaemon:\n  main_branch_refresh_interval_ticks: 1\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await writeFile(join(repo, "README.md"), "initial\n", "utf8");
@@ -4856,6 +4885,19 @@ describe("orchestrator", () => {
   it("shepherds a mergeable PR from Merging to Done without running Codex", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-"));
     await initGitRemote(repo);
+    await run("git", ["checkout", "-b", "main"], repo);
+    await run("git", ["config", "user.email", "agentos@example.test"], repo);
+    await run("git", ["config", "user.name", "AgentOS Test"], repo);
+    await writeFile(join(repo, "README.md"), "initial\n", "utf8");
+    await run("git", ["add", "README.md"], repo);
+    await run("git", ["commit", "-m", "initial"], repo);
+    const startMain = await run("git", ["rev-parse", "HEAD"], repo);
+    await run("git", ["update-ref", "refs/remotes/origin/main", startMain], repo);
+    await run("git", ["checkout", "-b", "advanced-main"], repo);
+    await writeFile(join(repo, "README.md"), "advanced\n", "utf8");
+    await run("git", ["commit", "-am", "advance main"], repo);
+    const advancedMain = await run("git", ["rev-parse", "HEAD"], repo);
+    await run("git", ["checkout", "main"], repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
@@ -4910,7 +4952,8 @@ describe("orchestrator", () => {
           mergeable: "MERGEABLE",
           merged: false,
           statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
-        }
+        },
+        updateOriginMainTo: advancedMain
       }),
       "utf8"
     );
@@ -4951,6 +4994,10 @@ describe("orchestrator", () => {
     expect(moves).toEqual(["AG-1 -> Done"]);
     expect(comments.join("\n")).toContain("Merged successfully");
     expect(comments.join("\n")).toContain("https://github.com/o/r/pull/2");
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.daemon?.freshnessStatus).toBe("stale");
+    expect(runtime.daemon?.startMainGitSha).toBe(startMain);
+    expect(runtime.daemon?.currentMainGitSha).toBe(advancedMain);
     const inspected = await runStore.inspect(completedRun.runId);
     expect(inspected.warnings).toEqual([]);
     expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "human-wait")).toEqual(

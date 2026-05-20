@@ -43,6 +43,7 @@ codex:
   stall_timeout_ms: 300000
 github:
   command: gh
+  base: main
   merge_mode: manual
   merge_method: squash
   merge_target: primary
@@ -50,6 +51,8 @@ github:
   delete_branch: true
   done_state: Done
   allow_human_merge_override: false
+daemon:
+  main_branch_refresh_interval_ticks: 5
 review:
   enabled: true
   target_mode: merge-eligible
@@ -293,6 +296,12 @@ Each PR may carry a role: `primary`, `supporting`, `docs`, `follow-up`, or
 `do-not-merge`. Unannotated handoffs default the first PR to `primary` and later
 PRs to `supporting`; lines such as `Primary PR:`, `Docs PR:`, `Follow-up PR:`,
 or `Do not merge PR:` are parsed as explicit roles.
+Daemon freshness checks compare the daemon's start SHA for `github.base`
+(default `main`) with the refreshed `origin/<base>` SHA every
+`daemon.main_branch_refresh_interval_ticks` daemon ticks and immediately after
+shepherd merges. A stale daemon reports the SHA delta and the manual operator
+action `git pull && bin/agent-os daemon restart`.
+
 Review targets are selected by `review.target_mode`: the default
 `merge-eligible` reviews `primary` and `docs` PRs, while `primary` reviews only
 the configured primary PR. Merge shepherding uses `github.merge_target:

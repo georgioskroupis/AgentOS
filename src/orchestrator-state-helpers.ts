@@ -77,6 +77,28 @@ export function gitRevParse(cwd: string, ref: string): Promise<string | null> {
   });
 }
 
+export function gitLsRemoteBranch(cwd: string, remote: string, branch: string): Promise<string | null> {
+  return new Promise((resolvePromise) => {
+    const child = spawn("git", ["-C", cwd, "ls-remote", remote, `refs/heads/${branch}`], {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.on("error", () => resolvePromise(null));
+    child.on("close", (code) => {
+      if (code !== 0) return resolvePromise(null);
+      const sha = stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim().split(/\s+/)[0])
+        .find(Boolean);
+      resolvePromise(sha ?? null);
+    });
+  });
+}
+
 export function isNoPrHandoffApproved(state: IssueState): boolean { return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed"); }
 
 export function isLocallySettledIssueState(state: IssueState): boolean { return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required"; }
