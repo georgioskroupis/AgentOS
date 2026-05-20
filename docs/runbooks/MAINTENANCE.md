@@ -44,3 +44,9 @@ paths, state names, validation status, and the smallest next safe action.
 - `agent_pr_creation_failed` after a successful commit.
 - Approval/review metadata drift that needs a trusted Linear supervisor decision
   with PR head SHA, validation, CI, findings, and decision summary.
+- `Merging` issues bounced for unapproved automated review should be in the
+  configured needs-input state, usually `Human Review`, with a comment asking
+  for a structured `AgentOS-Human-Decision`. CI/check/mergeability bounces may
+  return to `In Progress` for repair and should include the failing PR/check
+  reason. They should also show a repair/fix issue-state phase rather than an
+  approved-review landing state.

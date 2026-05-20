@@ -25,7 +25,7 @@ import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMem
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
-import { capacityWaitScheduledCommentBody, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody } from "./orchestrator-lifecycle-comments.js";
+import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
 import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, gitRevParse, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
@@ -2151,7 +2151,7 @@ export class Orchestrator {
         const branchFreshness = await handleMergeBranchFreshness({ config: this.config, github, repoRoot, issue, state, stateStore, pullRequest: pr, prUrl: mergePr, logger: this.logger, commentIssue: (body, key) => this.commentIssue(issue, body, key) });
         state = branchFreshness.state;
         if (branchFreshness.action === "waiting") { ({ timingStatus, timingLabel, timingMetadata } = branchFreshness); await this.markMergeWaiting(issue, mergePr, branchFreshness.reason, state.lastRunId); return; }
-        if (branchFreshness.action === "failed") { ({ timingStatus, timingLabel, timingMetadata } = branchFreshness); await this.markMergeFailed(issue, branchFreshness.reason, { prUrl: mergePr, runId: state.lastRunId }); return; }
+        if (branchFreshness.action === "failed") { ({ timingStatus, timingLabel, timingMetadata } = branchFreshness); await this.markMergeFailed(issue, branchFreshness.reason, { prUrl: mergePr, runId: state.lastRunId, route: mergeFailureActiveRepairRoute(branchFreshness.reason) }); return; }
         if (pr.merged) {
           const ciWaitFinishedAt = new Date().toISOString();
           await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, result: "already merged" });
@@ -2166,7 +2166,7 @@ export class Orchestrator {
         }
 
         const landingBlock = await mergeShepherdLandingPreflightBlock({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, state, pullRequest: pr, prUrl: mergePr });
-        if (landingBlock) { timingStatus = landingBlock.timingStatus; timingLabel = landingBlock.timingLabel; timingMetadata = landingBlock.timingMetadata; if (landingBlock.status === "waiting") await this.markMergeWaiting(issue, mergePr, landingBlock.reason, state.lastRunId); else await this.markMergeFailed(issue, landingBlock.reason, { prUrl: mergePr, runId: state.lastRunId }); return; }
+        if (landingBlock) { timingStatus = landingBlock.timingStatus; timingLabel = landingBlock.timingLabel; timingMetadata = landingBlock.timingMetadata; if (landingBlock.status === "waiting") await this.markMergeWaiting(issue, mergePr, landingBlock.reason, state.lastRunId); else await this.markMergeFailed(issue, landingBlock.reason, { prUrl: mergePr, runId: state.lastRunId, route: mergeFailureActiveRepairRoute(landingBlock.reason) }); return; }
 
         const validationBlockReason = this.config.review.enabled ? approvedReviewValidationBlockReason(state) : null;
         if (validationBlockReason) {
@@ -2181,7 +2181,7 @@ export class Orchestrator {
           timingStatus = "failed";
           timingLabel = "merge shepherding failed";
           timingMetadata = { prUrl: mergePr, reason };
-          await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
+          await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId, route: "needs-input", reviewGate: true });
           return;
         }
         if (this.config.review.enabled && state.reviewStatus !== "approved") {
@@ -2191,7 +2191,7 @@ export class Orchestrator {
             timingStatus = "failed";
             timingLabel = "merge shepherding failed";
             timingMetadata = { prUrl: mergePr, reason };
-            await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
+            await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId, route: "needs-input", reviewGate: true });
             return;
           }
           if (!supervisorMergeDecision && !state.humanOverrideAt) {
@@ -2246,7 +2246,7 @@ export class Orchestrator {
             timingStatus = "failed";
             timingLabel = "merge shepherding failed";
             timingMetadata = { prUrl: mergePr, reason: readiness.reason };
-            await this.markMergeFailed(issue, readiness.reason, { prUrl: mergePr, runId: state.lastRunId });
+            await this.markMergeFailed(issue, readiness.reason, { prUrl: mergePr, runId: state.lastRunId, route: "running" });
           }
           return;
         }
@@ -2283,7 +2283,7 @@ export class Orchestrator {
         timingStatus = "failed";
         timingLabel = "merge shepherding failed";
         timingMetadata = { prUrl: mergePr, reason };
-        await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
+        await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId, route: mergeFailureActiveRepairRoute(reason) });
       }
     } finally {
       await this.writePhaseTimingEvent(issue, {
@@ -2677,34 +2677,34 @@ export class Orchestrator {
       metadata: { prUrl, reason }
     });
   }
-
-  private async markMergeFailed(issue: Issue, reason: string, options: { prUrl?: string | null; runId?: string | null } = {}): Promise<void> {
+  private async markMergeFailed(issue: Issue, reason: string, options: { prUrl?: string | null; runId?: string | null; route?: MergeFailureRoute; reviewGate?: boolean } = {}): Promise<void> {
     const prUrl = options.prUrl ?? undefined;
+    const route = options.route ?? "review";
+    const targetState = route === "needs-input" ? this.config.tracker.needsInputState : route === "running" ? this.config.tracker.runningState : this.config.tracker.reviewState;
+    if (route === "running") await this.recordIssueState(issue, mergeFailureActiveRepairStatePatch(reason, await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier)));
     await this.commentIssue(
       issue,
-      [
-        "### AgentOS merge needs human review",
-        "",
-        "The merge shepherd could not safely merge this issue.",
-        "",
-        prUrl ? `- PR: ${prUrl}` : null,
-        `- Reason: ${reason}`,
-        "",
-        "Please resolve the issue and move it back to `Merging` when ready."
-      ].filter((line): line is string => line !== null).join("\n"),
+      mergeFailedCommentBody({ prUrl, reason, route, targetState, reviewGate: options.reviewGate }),
       "merge_failed"
     );
-    await this.moveIssue(issue, this.config.tracker.reviewState);
-    await this.writePhaseTimingEvent(issue, {
-      phase: "human-wait", status: "waiting", runId: options.runId, label: "human review wait restarted",
-      metadata: { reviewState: this.config.tracker.reviewState, reason, ...(prUrl ? { prUrl } : {}) }
-    });
+    await this.moveIssue(issue, targetState);
+    if (route === "needs-input") {
+      await this.writePhaseTimingEvent(issue, {
+        phase: "needs-input", status: "waiting", runId: options.runId, label: "merge needs structured human decision",
+        metadata: { needsInputState: this.config.tracker.needsInputState, reason, ...(prUrl ? { prUrl } : {}) }
+      });
+    } else if (route === "review") {
+      await this.writePhaseTimingEvent(issue, {
+        phase: "human-wait", status: "waiting", runId: options.runId, label: "human review wait restarted",
+        metadata: { reviewState: this.config.tracker.reviewState, reason, ...(prUrl ? { prUrl } : {}) }
+      });
+    }
     await this.logger.write({
       type: "merge_failed",
       issueId: issue.id,
       issueIdentifier: issue.identifier,
       message: reason,
-      payload: { prUrl }
+      payload: { prUrl, route, targetState }
     });
   }
 

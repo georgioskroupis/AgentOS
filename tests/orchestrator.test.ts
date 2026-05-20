@@ -5884,7 +5884,7 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("do-not-merge");
   });
 
-  it("routes unsafe merge shepherd failures back to Human Review", async () => {
+  it("returns failed CI merge bounces to the running state", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-fail-"));
     await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -5909,7 +5909,7 @@ describe("orchestrator", () => {
           isDraft: false,
           mergeable: "MERGEABLE",
           merged: false,
-          statusCheckRollup: []
+          statusCheckRollup: [{ name: "AgentOS CI", status: "COMPLETED", conclusion: "FAILURE" }]
         }
       }),
       "utf8"
@@ -5948,8 +5948,97 @@ describe("orchestrator", () => {
 
     await orchestrator.runOnce(true);
 
-    expect(moves).toEqual(["AG-1 -> Human Review"]);
-    expect(comments.join("\n")).toContain("no GitHub checks are present");
+    expect(moves).toEqual(["AG-1 -> In Progress"]);
+    expect(comments.join("\n")).toContain("1 GitHub check(s) failed");
+  });
+
+  it("dispatches active repair after an approved-review PR fails checks in Merging", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-fail-repair-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [In Progress]\n  running_state: In Progress\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\nagent:\n  max_turns: 1\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        phase: "review",
+        reviewStatus: "approved",
+        prs: [{ url: "https://github.com/o/r/pull/1", role: "primary", source: "handoff", discoveredAt: new Date().toISOString() }],
+        prUrl: "https://github.com/o/r/pull/1",
+        updatedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          merged: false,
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "AgentOS CI", status: "COMPLETED", conclusion: "FAILURE" }]
+        }
+      }),
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    let currentIssue = { ...mergingIssue };
+    let runnerCalls = 0;
+    let repairPrompt = "";
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        if (states.includes("Merging") && currentIssue.state === "Merging") return [currentIssue];
+        if (states.includes("In Progress") && currentIssue.state === "In Progress") return [currentIssue];
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map([[currentIssue.id, currentIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+        currentIssue = { ...currentIssue, state, updated_at: new Date().toISOString() };
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        runnerCalls += 1;
+        repairPrompt = input.prompt;
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).toContain("AG-1 -> In Progress");
+    expect(comments.join("\n")).toContain("1 GitHub check(s) failed");
+    expect(runnerCalls).toBe(1);
+    expect(repairPrompt).toContain("Recorded review status: changes_requested");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.reviewStatus).not.toBe("approved");
   });
 
   it("keeps selected PRs with pending checks out of Done", async () => {
@@ -7905,14 +7994,14 @@ describe("orchestrator", () => {
     expect(canonicalArtifact.findings[0].body).toContain("invalid review JSON");
   });
 
-  it("blocks unapproved merge state when human override is disabled", async () => {
+  it("routes review-pending merge bounces through needs-input state", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-gate-"));
     await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
     const ghState = join(repo, "gh-state.json");
     await writeFile(
       workflowPath,
-      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Review Queue\n  merge_state: Merging\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
@@ -7922,7 +8011,7 @@ describe("orchestrator", () => {
         issueId: "issue-1",
         issueIdentifier: "AG-1",
         prUrl: "https://github.com/o/r/pull/1",
-        reviewStatus: "changes_requested",
+        reviewStatus: "pending",
         updatedAt: new Date().toISOString()
       }),
       "utf8"
@@ -7974,10 +8063,13 @@ describe("orchestrator", () => {
     await orchestrator.runOnce(true);
 
     expect(moves).toEqual(["AG-1 -> Human Review"]);
-    expect(comments.join("\n")).toContain("automated review is not approved");
+    expect(moves).not.toContain("AG-1 -> In Progress");
+    expect(moves).not.toContain("AG-1 -> Review Queue");
+    expect(comments.join("\n")).toContain("Merging refused because automated review is not approved; awaiting structured AgentOS-Human-Decision");
+    expect(comments.join("\n")).toContain("WORKFLOW.md#human-decision-re-entry");
   });
 
-  it("permits unapproved review merge when the supervisor decision was already ingested before Merging", async () => {
+  it("permits review-pending merge when the supervisor decision was already ingested before Merging", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-review-gate-local-decision-"));
     await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -7986,6 +8078,7 @@ describe("orchestrator", () => {
     await writeMergeableGhState(ghState);
     const decision = supervisorProceedDecision({ commentId: "comment-before-merge-move", decidedAt: "2026-05-16T00:02:00.000Z" });
     await writeMergeReviewGateState(repo, workflowPath, {
+      reviewStatus: "pending",
       humanDecisions: [decision],
       lastHumanDecision: decision,
       lifecycleStatus: "externally_fixed"

@@ -207,6 +207,13 @@ non-authoritative context and do not change lifecycle state. Agent-authored
 handoff files can record structured decisions as context, but they do not
 control redispatch, merge, or supervisor-continuation guardrails.
 
+If a `Merging` issue reaches the merge shepherd before automated review is
+approved and no authoritative supervisor merge decision is recorded, AgentOS
+refuses the merge and moves the issue through `tracker.needs_input_state`
+(default `Human Review`). The bounce comment points back to this decision
+format so a supervisor can record the intended next action without putting the
+issue back through the active dispatch loop.
+
 Structured decision format:
 
 ```text
@@ -313,6 +320,14 @@ evidence is a run failure and stays in the retry/failure path instead of moving
 the issue to `Human Review`. A successful Codex turn that exhausts
 `agent.max_turns` without writing `.agent-os/handoff-<issue>.md` fails as
 `missing_handoff`.
+
+Merge shepherd failures split by blocker type. Review/approval-gate failures,
+including missing structured supervisor decisions for unapproved automated
+review, move to `tracker.needs_input_state` so they wait for Human Review.
+CI/check/mergeability failures keep the active repair lane by returning to the
+configured `running_state`. AgentOS records those bounces as repair/fix state
+instead of leaving an approved-review landing state behind; after repair and
+fresh validation, move the issue back to `Merging`.
 
 Stall reconciliation uses the most recent Codex event timestamp, falling back to
 run start only when no events have arrived. Long-running validation or command

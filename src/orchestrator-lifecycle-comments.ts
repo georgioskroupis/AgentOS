@@ -1,5 +1,6 @@
 import type { RetryEntry } from "./orchestrator-retry.js";
-import type { Workspace } from "./types.js";
+import { categorizeRunError } from "./run-errors.js";
+import type { IssueState, Workspace } from "./types.js";
 
 export function runStartedCommentBody(workspace: Workspace, attemptLabel: number): string {
   return [
@@ -79,4 +80,48 @@ export function needsInputCommentBody(workspace: Workspace, attemptLabel: number
 
 export function mergeWaitingCommentBody(prUrl: string, reason: string): string {
   return ["### AgentOS merge waiting", "", "The issue is in `Merging`, but the pull request is not ready yet.", "", `- PR: ${prUrl}`, `- Reason: ${reason}`].join("\n");
+}
+
+export type MergeFailureRoute = "review" | "needs-input" | "running";
+
+export function mergeFailedCommentBody(input: { prUrl?: string; reason: string; route: MergeFailureRoute; targetState?: string | null; reviewGate?: boolean }): string {
+  return [
+    input.route === "running" ? "### AgentOS merge returned to active repair" : "### AgentOS merge needs human review",
+    "",
+    input.reviewGate
+      ? "Merging refused because automated review is not approved; awaiting structured AgentOS-Human-Decision."
+      : "The merge shepherd could not safely merge this issue.",
+    "",
+    input.prUrl ? `- PR: ${input.prUrl}` : null,
+    `- Reason: ${input.reason}`,
+    input.reviewGate ? "- Decision format: [WORKFLOW.md Human Decision Re-Entry](WORKFLOW.md#human-decision-re-entry)" : null,
+    "",
+    input.reviewGate
+      ? "Record a structured `AgentOS-Human-Decision` before returning this issue to `Merging`."
+      : input.route === "running" && input.targetState
+        ? `AgentOS moved this issue back to \`${input.targetState}\` for repair. Move it back to \`Merging\` when ready.`
+        : "Please resolve the issue and move it back to `Merging` when ready."
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+export function mergeFailureActiveRepairRoute(reason: string): MergeFailureRoute | undefined {
+  return /checks?.*(fail|failing|present|successful)|not mergeable|merge conflicts?|branch protection|required checks?|merge queue|protected branch/i.test(reason)
+    ? "running"
+    : undefined;
+}
+
+export function mergeFailureActiveRepairStatePatch(reason: string, current: Pick<IssueState, "reviewStatus"> | null | undefined): Partial<IssueState> {
+  return {
+    phase: "fix",
+    reviewStatus: current?.reviewStatus ? "changes_requested" : undefined,
+    lifecycleStatus: undefined,
+    lastError: reason,
+    errorCategory: categorizeRunError(reason),
+    activeRunId: undefined,
+    nextRetryAt: undefined,
+    retryAttempt: undefined,
+    stopReason: `merge shepherd returned issue to active repair: ${reason}`
+  };
 }
