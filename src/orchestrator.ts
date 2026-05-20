@@ -645,14 +645,8 @@ export class Orchestrator {
     });
     if (linearComments === "failed") return null;
     state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined, { authoritativeCommentSet: Boolean(linearComments) });
-    // VER-98: short-circuit before logPreDispatchScopeReport when dispatch is
-    // already blocked by an already-merged PR or a non-dispatching lifecycle
-    // status (externally_fixed / supervisor_continuation / human_continuation
-    // paired with a non-fix-findings decision). The scope report exists to
-    // gate dispatch — if the issue is non-dispatchable for an authoritative
-    // reason, computing/emitting it on every tick is just noise. Neither
-    // classifyAlreadyMergedIssue nor isSupervisorContinuationPaused depend on
-    // scopeReport; only dispatchGuardrail does, and that runs below.
+    // Scope reports only gate dispatch; authoritative lifecycle blocks should
+    // short-circuit before emitting repeat noise.
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
       return null;
     }
