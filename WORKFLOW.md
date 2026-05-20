@@ -325,8 +325,9 @@ Merge shepherd failures split by blocker type. Review/approval-gate failures,
 including missing structured supervisor decisions for unapproved automated
 review, move to `tracker.needs_input_state` so they wait for Human Review.
 CI/check/mergeability failures keep the active repair lane by returning to the
-configured `running_state`; after repair and fresh validation, move the issue
-back to `Merging`.
+configured `running_state`. AgentOS records those bounces as repair/fix state
+instead of leaving an approved-review landing state behind; after repair and
+fresh validation, move the issue back to `Merging`.
 
 Stall reconciliation uses the most recent Codex event timestamp, falling back to
 run start only when no events have arrived. Long-running validation or command

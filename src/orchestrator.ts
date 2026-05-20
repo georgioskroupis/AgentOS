@@ -25,7 +25,7 @@ import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMem
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
-import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
+import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
 import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, gitRevParse, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
@@ -2677,11 +2677,11 @@ export class Orchestrator {
       metadata: { prUrl, reason }
     });
   }
-
   private async markMergeFailed(issue: Issue, reason: string, options: { prUrl?: string | null; runId?: string | null; route?: MergeFailureRoute; reviewGate?: boolean } = {}): Promise<void> {
     const prUrl = options.prUrl ?? undefined;
     const route = options.route ?? "review";
     const targetState = route === "needs-input" ? this.config.tracker.needsInputState : route === "running" ? this.config.tracker.runningState : this.config.tracker.reviewState;
+    if (route === "running") await this.recordIssueState(issue, mergeFailureActiveRepairStatePatch(reason, await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier)));
     await this.commentIssue(
       issue,
       mergeFailedCommentBody({ prUrl, reason, route, targetState, reviewGate: options.reviewGate }),

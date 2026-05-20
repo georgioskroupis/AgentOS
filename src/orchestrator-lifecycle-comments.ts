@@ -1,5 +1,6 @@
 import type { RetryEntry } from "./orchestrator-retry.js";
-import type { Workspace } from "./types.js";
+import { categorizeRunError } from "./run-errors.js";
+import type { IssueState, Workspace } from "./types.js";
 
 export function runStartedCommentBody(workspace: Workspace, attemptLabel: number): string {
   return [
@@ -109,4 +110,18 @@ export function mergeFailureActiveRepairRoute(reason: string): MergeFailureRoute
   return /checks?.*(fail|failing|present|successful)|not mergeable|merge conflicts?|branch protection|required checks?|merge queue|protected branch/i.test(reason)
     ? "running"
     : undefined;
+}
+
+export function mergeFailureActiveRepairStatePatch(reason: string, current: Pick<IssueState, "reviewStatus"> | null | undefined): Partial<IssueState> {
+  return {
+    phase: "fix",
+    reviewStatus: current?.reviewStatus ? "changes_requested" : undefined,
+    lifecycleStatus: undefined,
+    lastError: reason,
+    errorCategory: categorizeRunError(reason),
+    activeRunId: undefined,
+    nextRetryAt: undefined,
+    retryAttempt: undefined,
+    stopReason: `merge shepherd returned issue to active repair: ${reason}`
+  };
 }

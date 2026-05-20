@@ -48,4 +48,5 @@ paths, state names, validation status, and the smallest next safe action.
   configured needs-input state, usually `Human Review`, with a comment asking
   for a structured `AgentOS-Human-Decision`. CI/check/mergeability bounces may
   return to `In Progress` for repair and should include the failing PR/check
-  reason.
+  reason. They should also show a repair/fix issue-state phase rather than an
+  approved-review landing state.
