@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 
 const statePath = process.env.GH_FAKE_STATE;
 const args = process.argv.slice(2);
@@ -34,6 +35,10 @@ if (args[0] === "pr" && args[1] === "merge") {
   if (state.mergeError) {
     console.error(state.mergeError);
     process.exit(1);
+  }
+  if (state.updateOriginMainTo) {
+    const update = spawnSync("git", ["update-ref", "refs/remotes/origin/main", state.updateOriginMainTo], { stdio: "inherit" });
+    if (update.status !== 0) process.exit(update.status ?? 1);
   }
   state.mergedWith = args.slice(2);
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);

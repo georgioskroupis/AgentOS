@@ -52,7 +52,7 @@ describe("GitHubClient", () => {
 
     await client.mergePullRequest(
       status.url,
-      { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
+      { command: "gh", mergeMode: "manual", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false, baseBranch: "main" },
       dir
     );
 
@@ -653,7 +653,7 @@ describe("GitHubClient", () => {
     const status = await client.getPullRequest("https://github.com/o/r/pull/11", dir);
     const cleanup = await client.cleanupMergedPullRequest(
       status,
-      { command: "gh", mergeMode: "shepherd", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false },
+      { command: "gh", mergeMode: "shepherd", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false, baseBranch: "main" },
       dir
     );
 

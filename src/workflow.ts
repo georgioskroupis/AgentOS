@@ -58,6 +58,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
   const validationBudget = objectAt(cfg, "validation_budget");
   const codex = objectAt(cfg, "codex");
   const github = objectAt(cfg, "github");
+  const daemon = objectAt(cfg, "daemon");
   const workflowDir = dirname(workflow.workflowPath);
   const trustMode = parseTrustMode(cfg.trust_mode);
 
@@ -128,7 +129,11 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       deleteBranch: booleanAt(github, "delete_branch", true),
       doneState: stringAt(github, "done_state", "Done"),
       allowHumanMergeOverride: booleanAt(github, "allow_human_merge_override", false),
-      mergeTarget: mergeTargetAt(github, "merge_target", "primary")
+      mergeTarget: mergeTargetAt(github, "merge_target", "primary"),
+      baseBranch: stringAt(github, "base", stringAt(github, "base_branch", "main"))
+    },
+    daemon: {
+      mainBranchRefreshIntervalTicks: positiveIntAt(daemon, "main_branch_refresh_interval_ticks", 5)
     },
     review: {
       enabled: booleanAt(objectAt(cfg, "review"), "enabled", true),

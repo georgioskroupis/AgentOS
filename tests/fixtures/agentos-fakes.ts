@@ -75,8 +75,10 @@ export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): Servi
       requireChecks: true,
       deleteBranch: true,
       doneState: "Done",
-      allowHumanMergeOverride: false
+      allowHumanMergeOverride: false,
+      baseBranch: "main"
     },
+    daemon: { mainBranchRefreshIntervalTicks: 5 },
     review: {
       enabled: false,
       maxIterations: 1,

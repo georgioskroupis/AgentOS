@@ -47,6 +47,19 @@ export async function getStatus(repo = process.cwd(), limit = 20): Promise<strin
   return lines.join("\n");
 }
 
+export async function getDaemonStatus(repo = process.cwd()): Promise<string> {
+  const root = resolve(repo);
+  const health = await inspectDaemonHealth(root);
+  const runtime = await new RuntimeStateStore(root).read();
+  return [
+    `Daemon: ${health.status} - ${health.message}`,
+    `PID file: ${health.pidPath}`,
+    `Log file: ${health.logPath}`,
+    `Next safe action: ${health.nextSafeAction}`,
+    ...daemonRuntimeDetails(runtime.daemon)
+  ].join("\n");
+}
+
 export async function getRegistryStatus(registryPath = "agent-os.yml", limit = 20): Promise<string> {
   const registry = await loadRegistry(registryPath);
   const registryState = await new RegistryStateStore(registryPath).read();

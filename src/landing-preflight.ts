@@ -43,9 +43,9 @@ export function evaluateLandingPreflight(input: LandingPreflightInput): LandingP
     reasons.push("Codex App Server command is unavailable for landing");
     guidance.push("configure codex.command before dispatching or landing AgentOS work");
   }
-  if (input.daemon?.freshnessStatus === "main_advanced") {
+  if (input.daemon?.freshnessStatus === "stale" || input.daemon?.freshnessStatus === "main_advanced") {
     reasons.push(input.daemon.freshnessMessage ?? "daemon main freshness is stale");
-    guidance.push("restart the long-running AgentOS daemon from the updated main branch before landing");
+    guidance.push("run `git pull && bin/agent-os daemon restart` from the updated main branch before landing");
   }
 
   if (input.requireFreshness) {
