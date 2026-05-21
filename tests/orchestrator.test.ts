@@ -9875,6 +9875,209 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain(`resume ${workspacePath}`);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("recovers a clean pushed validated branch after app-server closure without duplicate implementation", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-recovery-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready, In Progress]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const { workspacePath, headSha } = await createCleanPushedIssueWorkspace(repo);
+    const validationNow = new Date().toISOString();
+    await writeValidationEvidence(join(workspacePath, ".agent-os", "validation", "AG-1.json"), {
+      schemaVersion: 1,
+      issueIdentifier: "AG-1",
+      runId: "run_supervisor_validation",
+      repoHead: headSha,
+      reuseProfile: await reuseProfileForWorkflow(workflowPath),
+      status: "passed",
+      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }]
+    });
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/77",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefName: "agent/AG-1",
+          headRefOid: headSha,
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    const inProgress = { ...readyIssue, state: "In Progress", updated_at: "2026-05-21T10:00:00.000Z" };
+    const runStore = new RunArtifactStore(repo);
+    const staleRun = await runStore.startRun({ issue: inProgress, attempt: 1, workspace: { path: workspacePath, workspaceKey: "AG-1", createdNow: false } });
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: inProgress.id,
+      issueIdentifier: inProgress.identifier,
+      phase: "streaming-turn",
+      lastRunId: staleRun.runId,
+      activeRunId: staleRun.runId,
+      lastError: "codex_app_server_closed: exit 0",
+      lifecycleStatus: "implementation_failure",
+      workspacePath,
+      updatedAt: "2026-05-21T10:00:00.000Z"
+    });
+    await new RuntimeStateStore(repo).upsertActiveRun({
+      issueId: inProgress.id,
+      identifier: inProgress.identifier,
+      issue: inProgress,
+      attempt: 1,
+      runId: staleRun.runId,
+      startedAt: staleRun.startedAt,
+      lastEventAt: staleRun.startedAt,
+      phase: "streaming-turn",
+      workspacePath,
+      workspaceKey: "AG-1"
+    });
+    const comments: string[] = [];
+    const moves: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [inProgress];
+      },
+      async fetchIssueStates() {
+        return new Map([[inProgress.id, inProgress]]);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("Primary PR: https://github.com/o/r/pull/77");
+    expect(comments.join("\n")).toContain("Recovery-Summary: reconstructed after Codex app-server/session closure");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      phase: "completed",
+      outcome: "implemented",
+      prUrl: "https://github.com/o/r/pull/77",
+      reviewStatus: "pending",
+      headSha,
+      validation: expect.objectContaining({ status: "passed", repoHead: headSha }),
+      operatorRecovery: expect.objectContaining({
+        branch: "agent/AG-1",
+        headSha,
+        validationPath: join(".agent-os", "workspaces", "AG-1", ".agent-os", "validation", "AG-1.json")
+      })
+    });
+    expect(state?.lastError).toBeUndefined();
+    expect(state?.retryAttempt).toBeUndefined();
+    expect(state?.nextRetryAt).toBeUndefined();
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.activeRuns).toEqual([]);
+    expect(runtime.retryQueue).toEqual([]);
+    expect(await readFile(join(workspacePath, ".agent-os", "handoff-AG-1.md"), "utf8")).toContain("Primary PR: https://github.com/o/r/pull/77");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("pauses clean pushed work with incomplete recovery evidence instead of retrying implementation", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-incomplete-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const { workspacePath, headSha } = await createCleanPushedIssueWorkspace(repo);
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/78",
+          state: "OPEN",
+          headRefName: "agent/AG-1",
+          headRefOid: headSha
+        }
+      }),
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "implementation_failure",
+      lastError: "codex_app_server_closed: exit 0",
+      workspacePath,
+      updatedAt: "2026-05-21T10:00:00.000Z"
+    });
+    const comments: string[] = [];
+    const moves: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("AgentOS recovery needed");
+    expect(comments.join("\n")).toContain("branch agent/AG-1 is clean, pushed, and differs from base");
+    expect(comments.join("\n")).toContain("ensure");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      phase: "human-required",
+      reviewStatus: "human_required",
+      lifecycleStatus: "implementation_failure"
+    });
+    expect(state?.nextRetryAt).toBeUndefined();
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.retryQueue).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("does not treat a clean no-upstream branch at the base commit as recoverable partial work", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-no-upstream-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -10185,11 +10388,24 @@ async function initCleanWorkspaceAtOriginMain(workspacePath: string): Promise<vo
   await run("git", ["init", "-b", "main"], workspacePath);
   await run("git", ["config", "user.email", "agentos@example.test"], workspacePath);
   await run("git", ["config", "user.name", "AgentOS Test"], workspacePath);
+  await writeFile(join(workspacePath, ".gitignore"), ".agent-os/\n", "utf8");
   await writeFile(join(workspacePath, "README.md"), "initial\n", "utf8");
-  await run("git", ["add", "README.md"], workspacePath);
+  await run("git", ["add", ".gitignore", "README.md"], workspacePath);
   await run("git", ["commit", "-m", "initial"], workspacePath);
   await run("git", ["remote", "add", "origin", remote], workspacePath);
   await run("git", ["push", "-u", "origin", "main"], workspacePath);
+}
+
+async function createCleanPushedIssueWorkspace(repo: string): Promise<{ workspacePath: string; headSha: string }> {
+  const workspacePath = join(repo, ".agent-os", "workspaces", "AG-1");
+  await mkdir(workspacePath, { recursive: true });
+  await initCleanWorkspaceAtOriginMain(workspacePath);
+  await run("git", ["checkout", "-b", "agent/AG-1"], workspacePath);
+  await writeFile(join(workspacePath, "README.md"), "recovered work\n", "utf8");
+  await run("git", ["add", "README.md"], workspacePath);
+  await run("git", ["commit", "-m", "recover AG-1"], workspacePath);
+  await run("git", ["push", "-u", "origin", "agent/AG-1"], workspacePath);
+  return { workspacePath, headSha: await run("git", ["rev-parse", "HEAD"], workspacePath) };
 }
 
 function sleep(ms: number): Promise<void> {

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   clearedFailureMetadataPatch,
@@ -26,12 +26,14 @@ export interface WorkspaceRecoveryDiagnostics {
   exists: boolean;
   branch: string | null;
   headSha: string | null;
+  baseSha: string | null;
   dirty: boolean;
   upstreamMissing: boolean;
   aheadCount: number;
   behindCount: number;
   stalePrHead: boolean;
   staleCiHead: boolean;
+  cleanPushedWork: boolean;
   recoverable: boolean;
   reasons: string[];
   nextSafeAction: string;
@@ -44,6 +46,10 @@ export interface RecordOperatorRecoveryInput {
   handoffPath?: string;
   runId?: string;
   now?: string;
+  syntheticHandoff?: {
+    outcome?: "implemented" | "already-satisfied";
+    pullRequestUrl?: string | null;
+  };
 }
 
 export interface OperatorRecoveryRecordResult {
@@ -77,15 +83,39 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
       exists: false,
       branch: null,
       headSha: null,
+      baseSha: null,
       dirty: false,
       upstreamMissing: false,
       aheadCount: 0,
       behindCount: 0,
       stalePrHead: false,
       staleCiHead: false,
+      cleanPushedWork: false,
       recoverable: false,
       reasons: ["workspace is missing"],
       nextSafeAction: "inspect runtime state and recover from the last handoff or run artifact; do not start a duplicate implementation until the missing workspace is explained"
+    };
+  }
+
+  const gitRoot = await gitOutput(workspacePath, ["rev-parse", "--show-toplevel"]);
+  const workspaceOwnsGitDir = await pathExists(join(workspacePath, ".git"));
+  if (!gitRoot || !workspaceOwnsGitDir) {
+    return {
+      workspacePath,
+      exists,
+      branch: null,
+      headSha: null,
+      baseSha: null,
+      dirty: false,
+      upstreamMissing: false,
+      aheadCount: 0,
+      behindCount: 0,
+      stalePrHead: false,
+      staleCiHead: false,
+      cleanPushedWork: false,
+      recoverable: false,
+      reasons: gitRoot ? ["workspace path is inside another git worktree"] : ["workspace is not a git worktree"],
+      nextSafeAction: `reuse ${workspacePath} for any follow-up; rerun validation before changing Linear state`
     };
   }
 
@@ -104,6 +134,7 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
   const ciHeadSha = issue.validation?.githubCi?.headSha ?? null;
   const staleCiHead = Boolean(ciHeadSha && headSha && ciHeadSha !== headSha);
   const cleanBaseWithoutUpstream = Boolean(upstreamMissing && !dirty && headSha && baseSha && headSha === baseSha);
+  const cleanPushedWork = Boolean(branch && branch !== "HEAD" && upstreamSha && !dirty && aheadCount === 0 && behindCount === 0 && headSha && baseSha && headSha !== baseSha);
   const branchSyncReason =
     aheadCount > 0 && behindCount > 0
       ? `branch has diverged from upstream (${aheadCount} commit(s) ahead, ${behindCount} commit(s) behind)`
@@ -117,7 +148,8 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
     upstreamMissing && !cleanBaseWithoutUpstream ? "branch has no upstream" : null,
     branchSyncReason,
     stalePrHead ? `local HEAD ${headSha} differs from recorded PR head ${issue.headSha}` : null,
-    staleCiHead ? `local HEAD ${headSha} differs from recorded CI head ${ciHeadSha}` : null
+    staleCiHead ? `local HEAD ${headSha} differs from recorded CI head ${ciHeadSha}` : null,
+    cleanPushedWork ? `branch ${branch} is clean, pushed, and differs from base` : null
   ].filter((item): item is string => item !== null);
   const recoverable = reasons.length > 0;
 
@@ -126,16 +158,20 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
     exists,
     branch,
     headSha,
+    baseSha,
     dirty,
     upstreamMissing,
     aheadCount,
     behindCount,
     stalePrHead,
     staleCiHead,
+    cleanPushedWork,
     recoverable,
     reasons,
-    nextSafeAction: recoverable
-      ? `resume ${workspacePath}, preserve existing changes, run validation, then commit and push the existing branch before updating the handoff or PR`
+    nextSafeAction: cleanPushedWork && reasons.length === 1
+      ? `recover the existing pushed branch: ensure ${join(workspacePath, ".agent-os", `handoff-${issue.issueIdentifier}.md`)} and ${join(workspacePath, ".agent-os", "validation", `${issue.issueIdentifier}.json`)} record the pushed HEAD, then let AgentOS reconcile or run bin/agent-os recovery record ${issue.issueIdentifier} --repo .`
+      : recoverable
+        ? `resume ${workspacePath}, preserve existing changes, run validation, then commit and push the existing branch before updating the handoff or PR`
       : `reuse ${workspacePath} for any follow-up; rerun validation before changing Linear state`
   };
 }
@@ -157,6 +193,11 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
   const branch = diagnostics.branch;
   const headSha = diagnostics.headSha;
   const handoffPath = resolveRecoveryHandoff(repoRoot, workspacePath, issueIdentifier, input.handoffPath);
+  if (!(await pathExists(handoffPath))) {
+    if (input.syntheticHandoff) {
+      await writeSyntheticHandoff(handoffPath, issueIdentifier, input.syntheticHandoff);
+    }
+  }
   if (!(await pathExists(handoffPath))) {
     throw new OperatorRecoveryRefusal(
       `handoff evidence is missing at ${handoffPath}`,
@@ -444,6 +485,22 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function writeSyntheticHandoff(
+  handoffPath: string,
+  issueIdentifier: string,
+  input: NonNullable<RecordOperatorRecoveryInput["syntheticHandoff"]>
+): Promise<void> {
+  await mkdir(dirname(handoffPath), { recursive: true });
+  const lines = [
+    `AgentOS-Outcome: ${input.outcome ?? "implemented"}`,
+    `Validation-JSON: .agent-os/validation/${issueIdentifier}.json`,
+    input.pullRequestUrl ? `Primary PR: ${input.pullRequestUrl}` : null,
+    "",
+    "Recovery-Summary: reconstructed after Codex app-server/session closure from a clean pushed branch and validation evidence."
+  ].filter((line): line is string => line !== null);
+  await writeFile(handoffPath, `${lines.join("\n")}\n`, "utf8");
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
