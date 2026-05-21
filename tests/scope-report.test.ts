@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { IssueStateStore } from "../src/issue-state.js";
 import { RunArtifactStore } from "../src/runs.js";
-import { buildPreDispatchScopeReport } from "../src/scope-report.js";
+import { buildPreDispatchScopeReport, preDispatchScopeReportMessage } from "../src/scope-report.js";
 import type { Issue, IssueState } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -284,6 +284,90 @@ describe("pre-dispatch scope report", () => {
     expect(report.scopeScoring.ignoredSections).toEqual(expect.arrayContaining(["Background", "History", "issue text superseded by trusted Active-Scope"]));
     expect(report.scopeSize).not.toBe("large");
     expect(report.dispatchAdvice.shouldBlock).toBe(false);
+  });
+
+  it("allows a VER-118-style daemon identity slice after bounded trusted Active-Scope", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-ver118-active-scope-"));
+    const issue = fakeIssue({
+      identifier: "VER-118",
+      title: "Add daemon identity metadata writer",
+      description: [
+        "Parent context:",
+        "- VER-105 and VER-115 cover daemon lifecycle, orchestrator singleton behavior, dashboard status, restart recovery, merge cleanup, docs, validation, and workflow guardrails.",
+        "- That parent scope is intentionally broad and should remain split.",
+        "",
+        "History:",
+        "- Prior planning pause correctly rejected the unsplit daemon lifecycle parent.",
+        "- The current child is only one bounded implementation slice."
+      ].join("\n")
+    });
+    const decision = trustedFixDecision(
+      [
+        "AgentOS-Human-Decision: fix-findings",
+        "Decision-Summary: proceed with only the bounded daemon identity slice.",
+        "",
+        "Active-Scope:",
+        "Implement only the daemon identity metadata writer for the daemon lifecycle slice. Do not change scheduler, dashboard, merge, or restart behavior.",
+        "",
+        "Done when:",
+        "- daemon start writes repo-scoped identity metadata",
+        "- focused daemon identity tests pass",
+        "- docs mention identity metadata"
+      ].join("\n"),
+      "2026-05-08T00:01:00.000Z"
+    );
+    const state = await writeIssueState(repo, {
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      humanDecisions: [decision],
+      lastHumanDecision: decision
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue, state });
+
+    expect(report.evidence.planningReentry).toMatchObject({
+      status: "satisfied",
+      activeScopePresent: true,
+      activeScopeBounded: true
+    });
+    expect(report.scopeScoring.textSource).toBe("trusted_active_scope");
+    expect(report.scopeScoring.ignoredSections).toEqual(expect.arrayContaining(["issue text superseded by trusted Active-Scope"]));
+    expect(report.scopeScoring.score).toBeLessThan(report.scopeScoring.largeThreshold);
+    expect(report.scopeSize).not.toBe("large");
+    expect(report.dispatchAdvice.shouldBlock).toBe(false);
+    expect(preDispatchScopeReportMessage(report)).toContain("source=trusted_active_scope");
+  });
+
+  it("keeps broad daemon lifecycle parent work in planning_required", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-daemon-parent-"));
+    const issue = fakeIssue({
+      identifier: "VER-105",
+      title: "Productize daemon lifecycle, status, dashboard, and orchestration behavior",
+      description: [
+        "Acceptance criteria:",
+        "- Add daemon start, stop, restart, attach, and status commands.",
+        "- Enforce singleton behavior across orchestrator, runner, and dashboard entrypoints.",
+        "- Classify stale, non-AgentOS, and missing PID state.",
+        "- Update workflow docs and runbooks.",
+        "- Add validation, status, and architecture checks.",
+        "- Preserve merge shepherd and Linear lifecycle behavior.",
+        "- Certify crash, restart, and multi-project daemon behavior."
+      ].join("\n")
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue });
+
+    expect(report.scopeScoring.textSource).toBe("issue_active_sections");
+    expect(report.scopeScoring.score).toBeGreaterThanOrEqual(report.scopeScoring.largeThreshold);
+    expect(report.scopeSize).toBe("large");
+    expect(report.dispatchAdvice).toMatchObject({
+      shouldBlock: true,
+      reason: "likely-large scope needs planning or decomposition before implementation dispatch"
+    });
+    expect(preDispatchScopeReportMessage(report)).toContain("source=issue_active_sections");
   });
 
   it("keeps oversized trusted Active-Scope blocked when the stored decision body is truncated", async () => {
