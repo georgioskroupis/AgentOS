@@ -52,6 +52,10 @@ are explicit:
   landing posture.
 - `github.merge_mode` is `shepherd` or `auto`.
 
+Draft PRs are marked ready only when `github.mark_draft_ready: true` is also
+configured and the landing freshness preflight confirms the selected PR head,
+validation evidence, and GitHub checks are aligned.
+
 The public/default `ci-locked` + `conservative` + `manual` combination reports
 landing as disabled. Partial opt-ins report landing as blocked with the missing
 gate reasons instead of silently enabling auto-ready or auto-merge behavior.

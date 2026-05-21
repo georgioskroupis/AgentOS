@@ -1,4 +1,5 @@
 import { readOnlyReviewConfig } from "./orchestrator-review-helpers.js";
+import { detectCapacityWait } from "./capacity-wait.js";
 import { readReviewArtifactResult, reviewArtifactSnapshot, reviewRunnerFailureArtifact, writeReviewArtifact } from "./review.js";
 import { isHumanInputStop } from "./run-errors.js";
 import type { AgentRunResult, AgentRunner, Issue, ReviewRunnerFailure, ServiceConfig, Workspace } from "./types.js";
@@ -122,6 +123,24 @@ function nonMechanicalRunnerFailure(
   maxAttempts: number
 ): ReviewRunnerFailure | null {
   const runnerMessage = result.error ?? result.status;
+  const capacityWait = detectCapacityWait(runnerMessage);
+  if (capacityWait) {
+    return {
+      reviewer: input.reviewer,
+      iteration: input.iteration,
+      attempt: reviewerAttempt,
+      maxAttempts,
+      classification: "non_mechanical",
+      reason: "capacity_wait",
+      message: `Reviewer ${input.reviewer} hit Codex capacity before AgentOS could trust the review artifact. Next safe action: wait until ${capacityWait.resetAt} before retrying reviewer work. Runner result: ${runnerMessage}.`,
+      artifactPath: input.canonicalArtifactPath,
+      resultStatus: result.status,
+      ...(result.error ? { runnerError: result.error } : {}),
+      retryable: false,
+      exhausted: false,
+      recordedAt: new Date().toISOString()
+    };
+  }
   const runnerNeedsHuman = isHumanInputStop(runnerMessage);
   if (!runnerNeedsHuman && result.status !== "canceled") return null;
   return {

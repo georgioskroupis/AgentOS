@@ -26,6 +26,8 @@ import { evaluateOrchestratorStartupPreflight, type OrchestratorStartupPreflight
 import { recordSingletonPreflightFailure } from "./orchestrator-singleton-preflight.js";
 import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
 import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
+import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
+import { markDraftPullRequestReadyIfConfigured } from "./orchestrator-pr-ready.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
@@ -728,7 +730,11 @@ export class Orchestrator {
       const refreshedState = pr ? await this.recordIssueState(issue, landingFreshnessPatch(state, pr, this.config.github.requireChecks)) : state;
       const landingBlock = pr && refreshedState ? await approvedPrLandingPreflightBlock({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, state: refreshedState, pullRequest: pr, mergeTarget }) : null;
       if (landingBlock) { await this.recordIssueState(issue, landingBlock.statePatch); await this.logger.write({ type: `landing_preflight_${landingBlock.status}`, issueId: issue.id, issueIdentifier: issue.identifier, message: landingBlock.message, payload: landingBlock.payload }); if (landingBlock.status === "blocked") await this.moveIssue(issue, this.config.tracker.reviewState); return true; }
-      const readiness = pr ? evaluateMergeReadiness(pr, this.config.github.requireChecks) : null;
+      const readyPr =
+        pr && refreshedState
+          ? await markDraftPullRequestReadyIfConfigured({ issue, github, repoRoot, pr, prUrl: mergeTarget.url, state: refreshedState, requireChecks: this.config.github.requireChecks, markDraftReady: this.config.github.markDraftReady, reason: "approved PR landing preflight passed", recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch), commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key), logger: this.logger })
+          : pr;
+      const readiness = readyPr ? evaluateMergeReadiness(readyPr, this.config.github.requireChecks) : null;
       const message = readiness?.ready
         ? "approved PR is merge-ready; moved issue to Merging instead of redispatching implementation"
         : `approved PR awaits merge readiness${readiness ? `: ${readiness.reason}` : ""}`;
@@ -2155,7 +2161,7 @@ export class Orchestrator {
       try {
         const repoRoot = resolve(this.options.repoRoot);
         await assertPullRequestUrlMatchesRepo(repoRoot, mergePr);
-        const pr = await github.getPullRequest(mergePr, repoRoot);
+        let pr = await github.getPullRequest(mergePr, repoRoot);
         state = await stateStore.merge(issue.identifier, {
           ...state,
           ...landingFreshnessPatch(state, pr, this.config.github.requireChecks),
@@ -2170,7 +2176,7 @@ export class Orchestrator {
         if (pr.merged) {
           const ciWaitFinishedAt = new Date().toISOString();
           await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, result: "already merged" });
-          const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
+          const cleanupWarnings = await cleanupMergedPullRequest({ issue, github, pullRequest: pr, config: this.config, repoRoot: this.options.repoRoot, logger: this.logger });
           timingMetadata = { prUrl: mergePr, result: "already merged", cleanupWarnings };
           await this.recordIssueState(issue, alreadyMergedIssuePatch(state, pr, new Date().toISOString(), "merge shepherd: pull request is already merged", cleanupWarnings));
           await this.runtimeState.clearIssue(issue.id);
@@ -2248,6 +2254,7 @@ export class Orchestrator {
           }
         }
 
+        pr = await markDraftPullRequestReadyIfConfigured({ issue, github, repoRoot, pr, prUrl: mergePr, state, requireChecks: this.config.github.requireChecks, markDraftReady: this.config.github.markDraftReady, reason: "merge shepherd landing preflight passed", recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch), commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key), logger: this.logger });
         const readiness = evaluateMergeReadiness(pr, this.config.github.requireChecks);
         if (!readiness.ready) {
           if (readiness.reason.includes("pending")) {
@@ -2271,11 +2278,12 @@ export class Orchestrator {
         await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
         await github.mergePullRequest(mergePr, this.config.github, repoRoot);
         await this.refreshDaemonRuntimeState({ forceMainRefresh: true });
-        const cleanupWarnings = await this.cleanupMergedPullRequest(issue, github, pr);
+        const cleanupWarnings = await cleanupMergedPullRequest({ issue, github, pullRequest: pr, config: this.config, repoRoot: this.options.repoRoot, logger: this.logger });
         timingMetadata = { prUrl: mergePr, mergeMethod: this.config.github.mergeMethod, cleanupWarnings };
         await this.recordIssueState(issue, {
           phase: "completed",
           lifecycleStatus: cleanupWarnings.length ? "post_merge_cleanup_warning" : "merge_success",
+          mergeCleanupWarnings: cleanupWarnings.length ? cleanupWarnings : undefined,
           mergedAt: new Date().toISOString(),
           lastError: undefined,
           errorCategory: undefined,
@@ -2312,30 +2320,6 @@ export class Orchestrator {
         metadata: timingMetadata
       });
     }
-  }
-
-  private async cleanupMergedPullRequest(issue: Issue, github: GitHubClient, pr: Awaited<ReturnType<GitHubClient["getPullRequest"]>>): Promise<string[]> {
-    const warnings: string[] = [];
-    const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
-    await workspaceManager.remove(issue.identifier).catch((error: Error) => {
-      warnings.push(`Workspace cleanup failed for ${issue.identifier}: ${error.message}`);
-    });
-    const cleanup = await github.cleanupMergedPullRequest(pr, this.config.github, resolve(this.options.repoRoot));
-    warnings.push(...cleanup.warnings);
-    if (warnings.length > 0) {
-      await this.recordIssueState(issue, {
-        mergeCleanupWarnings: warnings,
-        lifecycleStatus: "post_merge_cleanup_warning"
-      });
-      await this.logger.write({
-        type: "merge_cleanup_warning",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: warnings.join("; "),
-        payload: { warnings }
-      });
-    }
-    return warnings;
   }
 
   private isEligible(issue: Issue): boolean {

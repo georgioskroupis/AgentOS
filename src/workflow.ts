@@ -126,6 +126,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       mergeMode: parseGitHubMergeMode(github.merge_mode),
       mergeMethod: mergeMethodAt(github, "merge_method", "squash"),
       requireChecks: booleanAt(github, "require_checks", true),
+      markDraftReady: booleanAt(github, "mark_draft_ready", false),
       deleteBranch: booleanAt(github, "delete_branch", true),
       doneState: stringAt(github, "done_state", "Done"),
       allowHumanMergeOverride: booleanAt(github, "allow_human_merge_override", false),

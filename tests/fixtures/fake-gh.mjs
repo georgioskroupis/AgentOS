@@ -58,6 +58,18 @@ if (args[0] === "pr" && args[1] === "update-branch") {
   process.exit(0);
 }
 
+if (args[0] === "pr" && args[1] === "ready") {
+  if (state.readyError) {
+    console.error(state.readyError);
+    process.exit(1);
+  }
+  state.readyPrs = [...(state.readyPrs ?? []), { target: args[2], args: args.slice(3) }];
+  state.view = { ...(state.view ?? {}), isDraft: false };
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  console.log("Marked pull request as ready");
+  process.exit(0);
+}
+
 if (args[0] === "run" && args[1] === "view") {
   const runId = args[2];
   if (args.includes("--json")) {

@@ -290,6 +290,7 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
       merge_method: github.merge_method === "merge" || github.merge_method === "rebase" ? github.merge_method : "squash",
       merge_mode: github.merge_mode === "shepherd" || github.merge_mode === "auto" ? github.merge_mode : "manual",
       require_checks: typeof github.require_checks === "boolean" ? github.require_checks : true,
+      mark_draft_ready: typeof github.mark_draft_ready === "boolean" ? github.mark_draft_ready : false,
       delete_branch: typeof github.delete_branch === "boolean" ? github.delete_branch : true,
       done_state: typeof github.done_state === "string" ? github.done_state : "Done",
       allow_human_merge_override: typeof github.allow_human_merge_override === "boolean" ? github.allow_human_merge_override : false,

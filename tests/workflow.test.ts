@@ -60,6 +60,7 @@ describe("workflow", () => {
       mergeMode: "manual",
       mergeMethod: "squash",
       requireChecks: true,
+      markDraftReady: false,
       deleteBranch: true,
       doneState: "Done",
       allowHumanMergeOverride: false,
@@ -116,6 +117,7 @@ describe("workflow", () => {
         "  command: npx -y @openai/codex@0.125.0 app-server",
         "github:",
         "  merge_mode: manual",
+        "  mark_draft_ready: true",
         "  allow_human_merge_override: false",
         "---",
         "Hello {{ issue.identifier }}"
@@ -190,6 +192,7 @@ describe("workflow", () => {
         "  user_input_policy: deny",
         "github:",
         "  merge_mode: manual",
+        "  mark_draft_ready: true",
         "  allow_human_merge_override: false",
         "---",
         "Do work"
@@ -204,6 +207,7 @@ describe("workflow", () => {
     expect(config.lifecycle.mode).toBe("orchestrator-owned");
     expect(config.codex.approvalEventPolicy).toBe("deny");
     expect(config.codex.userInputPolicy).toBe("deny");
+    expect(config.github.markDraftReady).toBe(true);
 
     expect(validateWorkflowDefinition(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true)).toMatchObject({
       ok: true,

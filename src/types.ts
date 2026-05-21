@@ -144,6 +144,7 @@ export interface ServiceConfig {
     mergeMode: GitHubMergeMode;
     mergeMethod: "squash" | "merge" | "rebase";
     requireChecks: boolean;
+    markDraftReady?: boolean;
     deleteBranch: boolean;
     doneState: string;
     allowHumanMergeOverride: boolean;
@@ -315,6 +316,7 @@ export interface IssueState {
   reviewTargetMode?: ReviewTargetMode;
   reviewTargetUrls?: string[];
   reviewRunnerFailures?: ReviewRunnerFailure[];
+  pullRequestReady?: PullRequestReadyState;
   reviewBudget?: ReviewBudgetState;
   splitRecommendation?: ReviewSplitRecommendation;
   mergeTargetUrl?: string | null;
@@ -594,6 +596,15 @@ export interface ReviewStateReviewer {
 }
 
 export type ReviewRunnerFailureClassification = "mechanical" | "non_mechanical";
+
+export interface PullRequestReadyState {
+  status: "marked_ready";
+  prUrl: string;
+  markedAt: string;
+  beforeHeadSha?: string | null;
+  afterHeadSha?: string | null;
+  reason: string;
+}
 
 export interface ReviewRunnerFailure {
   reviewer: string;

@@ -227,6 +227,10 @@ export class GitHubClient {
     await runShell(`${this.command} pr update-branch ${shellQuote(url)}`, cwd);
   }
 
+  async markPullRequestReady(url: string, cwd: string): Promise<void> {
+    await runShell(`${this.command} pr ready ${shellQuote(url)}`, cwd);
+  }
+
   private async getCheckDiagnostic(check: CheckDetail, status: PullRequestStatus, cwd: string): Promise<CheckDiagnostic> {
     const checkState = checkDetailState(check);
     if (checkState === "successful") {

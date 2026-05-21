@@ -57,6 +57,12 @@ are intentionally mechanical: authenticate `gh`, set `LINEAR_API_KEY`, restart
 the daemon from current `main`, rerun validation on the selected PR head, or
 wait for GitHub Actions to finish on that head.
 
+Draft PR promotion is separate from merge. AgentOS marks a draft PR ready only
+when high-throughput landing gates pass, `github.mark_draft_ready: true` is set,
+the PR head matches the trusted approval/validation evidence, and GitHub checks
+are fresh and green. Public templates leave this disabled so Linear remains the
+control plane without silently changing GitHub draft state.
+
 Unchanged-head validation reuse is allowed only when the validation evidence
 also carries the current validation reuse profile. That profile records the
 workflow/config hash, trust mode, automation profile, repair policy, and
@@ -72,6 +78,11 @@ available. The attempt is recorded under flaky CI retry state and appears in
 `status`/`inspect`. Deterministic mechanical failures use the focused fixer
 path, and ambiguous/logless, external, protected-branch, or merge-queue cases
 are not retried automatically.
+
+Reviewer-runner capacity or account-limit failures are classified as
+non-mechanical capacity waits, not missing review artifacts. They do not consume
+the reviewer artifact retry budget; `inspect` and review comments should report
+the next safe wait/retry action instead of asking for code changes.
 
 For local continuous dogfood, use the durable launch helper instead of a bare
 `nohup` process:

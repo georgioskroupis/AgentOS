@@ -108,6 +108,33 @@ describe("GitHubClient", () => {
     expect(status.checkSummary.pending).toBe(1);
   });
 
+  it("marks a draft pull request ready through the GitHub CLI boundary", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-ready-pr-"));
+    const statePath = join(dir, "state.json");
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/5",
+          state: "OPEN",
+          isDraft: true,
+          mergeable: "MERGEABLE",
+          headRefOid: "head-ready",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    await client.markPullRequestReady("https://github.com/o/r/pull/5", dir);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/5", dir);
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+
+    expect(state.readyPrs).toEqual([{ target: "https://github.com/o/r/pull/5", args: [] }]);
+    expect(status.isDraft).toBe(false);
+  });
+
   it("rejects PRs with no checks when checks are required", () => {
     expect(
       evaluateMergeReadiness(
