@@ -215,18 +215,21 @@ profile metadata. They are operator tools; agent turns must keep using the
 handoff contract and must not take over Linear lifecycle writes in
 `orchestrator-owned` mode.
 
-### `daemon status` and `daemon launch-command`
+### `daemon start`, `daemon stop`, `daemon restart`, and `daemon status`
 
-Inspect durable daemon liveness and print the local dogfood launch command.
+Inspect and manage durable daemon liveness from the AgentOS CLI.
 `daemon status` distinguishes stopped daemons, stale PID files, running PIDs
 that are not verified as this repo's AgentOS daemon, empty-log failed launches,
-blocked credential preflight, and healthy idle loops. The launch command uses a
-detached `screen` session, writes `.agent-os/daemon.pid`, records daemon identity
-metadata, and appends logs to `.agent-os/daemon.log`.
+blocked credential preflight, and healthy idle loops. Use first-class lifecycle
+commands instead of hand-written `screen` invocations; they apply the daemon
+identity/singleton guard, clean stale PID files only after liveness checks, and
+refuse ambiguous live PID state.
 
 ```bash
+bin/agent-os daemon start --repo . --workflow WORKFLOW.md
 bin/agent-os daemon status --repo .
-bin/agent-os daemon launch-command --repo . --workflow WORKFLOW.md
+bin/agent-os daemon restart --repo . --workflow WORKFLOW.md
+bin/agent-os daemon stop --repo .
 ```
 
 ### `runs list`, `runs inspect`, `runs simulate`, and `runs replay`

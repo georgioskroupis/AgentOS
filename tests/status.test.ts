@@ -903,14 +903,14 @@ describe("issue inspection", () => {
 
     const stopped = await getStatus(repo);
     expect(stopped).toContain("Daemon: stopped - no daemon PID file is present");
-    expect(stopped).toContain("Next safe action: mkdir -p .agent-os");
+    expect(stopped).toContain("Next safe action: bin/agent-os daemon start");
 
     await writeFile(join(repo, ".agent-os", "daemon.pid"), "999999\n", "utf8");
     await writeFile(join(repo, ".agent-os", "daemon.log"), "", "utf8");
     const failed = await inspectDaemonHealth(repo);
     expect(failed.status).toBe("failed_launch");
     expect(failed.nextSafeAction).toContain("remove");
-    expect(failed.nextSafeAction).toContain(".agent-os/daemon.pid");
+    expect(failed.nextSafeAction).toContain("daemon start");
 
     await writeFile(join(repo, ".agent-os", "daemon.pid"), "999998\n", "utf8");
     await writeFile(join(repo, ".agent-os", "daemon.log"), "previous daemon output\n", "utf8");
@@ -923,8 +923,8 @@ describe("issue inspection", () => {
     const nonAgentosPid = await inspectDaemonHealth(repo);
     expect(nonAgentosPid.status).toBe("non_agentos_pid");
     expect(nonAgentosPid.message).toContain("cannot verify it as this repo's daemon");
-    expect(nonAgentosPid.nextSafeAction).toContain("remove");
-    expect(nonAgentosPid.nextSafeAction).toContain("only if");
+    expect(nonAgentosPid.nextSafeAction).toContain("do not run daemon start/restart");
+    expect(nonAgentosPid.nextSafeAction).toContain("confirmed safe");
 
     await writeDaemonIdentity(repo, { pid: process.pid, startedAt: "2026-05-05T00:00:00.000Z", startGitSha: "abc123" });
     await new RuntimeStateStore(repo).setDaemon({
@@ -951,7 +951,8 @@ describe("issue inspection", () => {
     });
     const stale = await inspectDaemonHealth(repo);
     expect(stale.status).toBe("stale_freshness");
-    expect(stale.nextSafeAction).toBe("run git pull && bin/agent-os daemon restart");
+    expect(stale.nextSafeAction).toContain("run git pull && bin/agent-os daemon restart");
+    expect(stale.nextSafeAction).toContain(`--repo '${repo}'`);
     const daemonStatus = await getDaemonStatus(repo);
     expect(daemonStatus).toContain("Daemon: stale_freshness - main advanced from old to new; run git pull && bin/agent-os daemon restart");
     expect(daemonStatus).toContain("Run events:");

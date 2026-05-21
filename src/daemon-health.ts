@@ -22,12 +22,18 @@ export interface DaemonHealth {
   nextSafeAction: string;
 }
 
-export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<DaemonHealth> {
+export interface InspectDaemonHealthOptions {
+  isProcessAlive?: (pid: number) => boolean;
+}
+
+export async function inspectDaemonHealth(repoRoot = process.cwd(), options: InspectDaemonHealthOptions = {}): Promise<DaemonHealth> {
   const root = resolve(repoRoot);
   const pidPath = join(root, ".agent-os", "daemon.pid");
   const logPath = join(root, ".agent-os", "daemon.log");
   const pid = await readPid(pidPath);
-  const launchCommand = daemonLaunchCommand(root);
+  const isAlive = options.isProcessAlive ?? isProcessAlive;
+  const startCommand = daemonStartCommand(root);
+  const restartCommand = daemonRestartCommand(root);
   if (!pid) {
     return {
       status: "stopped",
@@ -35,11 +41,11 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
       pidPath,
       logPath,
       message: "no daemon PID file is present",
-      nextSafeAction: launchCommand
+      nextSafeAction: startCommand
     };
   }
 
-  const alive = isProcessAlive(pid);
+  const alive = isAlive(pid);
   const logSize = await fileSize(logPath);
   if (!alive) {
     const failedEmptyLog = logSize === 0;
@@ -49,11 +55,11 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
       pidPath,
       logPath,
       message: failedEmptyLog ? `pid ${pid} is not running and ${logPath} is empty` : `pid ${pid} is not running`,
-      nextSafeAction: `remove ${pidPath}, inspect ${logPath || ".agent-os/daemon.log"}, then restart with: ${launchCommand}`
+      nextSafeAction: `run ${startCommand}; it will remove the stale PID after confirming pid ${pid} is not running`
     };
   }
 
-  const identity = await readDaemonIdentity(root, { isProcessAlive });
+  const identity = await readDaemonIdentity(root, { isProcessAlive: isAlive });
   if (identity.status !== "active" || identity.identity?.pid !== pid) {
     const identityMismatch =
       identity.status === "active" && identity.identity?.pid !== pid
@@ -65,7 +71,7 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
       pidPath,
       logPath,
       message: `pid ${pid} is running, but AgentOS cannot verify it as this repo's daemon: ${identityMismatch}`,
-      nextSafeAction: `inspect pid ${pid} and ${identity.path}; remove ${pidPath} only if pid ${pid} is not the intended AgentOS daemon, then restart with: ${launchCommand}`
+      nextSafeAction: `inspect pid ${pid} and ${identity.path}; do not run daemon start/restart until pid ${pid} is confirmed safe to stop or the PID file is corrected`
     };
   }
 
@@ -79,10 +85,10 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
       logPath,
       message: runtime.daemon.preflightMessage ?? runtime.daemon.preflightStatus,
       nextSafeAction: githubAuthMissing
-        ? `run gh auth status for the configured github.command, then authenticate and restart the daemon with: ${launchCommand}`
+        ? `run gh auth status for the configured github.command, then authenticate and restart the daemon with: ${restartCommand}`
         : runtime.daemon.repoEnvPath
-        ? `fix ${runtime.daemon.repoEnvPath}, then restart the daemon with: ${launchCommand}`
-        : `provide required environment, then restart the daemon with: ${launchCommand}`
+        ? `fix ${runtime.daemon.repoEnvPath}, then restart the daemon with: ${restartCommand}`
+        : `provide required environment, then restart the daemon with: ${restartCommand}`
     };
   }
 
@@ -93,7 +99,7 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
       pidPath,
       logPath,
       message: runtime.daemon.freshnessMessage ?? "daemon base branch advanced after this process started",
-      nextSafeAction: "run git pull && bin/agent-os daemon restart"
+      nextSafeAction: `run git pull && ${restartCommand}`
     };
   }
 
@@ -105,6 +111,14 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
     message: runtime.daemon?.preflightStatus === "ready" ? "daemon process is alive and credential preflight is ready" : "daemon process is alive",
     nextSafeAction: "no operator action required; use `agent-os status --registry` or `agent-os inspect <issue>` for work-level progress"
   };
+}
+
+export function daemonStartCommand(repoRoot = process.cwd(), workflowPath = "WORKFLOW.md"): string {
+  return `bin/agent-os daemon start --repo ${shellQuote(resolve(repoRoot))} --workflow ${shellQuote(workflowPath)}`;
+}
+
+export function daemonRestartCommand(repoRoot = process.cwd(), workflowPath = "WORKFLOW.md"): string {
+  return `bin/agent-os daemon restart --repo ${shellQuote(resolve(repoRoot))} --workflow ${shellQuote(workflowPath)}`;
 }
 
 export function daemonLaunchCommand(repoRoot = process.cwd(), workflowPath = "WORKFLOW.md"): string {

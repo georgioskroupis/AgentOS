@@ -45,7 +45,7 @@ export function evaluateLandingPreflight(input: LandingPreflightInput): LandingP
   }
   if (input.daemon?.freshnessStatus === "stale" || input.daemon?.freshnessStatus === "main_advanced") {
     reasons.push(input.daemon.freshnessMessage ?? "daemon main freshness is stale");
-    guidance.push("run `git pull && bin/agent-os daemon restart` from the updated main branch before landing");
+    guidance.push("run `git pull && bin/agent-os daemon restart --repo . --workflow WORKFLOW.md` from the updated main branch before landing");
   }
 
   if (input.requireFreshness) {

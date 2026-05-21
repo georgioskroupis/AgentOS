@@ -19,6 +19,7 @@ import {
 } from "./agent-lifecycle.js";
 import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } from "./harness.js";
 import { daemonLaunchCommand, getDaemonStatus, getRegistryStatus, getStatus, inspectIssue } from "./status.js";
+import { formatDaemonLifecycleResult, restartDaemon, startDaemon, stopDaemon } from "./daemon-lifecycle.js";
 import { LinearClient } from "./linear.js";
 import {
   formatLinearPlanError,
@@ -364,6 +365,36 @@ supervisor
   });
 
 const daemon = program.command("daemon").description("Inspect local AgentOS daemon liveness and launch guidance");
+
+daemon
+  .command("start")
+  .option("--repo <path>", "repository path", process.cwd())
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .action(async (options) => {
+    const result = await startDaemon({ repoRoot: options.repo, workflowPath: options.workflow });
+    console.log(formatDaemonLifecycleResult(result));
+    if (result.action === "refused") process.exitCode = 1;
+  });
+
+daemon
+  .command("stop")
+  .option("--repo <path>", "repository path", process.cwd())
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .action(async (options) => {
+    const result = await stopDaemon({ repoRoot: options.repo, workflowPath: options.workflow });
+    console.log(formatDaemonLifecycleResult(result));
+    if (result.action === "refused") process.exitCode = 1;
+  });
+
+daemon
+  .command("restart")
+  .option("--repo <path>", "repository path", process.cwd())
+  .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .action(async (options) => {
+    const result = await restartDaemon({ repoRoot: options.repo, workflowPath: options.workflow });
+    console.log(formatDaemonLifecycleResult(result));
+    if (result.action === "refused") process.exitCode = 1;
+  });
 
 daemon
   .command("status")
