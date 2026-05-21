@@ -254,6 +254,12 @@ export function assertSupervisorValidationEvidence(input: SupervisorValidationEv
   if (typeof raw.repoHead !== "string" || !raw.repoHead.trim()) {
     throw new Error("supervisor validation evidence repoHead is required");
   }
+  if (raw.status !== "passed") {
+    throw new Error("supervisor validation evidence status must be passed");
+  }
+  if (!Array.isArray(raw.commands) || raw.commands.length === 0) {
+    throw new Error("supervisor validation evidence commands must be a non-empty array");
+  }
   const prHeadSha = normalizeSupervisorPrHeadSha(input.prHeadSha);
   if (!sameSha(raw.repoHead, prHeadSha)) {
     throw new Error(`supervisor validation evidence repoHead must match PR-Head-SHA ${prHeadSha}`);

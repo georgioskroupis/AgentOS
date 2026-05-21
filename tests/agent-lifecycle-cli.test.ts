@@ -136,7 +136,14 @@ describe("agent lifecycle CLI", () => {
           issueIdentifier: "AG-1",
           repoHead: "abc1234",
           status: "passed",
-          commands: [],
+          commands: [
+            {
+              name: "npm run agent-check",
+              exitCode: 0,
+              startedAt: "2026-01-01T00:00:00.000Z",
+              finishedAt: "2026-01-01T00:01:00.000Z"
+            }
+          ],
           reuseProfile: {
             workflowConfigHash: "hash",
             trustMode: "danger",

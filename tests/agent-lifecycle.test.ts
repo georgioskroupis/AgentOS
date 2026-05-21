@@ -228,7 +228,14 @@ describe("agent lifecycle tools", () => {
       issueIdentifier: "AG-1",
       repoHead: "abc1234",
       status: "passed",
-      commands: [],
+      commands: [
+        {
+          name: "npm run agent-check",
+          exitCode: 0,
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:01:00.000Z"
+        }
+      ],
       reuseProfile: {
         workflowConfigHash: "hash",
         trustMode: "danger",
@@ -249,12 +256,76 @@ describe("agent lifecycle tools", () => {
 
     expect(() =>
       assertSupervisorValidationEvidence({
-        evidenceText: JSON.stringify({ schemaVersion: 1, issueIdentifier: "AG-1", repoHead: "abc1234", status: "passed", commands: [] }),
+        evidenceText: JSON.stringify({
+          schemaVersion: 1,
+          issueIdentifier: "AG-1",
+          repoHead: "abc1234",
+          status: "passed",
+          commands: [
+            {
+              name: "npm run agent-check",
+              exitCode: 0,
+              startedAt: "2026-01-01T00:00:00.000Z",
+              finishedAt: "2026-01-01T00:01:00.000Z"
+            }
+          ]
+        }),
         validationPath: ".agent-os/validation/AG-1.json",
         issueIdentifier: "AG-1",
         prHeadSha: "abc1234"
       })
     ).toThrow("supervisor validation evidence reuseProfile is required");
+
+    expect(() =>
+      assertSupervisorValidationEvidence({
+        evidenceText: JSON.stringify({
+          schemaVersion: 1,
+          issueIdentifier: "AG-1",
+          repoHead: "abc1234",
+          status: "failed",
+          commands: [
+            {
+              name: "npm run agent-check",
+              exitCode: 1,
+              startedAt: "2026-01-01T00:00:00.000Z",
+              finishedAt: "2026-01-01T00:01:00.000Z"
+            }
+          ],
+          reuseProfile: {
+            workflowConfigHash: "hash",
+            trustMode: "danger",
+            automationProfile: "high-throughput",
+            automationRepairPolicy: "mechanical-first",
+            riskProfile: "review=enabled"
+          }
+        }),
+        validationPath: ".agent-os/validation/AG-1.json",
+        issueIdentifier: "AG-1",
+        prHeadSha: "abc1234"
+      })
+    ).toThrow("supervisor validation evidence status must be passed");
+
+    expect(() =>
+      assertSupervisorValidationEvidence({
+        evidenceText: JSON.stringify({
+          schemaVersion: 1,
+          issueIdentifier: "AG-1",
+          repoHead: "abc1234",
+          status: "passed",
+          commands: [],
+          reuseProfile: {
+            workflowConfigHash: "hash",
+            trustMode: "danger",
+            automationProfile: "high-throughput",
+            automationRepairPolicy: "mechanical-first",
+            riskProfile: "review=enabled"
+          }
+        }),
+        validationPath: ".agent-os/validation/AG-1.json",
+        issueIdentifier: "AG-1",
+        prHeadSha: "abc1234"
+      })
+    ).toThrow("supervisor validation evidence commands must be a non-empty array");
   });
 
   it("requires an explicit tracker tool allowlist before lookup, tracker writes, or fallback", async () => {
