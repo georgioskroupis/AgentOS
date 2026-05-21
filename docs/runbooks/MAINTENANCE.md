@@ -14,6 +14,40 @@ The command reads `templates/maintenance/` and creates Backlog issues for the
 recurring maintenance categories. `bin/agent-os linear seed-maintenance` remains
 as a compatibility alias.
 
+## Supervisor Linear Recovery
+
+Do not use direct GraphQL mutations by Linear UUID for human state repair. Use
+the by-identifier supervisor helpers so a pasted UUID cannot move the wrong
+issue:
+
+```bash
+bin/agent-os supervisor move VER-93 Merging --repo .
+bin/agent-os supervisor decide VER-93 proceed-to-merge-after-supervisor-fix \
+  --validation .agent-os/validation/VER-93.json \
+  --pr-head-sha <sha> \
+  --ci-state passed \
+  --findings resolved \
+  --summary "supervisor repaired the PR head and validation is fresh" \
+  --repo .
+```
+
+`supervisor move` accepts only human-readable identifiers like `VER-93` and
+refuses states outside the configured workflow state set. `supervisor decide`
+posts the exact six-field `AgentOS-Human-Decision` format from `WORKFLOW.md`
+and verifies that the referenced validation evidence belongs to the issue,
+matches the PR head SHA, and includes validation reuse-profile metadata.
+
+Repo-local lifecycle wrappers also accept `--supervisor` for an explicit human
+operator bypass, for example:
+
+```bash
+scripts/agent-linear-move.sh --supervisor VER-93 Merging
+```
+
+Agents must not use the supervisor bypass. In `lifecycle.mode: orchestrator-owned`,
+agent calls without `--supervisor` remain policy-denied and
+must complete through validation evidence plus handoff artifacts.
+
 ## Generic Health-Check Prompt
 
 Use this prompt shape when creating or reviewing a maintenance report:

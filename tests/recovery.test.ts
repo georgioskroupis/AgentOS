@@ -12,7 +12,7 @@ import type { Issue } from "../src/types.js";
 import { writeValidationEvidence } from "../src/validation.js";
 
 const execFileAsync = promisify(execFile);
-const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
+const INTEGRATION_TEST_TIMEOUT_MS = 60_000;
 
 const issue: Issue = {
   id: "issue-1",

@@ -190,6 +190,28 @@ proof artifacts in durable issue state, and clears stale retry/error metadata.
 bin/agent-os recovery record VER-73 --repo .
 ```
 
+### `supervisor move` and `supervisor decide`
+
+Human supervisors can move Linear issues and post structured decisions by
+identifier without using raw Linear UUIDs:
+
+```bash
+bin/agent-os supervisor move VER-73 Merging --repo .
+bin/agent-os supervisor decide VER-73 fix-findings \
+  --validation .agent-os/validation/VER-73.json \
+  --pr-head-sha <sha> \
+  --ci-state passed \
+  --findings resolved \
+  --summary "review findings are resolved" \
+  --repo .
+```
+
+These commands validate the issue identifier, configured workflow state names,
+the six-field `AgentOS-Human-Decision` payload, and validation evidence reuse
+profile metadata. They are operator tools; agent turns must keep using the
+handoff contract and must not take over Linear lifecycle writes in
+`orchestrator-owned` mode.
+
 ### `daemon status` and `daemon launch-command`
 
 Inspect durable daemon liveness and print the local dogfood launch command.

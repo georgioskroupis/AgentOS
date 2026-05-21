@@ -47,3 +47,19 @@ Allowed values are `fix-findings`, `approve-as-is`, `accept-risk`,
 comments, agent-authored handoff decisions, and local/manual records remain
 visible to the next agent as context but do not pause, redispatch, or advance
 the issue lifecycle.
+
+If a human supervisor needs to move state or post that decision from a terminal,
+use the by-identifier helpers instead of direct GraphQL by UUID:
+
+```bash
+bin/agent-os supervisor move <identifier> <state> --repo .
+bin/agent-os supervisor decide <identifier> fix-findings \
+  --validation .agent-os/validation/<identifier>.json \
+  --pr-head-sha <sha> \
+  --ci-state passed \
+  --findings resolved \
+  --summary "review findings are resolved" \
+  --repo .
+```
+
+Agent turns must not use the supervisor bypass in `orchestrator-owned` mode.
