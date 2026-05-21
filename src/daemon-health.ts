@@ -1,5 +1,6 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { DAEMON_LOG_ENV, DAEMON_START_GIT_SHA_ENV } from "./daemon-log.js";
 import { RuntimeStateStore } from "./runtime-state.js";
 
 export type DaemonHealthStatus = "healthy" | "blocked_preflight" | "stale_freshness" | "stopped" | "stale_pid" | "failed_launch";
@@ -85,11 +86,20 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
 export function daemonLaunchCommand(repoRoot = process.cwd(), workflowPath = "WORKFLOW.md"): string {
   const root = resolve(repoRoot);
   const session = `agent-os-${basename(root).replace(/[^A-Za-z0-9._-]/g, "-")}`;
+  const daemonScript = [
+    `cd ${shellQuote(root)}`,
+    "mkdir -p .agent-os",
+    "echo $$ > .agent-os/daemon.pid",
+    `export ${DAEMON_LOG_ENV}=${shellQuote(".agent-os/daemon.log")}`,
+    `${DAEMON_START_GIT_SHA_ENV}=$(git rev-parse HEAD 2>/dev/null || printf unknown)`,
+    `export ${DAEMON_START_GIT_SHA_ENV}`,
+    `exec bin/agent-os orchestrator run --repo . --workflow ${shellQuote(workflowPath)} >> .agent-os/daemon.log 2>&1`
+  ].join(" && ");
   return [
     "mkdir -p .agent-os &&",
     `screen -dmS ${shellQuote(session)}`,
     "bash -lc",
-    shellQuote(`cd ${shellQuote(root)} && echo $$ > .agent-os/daemon.pid && exec bin/agent-os orchestrator run --repo . --workflow ${shellQuote(workflowPath)} >> .agent-os/daemon.log 2>&1`)
+    shellQuote(daemonScript)
   ].join(" ");
 }
 

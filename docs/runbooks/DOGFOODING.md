@@ -82,9 +82,12 @@ bin/agent-os daemon status --repo .
 ```
 
 The command runs in a detached `screen` session, records `.agent-os/daemon.pid`,
-and appends `.agent-os/daemon.log`. If a launch leaves a stale PID or empty log,
-`daemon status`, `status`, and `inspect` should name the precise cleanup and
-restart action.
+and appends crash-oriented process output to `.agent-os/daemon.log` with launch
+and clean-stop boundaries. Use `.agent-os/runs/agent-os.jsonl` for normal
+orchestrator diagnostics; use `.agent-os/daemon.log` only when investigating
+process startup, shutdown, or uncaught crashes. If a launch leaves a stale PID
+or empty log, `daemon status`, `status`, and `inspect` should name the precise
+cleanup and restart action.
 
 Before returning a stalled or exhausted issue to an active state, inspect it:
 
