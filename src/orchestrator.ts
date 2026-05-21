@@ -47,17 +47,10 @@ import { logPreDispatchScopeReport, scopeReportStateFromReport, type PreDispatch
 import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
 import { validationRunContext, verifyHandoffValidationEvidence } from "./orchestrator-validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
+import { createWorkspaceForRun } from "./orchestrator-workspace-bootstrap.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
-export interface OrchestratorOptions {
-  repoRoot: string;
-  workflowPath: string;
-  tracker?: IssueTracker;
-  runner?: AgentRunner;
-  logger?: JsonlLogger;
-  env?: NodeJS.ProcessEnv;
-  maxConcurrentAgents?: number;
-}
+export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
 
 export interface OrchestratorRunSummary {
@@ -1117,16 +1110,21 @@ export class Orchestrator {
       stopReason: undefined
     });
     const workspaceManager = new WorkspaceManager(this.config, resolve(this.options.repoRoot));
-    const workspace = await workspaceManager.createOrReuse(issue.identifier);
-    await this.runtimeState.patchActiveRun(issue.id, {
-      workspacePath: workspace.path,
-      workspaceKey: workspace.workspaceKey
+    const workspace = await createWorkspaceForRun({
+      issue,
+      attempt,
+      runId,
+      config: this.config,
+      runtimeState: this.runtimeState,
+      runArtifacts: this.runArtifacts,
+      workspaceManager,
+      writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry),
+      recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch),
+      commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key),
+      moveIssue: (targetIssue, stateName) => this.moveIssue(targetIssue, stateName),
+      writePhaseTimingEvent: (targetIssue, event) => this.writePhaseTimingEvent(targetIssue, event)
     });
-    await this.recordIssueState(issue, {
-      workspacePath: workspace.path,
-      workspaceKey: workspace.workspaceKey
-    });
-    await this.runArtifacts.setWorkspace(runId, workspace);
+    if (!workspace) return;
     try {
       const linearStarted = await this.markLinearStarted(issue, workspace, attempt);
       if (!linearStarted) {

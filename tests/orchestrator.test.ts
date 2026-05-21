@@ -4675,6 +4675,88 @@ describe("orchestrator", () => {
     expect(summary).toMatchObject({ status: "failed", error: "missing_handoff" });
   });
 
+  it("records dirty source workspace bootstrap hook failures without starting Codex", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-bootstrap-dirty-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const bootstrapScript = resolve("scripts/agent-bootstrap-worktree.sh");
+    await run("git", ["init"], repo);
+    await run("git", ["config", "user.email", "agentos@example.test"], repo);
+    await run("git", ["config", "user.name", "AgentOS Test"], repo);
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nagent:\n  max_turns: 1\n  max_retry_attempts: 3\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nhooks:\n  after_create: unset AGENT_OS_ALLOW_DIRTY_WORKTREE; bash ${JSON.stringify(bootstrapScript)}\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(join(repo, ".gitignore"), ".agent-os/\n", "utf8");
+    await writeFile(join(repo, "README.md"), "initial\n", "utf8");
+    await run("git", ["add", ".gitignore", "README.md", "WORKFLOW.md"], repo);
+    await run("git", ["commit", "-m", "initial"], repo);
+    await mkdir(join(repo, "dashboard"), { recursive: true });
+    await writeFile(join(repo, "dashboard", "operator.txt"), "local scratch\n", "utf8");
+
+    const moves: string[] = [];
+    const upserts: Array<{ body: string; key: string }> = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async upsertComment(_issue, body, key) {
+        upserts.push({ body, key });
+      }
+    };
+    let runnerCalled = false;
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    const recoveryComment = upserts.find((comment) => comment.key === "recovery_needed:AG-1")?.body ?? "";
+    expect(recoveryComment).toContain("Workspace bootstrap failed before Codex started");
+    expect(recoveryComment).toContain("agent-bootstrap-worktree.sh");
+    expect(recoveryComment).toContain("AGENT_OS_ALLOW_DIRTY_WORKTREE=1");
+    expect(recoveryComment).toContain("clean the source checkout");
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.activeRuns).toEqual([]);
+    expect(runtime.claimedIssues).toEqual([]);
+    expect(runtime.retryQueue).toEqual([]);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      phase: "needs-input",
+      errorCategory: "workspace",
+      lifecycleStatus: "implementation_failure",
+      workspaceKey: "AG-1"
+    });
+    expect(state?.activeRunId).toBeUndefined();
+    expect(state?.nextRetryAt).toBeUndefined();
+    expect(state?.lastError).toContain("dirty source worktree");
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    expect(summary).toMatchObject({
+      status: "failed",
+      workspacePath: join(repo, ".agent-os", "workspaces", "AG-1")
+    });
+    expect(summary.error).toContain("dirty source worktree");
+    const events = await new RunArtifactStore(repo).replay(summary.runId);
+    expect(events.some((event) => event.type === "workspace_bootstrap_failed" && event.message?.includes("dirty source worktree"))).toBe(true);
+  });
+
   it("records already-satisfied no-op handoffs without requiring a PR", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-noop-"));
     const workflowPath = join(repo, "WORKFLOW.md");

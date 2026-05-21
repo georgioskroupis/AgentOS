@@ -123,6 +123,7 @@ function checkNoHiddenLifecyclePolicy() {
     "src/lifecycle.ts",
     "src/agent-lifecycle.ts",
     "src/orchestrator.ts",
+    "src/orchestrator-workspace-bootstrap.ts",
     "src/orchestrator-lifecycle-comments.ts",
     "src/orchestrator-recovery-actions.ts",
     "src/orchestrator-terminal.ts",

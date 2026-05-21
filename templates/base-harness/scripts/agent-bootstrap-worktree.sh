@@ -12,7 +12,8 @@ fi
 if git -C "$source_repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [[ "${AGENT_OS_ALLOW_DIRTY_WORKTREE:-}" != "1" ]] && [[ -n "$(git -C "$source_repo" status --porcelain)" ]]; then
     echo "Refusing to create AgentOS workspace from a dirty source worktree." >&2
-    echo "Commit, stash, or set AGENT_OS_ALLOW_DIRTY_WORKTREE=1 to override explicitly." >&2
+    echo "Commit, stash, or remove unrelated dirty files before retrying." >&2
+    echo "Use AGENT_OS_ALLOW_DIRTY_WORKTREE=1 only for operator-supervised recovery when the dirty files are known to be irrelevant." >&2
     exit 1
   fi
   mkdir -p "$(dirname "$workspace")"

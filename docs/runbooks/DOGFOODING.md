@@ -100,6 +100,25 @@ preserve the dirty or unpushed branch, rerun validation, and commit/push before
 updating the handoff or PR. Do not start a duplicate implementation until the
 existing workspace and PR state have been reconciled.
 
+## Dirty Source Worktree Recovery
+
+The default worktree bootstrap hook refuses to create an agent workspace when
+the source checkout is dirty. This is intentional: a dirty source checkout can
+hide operator-only scratch files, unrelated changes, or secrets that should not
+be copied into an agent workspace. When the hook fails before Codex starts,
+AgentOS records the run as failed, clears active runtime state, moves the issue
+to the configured needs-input state, and posts a recovery-needed comment with
+the failing hook command.
+
+The normal safe action is to clean the source checkout by committing, stashing,
+or removing unrelated dirty files, then return the issue to an active state.
+Set `AGENT_OS_ALLOW_DIRTY_WORKTREE=1` only during operator-supervised recovery
+when you have inspected `git status --porcelain` and confirmed the dirty files
+are irrelevant to the issue, safe to ignore, and do not need to appear in the
+agent workspace. Do not use the override to include untracked source files,
+secret material, generated artifacts, or unfinished operator changes in agent
+workspaces; commit or otherwise handle those files explicitly first.
+
 When the recovered branch is clean and pushed, record the recovery locally:
 
 ```bash
