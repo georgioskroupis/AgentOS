@@ -10,6 +10,7 @@ import type { AgentLifecycleTracker } from "../src/agent-lifecycle.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RunArtifactStore } from "../src/runs.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
+import { DAEMON_IDENTITY_RELATIVE_PATH, readDaemonIdentity } from "../src/daemon-identity.js";
 import { IssueStateStore } from "../src/issue-state.js";
 import { writeReviewArtifact } from "../src/review.js";
 import { writeValidationEvidence } from "../src/validation.js";
@@ -132,6 +133,17 @@ describe("orchestrator", () => {
     const logs = await logger.tail(10);
     expect(logs.some((entry) => entry.type === "run_succeeded")).toBe(true);
     expect(logs.some((entry) => entry.type === "phase_timing" && (entry.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
+    const identity = await readDaemonIdentity(repo);
+    expect(identity).toMatchObject({
+      status: "active",
+      path: join(repo, DAEMON_IDENTITY_RELATIVE_PATH),
+      identity: expect.objectContaining({
+        repoRoot: resolve(repo),
+        pid: process.pid,
+        startedAt: expect.any(String),
+        startGitSha: expect.any(String)
+      })
+    });
   });
 
   it("stops before a runner call when the implementation prompt exceeds the context budget", async () => {

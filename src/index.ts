@@ -22,5 +22,6 @@ export * from "./defaults.js";
 export * from "./runs.js";
 export * from "./cycle-time.js";
 export * from "./runtime-state.js";
+export * from "./daemon-identity.js";
 export * from "./scope-report.js";
 export * from "./recovery.js";
