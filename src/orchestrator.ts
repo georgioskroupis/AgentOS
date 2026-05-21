@@ -20,9 +20,10 @@ import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequest
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
-import { recordOrchestratorDaemonPreflightRuntime, refreshOrchestratorDaemonRuntime } from "./orchestrator-daemon-runtime.js";
+import { refreshOrchestratorDaemonRuntime } from "./orchestrator-daemon-runtime.js";
 import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment, runLandingShepherdGate } from "./orchestrator-landing-preflight.js";
 import { evaluateOrchestratorStartupPreflight, type OrchestratorStartupPreflightResult } from "./orchestrator-startup-preflight.js";
+import { recordSingletonPreflightFailure } from "./orchestrator-singleton-preflight.js";
 import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
 import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
@@ -137,16 +138,7 @@ export class Orchestrator {
       if (options.dispatchLimit == null) return Number.POSITIVE_INFINITY;
       return Math.max(0, options.dispatchLimit - dispatched);
     };
-    if (this.preflight?.status === "singleton_conflict") {
-      await recordOrchestratorDaemonPreflightRuntime({ daemonStartedAt: this.daemonStartedAt, workflow: this.workflow, preflight: this.preflight, repoEnv: this.repoEnv, runtimeState: this.runtimeState });
-      await this.logger.write({
-        type: "daemon_preflight_failed",
-        message: this.preflight.message,
-        payload: {
-          ...this.preflight,
-          startupPreflight: this.startupPreflight
-        }
-      });
+    if (await recordSingletonPreflightFailure(this.singletonPreflightFailureInput())) {
       return { dispatched: 0, retryDispatched: 0, candidateDispatched: 0, candidates: 0 };
     }
     await this.refreshDaemonRuntimeState();
@@ -192,6 +184,9 @@ export class Orchestrator {
 
   async runUntilStopped(signal: AbortSignal): Promise<void> {
     await this.reload();
+    if (await recordSingletonPreflightFailure(this.singletonPreflightFailureInput())) {
+      throw new Error(this.preflight?.message ?? "daemon singleton preflight failed");
+    }
     while (!signal.aborted) {
       try {
         await this.runOnce(false);
@@ -203,6 +198,10 @@ export class Orchestrator {
       }
       await sleep(this.config.polling.intervalMs, signal);
     }
+  }
+
+  private singletonPreflightFailureInput(): Parameters<typeof recordSingletonPreflightFailure>[0] {
+    return { daemonStartedAt: this.daemonStartedAt, workflow: this.workflow, preflight: this.preflight, repoEnv: this.repoEnv, runtimeState: this.runtimeState, logger: this.logger, startupPreflight: this.startupPreflight };
   }
 
   private async writeRunEvent(runId: string, entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }): Promise<void> {

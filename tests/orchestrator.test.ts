@@ -2611,6 +2611,109 @@ describe("orchestrator", () => {
     expect((await logger.tail(10)).some((entry) => entry.type === "daemon_preflight_failed" && entry.message?.includes("already running for this repo"))).toBe(true);
   });
 
+  it("exits continuous run on singleton startup preflight before polling", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-run-singleton-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\npolling:\n  interval_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeDaemonIdentity(repo, {
+      pid: 12345,
+      startedAt: "2026-05-21T12:00:00.000Z",
+      startGitSha: "abc123"
+    });
+    const logger = new JsonlLogger(repo);
+    let trackerReads = 0;
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        trackerReads += 1;
+        throw new Error("tracker should not be read when singleton preflight fails");
+      },
+      async fetchIssueStates() {
+        trackerReads += 1;
+        throw new Error("tracker should not be read when singleton preflight fails");
+      },
+      async fetchTerminalIssues() {
+        trackerReads += 1;
+        throw new Error("tracker should not be read when singleton preflight fails");
+      }
+    };
+
+    await expect(
+      new Orchestrator({
+        repoRoot: repo,
+        workflowPath,
+        tracker,
+        logger,
+        env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" },
+        daemonSingletonGuardOptions: { isProcessAlive: () => true }
+      }).runUntilStopped(new AbortController().signal)
+    ).rejects.toThrow("already running for this repo");
+
+    expect(trackerReads).toBe(0);
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.daemon?.preflightStatus).toBe("singleton_conflict");
+    expect((await logger.tail(10)).some((entry) => entry.type === "daemon_preflight_failed" && entry.message?.includes("already running for this repo"))).toBe(true);
+  });
+
+  it("allows continuous run startup when daemon identity belongs to another repo", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-run-other-repo-"));
+    const otherRepo = await mkdtemp(join(tmpdir(), "agent-os-orch-run-other-repo-owner-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\npolling:\n  interval_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state"), { recursive: true });
+    await writeFile(
+      join(repo, DAEMON_IDENTITY_RELATIVE_PATH),
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          repoRoot: resolve(otherRepo),
+          pid: 12345,
+          startedAt: "2026-05-21T12:00:00.000Z",
+          startGitSha: "abc123"
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+    const controller = new AbortController();
+    let candidateReads = 0;
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        candidateReads += 1;
+        controller.abort();
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async fetchTerminalIssues() {
+        return [];
+      }
+    };
+
+    await expect(
+      new Orchestrator({
+        repoRoot: repo,
+        workflowPath,
+        tracker,
+        env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" },
+        daemonSingletonGuardOptions: { isProcessAlive: () => true }
+      }).runUntilStopped(controller.signal)
+    ).resolves.toBeUndefined();
+
+    expect(candidateReads).toBe(1);
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.daemon?.preflightStatus).toBe("ready");
+  });
+
   it("records missing GitHub auth preflight without leaking credential values", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-preflight-gh-auth-"));
     const workflowPath = join(repo, "WORKFLOW.md");
