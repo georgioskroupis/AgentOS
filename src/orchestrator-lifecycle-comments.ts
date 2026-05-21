@@ -64,6 +64,21 @@ export function recoveryNeededCommentBody(recoveryText: string): string {
   return ["### AgentOS recovery needed", "", "AgentOS found recoverable partial work and refused to start a fresh implementation turn.", "", recoveryText].join("\n");
 }
 
+export function workspaceBootstrapFailedCommentBody(input: { workspace: Workspace; attemptLabel: number; hookCommand: string; error: string }): string {
+  return [
+    "### AgentOS recovery needed",
+    "",
+    "Workspace bootstrap failed before Codex started. AgentOS recorded the run as failed and the daemon will continue processing other issues.",
+    "",
+    `- Attempt: ${input.attemptLabel}`,
+    `- Workspace: \`${input.workspace.path}\``,
+    `- Failing hook command: ${inlineCode(input.hookCommand)}`,
+    `- Error: ${input.error}`,
+    "- Safe next action: clean the source checkout by committing, stashing, or removing unrelated dirty files, then return the issue to an active state.",
+    "- Dirty override: use `AGENT_OS_ALLOW_DIRTY_WORKTREE=1` only during operator-supervised recovery after confirming the dirty files are irrelevant and do not need to be copied into the agent workspace."
+  ].join("\n");
+}
+
 export function needsInputCommentBody(workspace: Workspace, attemptLabel: number, error: string): string {
   return [
     "### AgentOS needs human input",
@@ -76,6 +91,10 @@ export function needsInputCommentBody(workspace: Workspace, attemptLabel: number
     "",
     "Please handle the requested input manually before returning this issue to an active state."
   ].join("\n");
+}
+
+function inlineCode(value: string): string {
+  return `\`${value.replace(/`/g, "'")}\``;
 }
 
 export function mergeWaitingCommentBody(prUrl: string, reason: string): string {
