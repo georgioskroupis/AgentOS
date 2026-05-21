@@ -14,10 +14,20 @@ export interface DaemonIdentity {
 }
 
 export type DaemonIdentityStatus = "active" | "missing" | "invalid" | "stale";
+export type DaemonSingletonGuardDecision = "allow" | "refuse";
 
 export interface DaemonIdentityReadResult {
   status: DaemonIdentityStatus;
   path: string;
+  identity: DaemonIdentity | null;
+  message: string;
+}
+
+export interface DaemonSingletonGuardResult {
+  decision: DaemonSingletonGuardDecision;
+  allowed: boolean;
+  path: string;
+  identityStatus: DaemonIdentityStatus;
   identity: DaemonIdentity | null;
   message: string;
 }
@@ -94,6 +104,32 @@ export async function readDaemonIdentity(repoRoot = process.cwd(), options: Read
     path,
     identity: normalized,
     message: "daemon identity pid is running"
+  };
+}
+
+export async function evaluateDaemonSingletonGuard(
+  candidateRepoRoot = process.cwd(),
+  options: ReadDaemonIdentityOptions = {}
+): Promise<DaemonSingletonGuardResult> {
+  const identity = await readDaemonIdentity(candidateRepoRoot, options);
+  if (identity.status === "active" && identity.identity) {
+    return {
+      decision: "refuse",
+      allowed: false,
+      path: identity.path,
+      identityStatus: identity.status,
+      identity: identity.identity,
+      message: `refusing to start AgentOS daemon for ${resolve(candidateRepoRoot)} because daemon identity pid ${identity.identity.pid} is already running for this repo`
+    };
+  }
+
+  return {
+    decision: "allow",
+    allowed: true,
+    path: identity.path,
+    identityStatus: identity.status,
+    identity: identity.identity,
+    message: `daemon singleton guard allows start: ${identity.message}`
   };
 }
 
