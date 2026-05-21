@@ -62,19 +62,27 @@ export function estimateScope(
 
   const text = scopeText.text || issueText(issue);
   const concreteSubsystems = likelyTouchedSubsystems.filter((subsystem) => subsystem !== "unknown");
+  const trustedBoundedActiveScope = scopeText.source === "trusted_active_scope" && scopeText.activeScope.bounded;
+  const smallTrustedActiveScope =
+    trustedBoundedActiveScope && scopeText.scoredAcceptanceBulletCount <= 3 && (scopeText.activeScope.text?.length ?? text.length) <= 700;
+  const boundedActiveScopeSubsystems =
+    smallTrustedActiveScope ? concreteSubsystems.slice(0, 2) : concreteSubsystems;
   const scoreReasons: ScopeScoreReasonState[] = [];
   let score = 0;
   const addScore = (amount: number, reason: string) => {
     score += amount;
     scoreReasons.push({ score: amount, reason });
   };
-  if (concreteSubsystems.length >= 3) {
-    addScore(concreteSubsystems.length, `touches ${concreteSubsystems.length} likely subsystem(s)`);
+  if (boundedActiveScopeSubsystems.length >= 3) {
+    addScore(boundedActiveScopeSubsystems.length, `touches ${boundedActiveScopeSubsystems.length} likely subsystem(s)`);
   }
   if (scopeText.scoredAcceptanceBulletCount >= 5) {
     addScore(2, `has ${scopeText.scoredAcceptanceBulletCount} acceptance/detail bullet(s)`);
   }
-  if (/\b(end-to-end|roadmap|migration|architecture|orchestrator|workflow|large|broad|dependencies|decompose|guardrail)\b/i.test(text)) {
+  const broadLanguagePattern = trustedBoundedActiveScope
+    ? /\b(end-to-end|roadmap|migration|architecture|large|broad|dependencies|decompose|guardrail)\b/i
+    : /\b(end-to-end|roadmap|migration|architecture|orchestrator|workflow|large|broad|dependencies|decompose|guardrail)\b/i;
+  if (broadLanguagePattern.test(text)) {
     addScore(2, "contains broad orchestration or roadmap language");
   }
   if (text.length > 1200) {
