@@ -31,8 +31,10 @@ It keeps orchestration logic narrow:
   safety/bookkeeping moves and markers while leaving substantive update content
   to agent artifacts/tools. Repo-local `scripts/agent-linear-*` wrappers provide
   marker-backed comments, allowed state moves, PR metadata persistence, and
-  handoff posting for that boundary. `agent-owned` is experimental and
-  strict-validation gated.
+  handoff posting for that boundary. Human supervisors have a separate
+  by-identifier `agent-os supervisor` path for state moves and structured
+  decisions, so operators do not need direct GraphQL or raw Linear UUIDs.
+  `agent-owned` is experimental and strict-validation gated.
 - The agent, guided by `WORKFLOW.md`, changes the repo, validates the work,
   opens or updates pull requests only when the issue produced repo changes and
   the workflow expects a PR, and writes a handoff file for the orchestrator to

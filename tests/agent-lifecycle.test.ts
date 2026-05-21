@@ -4,10 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertSupervisorValidationEvidence,
   attachPrWithAgentLifecycleTool,
+  buildSupervisorDecisionBody,
   commentWithAgentLifecycleTool,
   moveWithAgentLifecycleTool,
-  recordHandoffWithAgentLifecycleTool
+  recordHandoffWithAgentLifecycleTool,
+  supervisorDecisionEvent
 } from "../src/agent-lifecycle.js";
 import type { AgentLifecycleTracker } from "../src/agent-lifecycle.js";
 import type { LinearCommentWriteResult, LinearIssueReference } from "../src/linear.js";
@@ -93,6 +96,165 @@ describe("agent lifecycle tools", () => {
     expect(tracker.lookups).toEqual([]);
     expect(tracker.comments).toEqual([]);
     await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("rejects default agent mode moves under orchestrator-owned policy before lookup or writes", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-owned-move-"));
+    const tracker = new MemoryTracker();
+
+    await expect(
+      moveWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+        { issue: "AG-1", state: "Merging", tool: "scripts/agent-linear-move.sh" }
+      )
+    ).rejects.toThrow("lifecycle.mode=orchestrator-owned rejects agent tracker writes");
+
+    expect(tracker.lookups).toEqual([]);
+    expect(tracker.moves).toEqual([]);
+  });
+
+  it("allows explicit supervisor moves under orchestrator-owned policy after identifier and known-state validation", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-supervisor-move-"));
+    const tracker = new MemoryTracker({ state: "Human Review" });
+
+    const result = await moveWithAgentLifecycleTool(
+      { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+      {
+        issue: "AG-1",
+        state: "Merging",
+        tool: "scripts/agent-linear-move.sh",
+        supervisor: true
+      }
+    );
+
+    expect(result).toEqual({ status: "moved", issueIdentifier: "AG-1" });
+    expect(tracker.lookups).toEqual(["AG-1"]);
+    expect(tracker.moves).toEqual([{ issue: "AG-1", state: "Merging" }]);
+  });
+
+  it("rejects supervisor moves for unknown identifiers without writing", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-supervisor-missing-"));
+    const tracker = new MemoryTracker();
+    tracker.notFound.add("AG-404");
+
+    await expect(
+      moveWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+        {
+          issue: "AG-404",
+          state: "Merging",
+          tool: "scripts/agent-linear-move.sh",
+          supervisor: true
+        }
+      )
+    ).rejects.toThrow("Linear issue not found: AG-404");
+
+    expect(tracker.lookups).toEqual(["AG-404"]);
+    expect(tracker.moves).toEqual([]);
+  });
+
+  it("rejects supervisor moves to states outside the configured workflow set", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-supervisor-state-"));
+    const tracker = new MemoryTracker({ state: "Human Review" });
+
+    await expect(
+      moveWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+        {
+          issue: "AG-1",
+          state: "Ready",
+          tool: "scripts/agent-linear-move.sh",
+          supervisor: true
+        }
+      )
+    ).rejects.toThrow("unknown workflow state for supervisor move: Ready");
+
+    expect(tracker.moves).toEqual([]);
+  });
+
+  it("builds supervisor decision comments in the WORKFLOW.md structured format", () => {
+    const body = buildSupervisorDecisionBody({
+      decisionType: "fix-findings",
+      prHeadSha: "ABC1234",
+      validationPath: ".agent-os/validation/AG-1.json",
+      ciState: "passed",
+      findings: "resolved",
+      summary: "review findings are resolved",
+      issueIdentifier: "AG-1"
+    });
+
+    expect(body).toBe(
+      [
+        "AgentOS-Human-Decision: fix-findings",
+        "PR-Head-SHA: abc1234",
+        "Validation-JSON: .agent-os/validation/AG-1.json",
+        "CI-State: passed",
+        "Findings: resolved",
+        "Decision-Summary: review findings are resolved"
+      ].join("\n")
+    );
+    expect(supervisorDecisionEvent("fix-findings", "ABC1234")).toBe("supervisor-decision:fix-findings:abc1234");
+  });
+
+  it("requires all supervisor decision fields before posting structured comments", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-supervisor-decision-"));
+    const tracker = new MemoryTracker();
+
+    await expect(
+      commentWithAgentLifecycleTool(
+        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+        {
+          issue: "AG-1",
+          event: "supervisor-decision",
+          tool: "scripts/agent-linear-comment.sh",
+          supervisor: true,
+          body: [
+            "AgentOS-Human-Decision: fix-findings",
+            "PR-Head-SHA: abc1234",
+            "Validation-JSON: .agent-os/validation/AG-1.json",
+            "Findings: resolved",
+            "Decision-Summary: missing CI state"
+          ].join("\n")
+        }
+      )
+    ).rejects.toThrow("supervisor decision requires CI-State");
+
+    expect(tracker.comments).toEqual([]);
+  });
+
+  it("validates supervisor decision evidence reuse-profile metadata and PR head shape", () => {
+    const evidence = JSON.stringify({
+      schemaVersion: 1,
+      issueIdentifier: "AG-1",
+      repoHead: "abc1234",
+      status: "passed",
+      commands: [],
+      reuseProfile: {
+        workflowConfigHash: "hash",
+        trustMode: "danger",
+        automationProfile: "high-throughput",
+        automationRepairPolicy: "mechanical-first",
+        riskProfile: "review=enabled"
+      }
+    });
+
+    expect(() =>
+      assertSupervisorValidationEvidence({
+        evidenceText: evidence,
+        validationPath: ".agent-os/validation/AG-1.json",
+        issueIdentifier: "AG-1",
+        prHeadSha: "abc1234"
+      })
+    ).not.toThrow();
+
+    expect(() =>
+      assertSupervisorValidationEvidence({
+        evidenceText: JSON.stringify({ schemaVersion: 1, issueIdentifier: "AG-1", repoHead: "abc1234", status: "passed", commands: [] }),
+        validationPath: ".agent-os/validation/AG-1.json",
+        issueIdentifier: "AG-1",
+        prHeadSha: "abc1234"
+      })
+    ).toThrow("supervisor validation evidence reuseProfile is required");
   });
 
   it("requires an explicit tracker tool allowlist before lookup, tracker writes, or fallback", async () => {
@@ -373,11 +535,13 @@ class MemoryTracker implements AgentLifecycleTracker {
   moves: Array<{ issue: string; state: string }> = [];
   lookups: string[] = [];
   failComment: Error | null = null;
+  notFound = new Set<string>();
 
   constructor(private readonly issue: Partial<LinearIssueReference> = {}) {}
 
   async findIssueReference(issueIdentifierOrId: string): Promise<LinearIssueReference> {
     this.lookups.push(issueIdentifierOrId);
+    if (this.notFound.has(issueIdentifierOrId)) throw new Error(`Linear issue not found: ${issueIdentifierOrId}`);
     return {
       id: "issue-1",
       identifier: "AG-1",

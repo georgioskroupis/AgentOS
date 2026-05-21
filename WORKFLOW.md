@@ -189,6 +189,27 @@ Lifecycle `--file` arguments must be relative paths inside the repository, and
 must point at GitHub pull requests in the current repository before it is stored
 or posted.
 
+Human supervisors may use the by-identifier operator helpers in
+`orchestrator-owned` mode instead of direct GraphQL or Linear UUID writes:
+
+```bash
+bin/agent-os supervisor move <identifier> <state> --repo .
+bin/agent-os supervisor decide <identifier> <decision-type> \
+  --validation .agent-os/validation/<identifier>.json \
+  --pr-head-sha <sha> \
+  --ci-state passed|failed|pending \
+  --findings resolved|accepted|open \
+  --summary "<short rationale>" \
+  --repo .
+```
+
+Those commands require a human-readable Linear identifier, a workflow-known
+target state, the exact structured decision fields below, and validation
+evidence with matching issue identifier, PR head SHA, and reuse-profile
+metadata. Repo-local `scripts/agent-linear-*` wrappers may also be invoked with
+`--supervisor` by a human operator. Agent calls without the explicit supervisor
+flag remain lifecycle-policy denied in `orchestrator-owned` mode.
+
 Approved planning/decomposition output can use `scripts/agent-linear-plan-issues.sh`
 to create or update small Linear child and follow-up issues from a repo-local
 YAML/JSON plan file. Every generated issue must carry an idempotency marker,

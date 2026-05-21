@@ -22,7 +22,8 @@ layers:
 - `src/linear-planned-issues.ts` turns approved decomposition plans into
   idempotent Linear child/follow-up issue writes.
 - `src/agent-lifecycle.ts` provides repo-local Linear lifecycle tool policy for
-  hybrid and experimental agent-owned modes.
+  hybrid and experimental agent-owned modes, plus explicit by-identifier
+  supervisor helpers for human Linear state moves and decisions.
 - `src/github.ts` shells through `gh` for PR status and squash merge.
 - `src/issue-state.ts` stores durable per-issue PR metadata.
 - `src/context-pack.ts` builds targeted prompt context packs for

@@ -7768,7 +7768,7 @@ describe("orchestrator", () => {
     expect(state.reviewStatus).toBe("approved");
     expect(state.reviewIteration).toBe(3);
     expect(state.resolvedFindingHashes).toEqual(expect.arrayContaining([expect.stringContaining("checks-failing-mechanical-")]));
-  }, 10_000);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("escalates failed checks without logs instead of running a CI fixer", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-ci-no-logs-"));

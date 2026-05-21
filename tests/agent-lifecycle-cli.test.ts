@@ -84,6 +84,144 @@ describe("agent lifecycle CLI", () => {
     }
   });
 
+  it("rejects supervisor moves for missing identifiers without a Linear write", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-supervisor-missing-cli-"));
+    let writeCount = 0;
+    const server = createServer((request, response) => {
+      let raw = "";
+      request.on("data", (chunk) => {
+        raw += String(chunk);
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(raw) as { query: string };
+        if (payload.query.includes("AgentOSIssueMove")) writeCount += 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: { issues: { nodes: [] } } }));
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const port = (server.address() as { port: number }).port;
+    await writeSupervisorWorkflow(repo, `http://127.0.0.1:${port}/graphql`);
+
+    try {
+      const result = await execFail(process.execPath, [
+        "--import",
+        "tsx",
+        cliScript,
+        "supervisor",
+        "move",
+        "AG-404",
+        "Merging",
+        "--repo",
+        repo,
+        "--workflow",
+        "WORKFLOW.md"
+      ]);
+
+      expect(result.stderr).toContain("Linear issue not found: AG-404");
+      expect(writeCount).toBe(0);
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it("posts supervisor decisions with the structured WORKFLOW.md payload", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-supervisor-decide-cli-"));
+    await mkdir(join(repo, ".agent-os", "validation"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "validation", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueIdentifier: "AG-1",
+          repoHead: "abc1234",
+          status: "passed",
+          commands: [],
+          reuseProfile: {
+            workflowConfigHash: "hash",
+            trustMode: "danger",
+            automationProfile: "high-throughput",
+            automationRepairPolicy: "mechanical-first",
+            riskProfile: "review=enabled"
+          }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    let createdBody = "";
+    const server = createServer((request, response) => {
+      let raw = "";
+      request.on("data", (chunk) => {
+        raw += String(chunk);
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(raw) as { query: string; variables?: Record<string, any> };
+        response.writeHead(200, { "content-type": "application/json" });
+        if (payload.query.includes("AgentOSFindIssue")) {
+          response.end(JSON.stringify({ data: { issues: { nodes: [linearIssueNode("AG-1")] } } }));
+          return;
+        }
+        if (payload.query.includes("AgentOSIssueComments")) {
+          response.end(JSON.stringify({ data: { issue: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }));
+          return;
+        }
+        if (payload.query.includes("AgentOSComment")) {
+          createdBody = String(payload.variables?.input?.body ?? "");
+          response.end(JSON.stringify({ data: { commentCreate: { success: true } } }));
+          return;
+        }
+        response.end(JSON.stringify({ data: {} }));
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const port = (server.address() as { port: number }).port;
+    await writeSupervisorWorkflow(repo, `http://127.0.0.1:${port}/graphql`);
+
+    try {
+      const result = await execOk(process.execPath, [
+        "--import",
+        "tsx",
+        cliScript,
+        "supervisor",
+        "decide",
+        "AG-1",
+        "fix-findings",
+        "--validation",
+        ".agent-os/validation/AG-1.json",
+        "--pr-head-sha",
+        "abc1234",
+        "--ci-state",
+        "passed",
+        "--findings",
+        "resolved",
+        "--summary",
+        "review findings are resolved",
+        "--repo",
+        repo,
+        "--workflow",
+        "WORKFLOW.md"
+      ]);
+
+      expect(result.stdout).toContain("created: AG-1");
+      expect(createdBody).toContain("<!-- agentos:event=supervisor-decision:fix-findings:abc1234 issue=AG-1 -->");
+      expect(createdBody).toContain(
+        [
+          "AgentOS-Human-Decision: fix-findings",
+          "PR-Head-SHA: abc1234",
+          "Validation-JSON: .agent-os/validation/AG-1.json",
+          "CI-State: passed",
+          "Findings: resolved",
+          "Decision-Summary: review findings are resolved"
+        ].join("\n")
+      );
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
   it("lets repo-local wrappers override caller-supplied policy options with fixed trusted values", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-wrapper-policy-"));
     const fakeBin = join(repo, "fake-bin");
@@ -336,4 +474,50 @@ async function writeWorkflow(repo: string, allowedTrackerTools = ["scripts/agent
     ].join("\n"),
     "utf8"
   );
+}
+
+async function writeSupervisorWorkflow(repo: string, endpoint: string): Promise<void> {
+  await writeFile(
+    join(repo, "WORKFLOW.md"),
+    [
+      "---",
+      "lifecycle:",
+      "  mode: orchestrator-owned",
+      "tracker:",
+      "  kind: linear",
+      `  endpoint: ${endpoint}`,
+      "  api_key: lin_test",
+      "  project_slug: AgentOS",
+      "  active_states:",
+      "    - Todo",
+      "    - In Progress",
+      "  terminal_states:",
+      "    - Done",
+      "    - Closed",
+      "    - Canceled",
+      "    - Duplicate",
+      "  running_state: In Progress",
+      "  review_state: Human Review",
+      "  merge_state: Merging",
+      "  needs_input_state: Human Review",
+      "github:",
+      "  done_state: Done",
+      "---",
+      "Do work"
+    ].join("\n"),
+    "utf8"
+  );
+}
+
+function linearIssueNode(identifier: string): Record<string, unknown> {
+  return {
+    id: "issue-1",
+    identifier,
+    title: "Issue",
+    url: `https://linear.test/${identifier}`,
+    state: { name: "Human Review" },
+    team: { id: "team-1", key: "AG", name: "AgentOS" },
+    assignee: null,
+    project: { id: "project-1", name: "AgentOS", slugId: "AgentOS" }
+  };
 }
