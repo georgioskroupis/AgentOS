@@ -12,6 +12,7 @@ import { landingFreshnessPatch } from "./landing-preflight.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
 import { initialDaemonFreshnessState, isDaemonFreshnessStale, refreshDaemonFreshness } from "./daemon-freshness.js";
+import { writeDaemonIdentity } from "./daemon-identity.js";
 import { LinearClient } from "./linear.js";
 import { summarizeText } from "./output-capture.js";
 import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
@@ -311,6 +312,7 @@ export class Orchestrator {
       forceMainRefresh: options.forceMainRefresh
     });
     this.daemonFreshness = freshness;
+    await writeDaemonIdentity(repoRoot, { startedAt: this.daemonStartedAt, startGitSha: freshness.startGitSha });
     await this.runtimeState.setDaemon({
       startedAt: this.daemonStartedAt,
       startGitSha: freshness.startGitSha,
