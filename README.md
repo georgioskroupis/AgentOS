@@ -218,10 +218,11 @@ handoff contract and must not take over Linear lifecycle writes in
 ### `daemon status` and `daemon launch-command`
 
 Inspect durable daemon liveness and print the local dogfood launch command.
-`daemon status` distinguishes stopped daemons, stale PID files, empty-log failed
-launches, blocked credential preflight, and healthy idle loops. The launch
-command uses a detached `screen` session, writes `.agent-os/daemon.pid`, and
-appends logs to `.agent-os/daemon.log`.
+`daemon status` distinguishes stopped daemons, stale PID files, running PIDs
+that are not verified as this repo's AgentOS daemon, empty-log failed launches,
+blocked credential preflight, and healthy idle loops. The launch command uses a
+detached `screen` session, writes `.agent-os/daemon.pid`, records daemon identity
+metadata, and appends logs to `.agent-os/daemon.log`.
 
 ```bash
 bin/agent-os daemon status --repo .

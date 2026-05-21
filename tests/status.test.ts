@@ -8,6 +8,7 @@ import { JsonlLogger } from "../src/logging.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
 import { reviewArtifactPath, writeReviewArtifact } from "../src/review.js";
 import { daemonLaunchCommand, getDaemonStatus, getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
+import { writeDaemonIdentity } from "../src/daemon-identity.js";
 
 const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
 
@@ -911,7 +912,21 @@ describe("issue inspection", () => {
     expect(failed.nextSafeAction).toContain("remove");
     expect(failed.nextSafeAction).toContain(".agent-os/daemon.pid");
 
+    await writeFile(join(repo, ".agent-os", "daemon.pid"), "999998\n", "utf8");
+    await writeFile(join(repo, ".agent-os", "daemon.log"), "previous daemon output\n", "utf8");
+    const stalePid = await inspectDaemonHealth(repo);
+    expect(stalePid.status).toBe("stale_pid");
+    expect(stalePid.message).toContain("pid 999998 is not running");
+    expect(stalePid.nextSafeAction).toContain("remove");
+
     await writeFile(join(repo, ".agent-os", "daemon.pid"), `${process.pid}\n`, "utf8");
+    const nonAgentosPid = await inspectDaemonHealth(repo);
+    expect(nonAgentosPid.status).toBe("non_agentos_pid");
+    expect(nonAgentosPid.message).toContain("cannot verify it as this repo's daemon");
+    expect(nonAgentosPid.nextSafeAction).toContain("remove");
+    expect(nonAgentosPid.nextSafeAction).toContain("only if");
+
+    await writeDaemonIdentity(repo, { pid: process.pid, startedAt: "2026-05-05T00:00:00.000Z", startGitSha: "abc123" });
     await new RuntimeStateStore(repo).setDaemon({
       startedAt: "2026-05-05T00:00:00.000Z",
       workflowPath: join(repo, "WORKFLOW.md"),

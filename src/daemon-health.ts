@@ -1,9 +1,17 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { readDaemonIdentity } from "./daemon-identity.js";
 import { DAEMON_LOG_ENV, DAEMON_START_GIT_SHA_ENV } from "./daemon-log.js";
 import { RuntimeStateStore } from "./runtime-state.js";
 
-export type DaemonHealthStatus = "healthy" | "blocked_preflight" | "stale_freshness" | "stopped" | "stale_pid" | "failed_launch";
+export type DaemonHealthStatus =
+  | "healthy"
+  | "blocked_preflight"
+  | "stale_freshness"
+  | "stopped"
+  | "stale_pid"
+  | "failed_launch"
+  | "non_agentos_pid";
 
 export interface DaemonHealth {
   status: DaemonHealthStatus;
@@ -42,6 +50,22 @@ export async function inspectDaemonHealth(repoRoot = process.cwd()): Promise<Dae
       logPath,
       message: failedEmptyLog ? `pid ${pid} is not running and ${logPath} is empty` : `pid ${pid} is not running`,
       nextSafeAction: `remove ${pidPath}, inspect ${logPath || ".agent-os/daemon.log"}, then restart with: ${launchCommand}`
+    };
+  }
+
+  const identity = await readDaemonIdentity(root, { isProcessAlive });
+  if (identity.status !== "active" || identity.identity?.pid !== pid) {
+    const identityMismatch =
+      identity.status === "active" && identity.identity?.pid !== pid
+        ? `daemon identity belongs to pid ${identity.identity?.pid}, but ${pidPath} points to pid ${pid}`
+        : identity.message;
+    return {
+      status: "non_agentos_pid",
+      pid,
+      pidPath,
+      logPath,
+      message: `pid ${pid} is running, but AgentOS cannot verify it as this repo's daemon: ${identityMismatch}`,
+      nextSafeAction: `inspect pid ${pid} and ${identity.path}; remove ${pidPath} only if pid ${pid} is not the intended AgentOS daemon, then restart with: ${launchCommand}`
     };
   }
 
