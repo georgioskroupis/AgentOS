@@ -77,12 +77,17 @@ For local continuous dogfood, use the durable launch helper instead of a bare
 `nohup` process:
 
 ```bash
-bin/agent-os daemon launch-command --repo . --workflow WORKFLOW.md
+bin/agent-os daemon start --repo . --workflow WORKFLOW.md
 bin/agent-os daemon status --repo .
+bin/agent-os daemon restart --repo . --workflow WORKFLOW.md
+bin/agent-os daemon stop --repo .
 ```
 
-The command runs in a detached `screen` session, records `.agent-os/daemon.pid`,
-records daemon identity metadata, and appends crash-oriented process output to
+The lifecycle commands start, stop, and restart the daemon through AgentOS
+instead of hand-written `screen` invocations. They record `.agent-os/daemon.pid`,
+use daemon identity metadata, apply the singleton guard, clean stale PID files
+only after liveness checks, and refuse live PID state that cannot be verified as
+this repo's AgentOS daemon. They append crash-oriented process output to
 `.agent-os/daemon.log` with launch and clean-stop boundaries. Use
 `.agent-os/runs/agent-os.jsonl` for normal orchestrator diagnostics; use
 `.agent-os/daemon.log` only when investigating process startup, shutdown, or

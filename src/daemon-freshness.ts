@@ -1,3 +1,4 @@
+import { daemonRestartCommand } from "./daemon-health.js";
 import { gitLsRemoteBranch, gitRevParse } from "./orchestrator-state-helpers.js";
 import type { RuntimeDaemonState } from "./runtime-state.js";
 
@@ -51,7 +52,7 @@ export async function refreshDaemonFreshness(input: {
     runtimeTick,
     lastMainRefreshTick,
     freshnessStatus: mainAdvanced ? "stale" : "fresh",
-    freshnessMessage: mainAdvanced ? `${input.mainBranch} advanced from ${startMainGitSha} to ${currentMainGitSha}; run git pull && bin/agent-os daemon restart` : null
+    freshnessMessage: mainAdvanced ? `${input.mainBranch} advanced from ${startMainGitSha} to ${currentMainGitSha}; run git pull && ${daemonRestartCommand(input.repoRoot)}` : null
   };
 }
 

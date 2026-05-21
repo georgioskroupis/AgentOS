@@ -389,7 +389,7 @@ Daemon freshness checks compare the daemon's start SHA for `github.base`
 (default `main`) with the refreshed `origin/<base>` SHA every
 `daemon.main_branch_refresh_interval_ticks` daemon ticks and immediately after
 shepherd merges. A stale daemon reports the SHA delta and the manual operator
-action `git pull && bin/agent-os daemon restart`.
+action `git pull && bin/agent-os daemon restart --repo <repo> --workflow WORKFLOW.md`.
 
 Review targets are selected by `review.target_mode`: the default
 `merge-eligible` reviews `primary` and `docs` PRs, while `primary` reviews only
