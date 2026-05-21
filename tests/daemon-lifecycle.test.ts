@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { writeDaemonIdentity } from "../src/daemon-identity.js";
 import { exists } from "../src/fs-utils.js";
 import { restartDaemon, startDaemon, stopDaemon } from "../src/daemon-lifecycle.js";
+import { getDaemonStatus } from "../src/status-daemon.js";
 
 describe("daemon lifecycle commands", () => {
   it("starts a detached daemon for a stopped repo", async () => {
@@ -158,6 +159,42 @@ describe("daemon lifecycle commands", () => {
 
     expect(result.action).toBe("stopped");
     expect(await exists(join(repo, ".agent-os", "daemon.pid"))).toBe(false);
+  });
+
+  it("lets status attach to verified daemon identity without launching a competing daemon", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-daemon-attach-"));
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    await writeFile(join(repo, ".agent-os", "daemon.pid"), `${process.pid}\n`, "utf8");
+    await writeDaemonIdentity(repo, { pid: process.pid, startedAt: "2026-05-21T00:00:00.000Z", startGitSha: "abc123" });
+
+    const status = await getDaemonStatus(repo);
+    const start = await startDaemon({
+      repoRoot: repo,
+      spawnDetached: () => {
+        throw new Error("status attachment should not launch a competing daemon");
+      }
+    });
+
+    expect(status).toContain("Daemon: healthy - daemon process is alive");
+    expect(status).toContain("Next safe action: no operator action required");
+    expect(start.action).toBe("refused");
+    expect(start.message).toContain("verified live AgentOS process");
+  });
+
+  it("keeps different repos independent across lifecycle starts", async () => {
+    const firstRepo = await mkdtemp(join(tmpdir(), "agent-os-daemon-independent-a-"));
+    const secondRepo = await mkdtemp(join(tmpdir(), "agent-os-daemon-independent-b-"));
+    await writeDaemonIdentity(firstRepo, { pid: 12345, startedAt: "2026-05-21T00:00:00.000Z", startGitSha: "abc123" });
+
+    const result = await startDaemon({
+      repoRoot: secondRepo,
+      isProcessAlive: (pid) => pid === 12345,
+      resolveStartGitSha: async () => "def456",
+      spawnDetached: () => ({ pid: 67890, unref: () => undefined })
+    });
+
+    expect(result.action).toBe("started");
+    expect(result.pid).toBe(67890);
   });
 
   it("restarts by composing stop and start", async () => {
