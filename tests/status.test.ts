@@ -7,7 +7,7 @@ import { RegistryStateStore } from "../src/registry.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
 import { reviewArtifactPath, writeReviewArtifact } from "../src/review.js";
-import { getDaemonStatus, getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
+import { daemonLaunchCommand, getDaemonStatus, getRegistryStatus, getStatus, inspectDaemonHealth, inspectIssue } from "../src/status.js";
 
 const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
 
@@ -902,7 +902,16 @@ describe("issue inspection", () => {
     expect(stale.nextSafeAction).toBe("run git pull && bin/agent-os daemon restart");
     const daemonStatus = await getDaemonStatus(repo);
     expect(daemonStatus).toContain("Daemon: stale_freshness - main advanced from old to new; run git pull && bin/agent-os daemon restart");
+    expect(daemonStatus).toContain("Run events:");
+    expect(daemonStatus).toContain(".agent-os/runs/agent-os.jsonl");
+    expect(daemonStatus).toContain("Crash log:");
+    expect(daemonStatus).toContain(".agent-os/daemon.log");
+    expect(daemonStatus).toContain("only for crash investigations");
     expect(daemonStatus).toContain("Daemon freshness: stale - main advanced from old to new; run git pull && bin/agent-os daemon restart");
+
+    const launchCommand = daemonLaunchCommand(repo);
+    expect(launchCommand).toContain("AGENT_OS_DAEMON_LOG");
+    expect(launchCommand).toContain("AGENT_OS_DAEMON_START_GIT_SHA");
   });
 
   it("shows recoverable partial work, stale PR heads, stale CI heads, and one next action", async () => {

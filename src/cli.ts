@@ -3,6 +3,7 @@ import { Command, InvalidArgumentError } from "commander";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
+import { appendDaemonLaunchMarker, appendDaemonStopMarker, daemonLogRuntimeFromEnv, installDaemonCrashCapture } from "./daemon-log.js";
 import { resolveRepoEnv } from "./env.js";
 import { acquireProjectRunnerLock, addProject, loadRegistry, releaseProjectRunnerLock, removeProject } from "./registry.js";
 import { readText } from "./fs-utils.js";
@@ -209,14 +210,13 @@ orchestrator
   .requiredOption("--repo <path>", "repository path")
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .action(async (options) => {
-    const controller = new AbortController();
-    process.on("SIGINT", () => controller.abort());
-    process.on("SIGTERM", () => controller.abort());
-    const repo = resolve(options.repo);
-    const workflow = resolve(repo, options.workflow);
-    await withProjectRunnerLock(repo, "single-project:run", async () => {
-      const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
-      await service.runUntilStopped(controller.signal);
+    await withDaemonProcessLogging(async (signal) => {
+      const repo = resolve(options.repo);
+      const workflow = resolve(repo, options.workflow);
+      await withProjectRunnerLock(repo, "single-project:run", async () => {
+        const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
+        await service.runUntilStopped(signal);
+      });
     });
   });
 
@@ -241,15 +241,14 @@ orchestrator
   .option("--max-concurrency <number>", "global registry concurrency cap", parsePositiveIntegerOption("max-concurrency"))
   .option("--poll-interval-ms <number>", "registry polling interval in milliseconds", parsePositiveIntegerOption("poll-interval-ms"))
   .action(async (options) => {
-    const controller = new AbortController();
-    process.on("SIGINT", () => controller.abort());
-    process.on("SIGTERM", () => controller.abort());
-    const service = new RegistryOrchestrator({
-      registryPath: options.registry,
-      maxConcurrency: options.maxConcurrency,
-      pollingIntervalMs: options.pollIntervalMs
+    await withDaemonProcessLogging(async (signal) => {
+      const service = new RegistryOrchestrator({
+        registryPath: options.registry,
+        maxConcurrency: options.maxConcurrency,
+        pollingIntervalMs: options.pollIntervalMs
+      });
+      await service.runUntilStopped(signal);
     });
-    await service.runUntilStopped(controller.signal);
   });
 
 program
@@ -608,6 +607,31 @@ async function withProjectRunnerLock<T>(repoRoot: string, owner: string, action:
     return await action();
   } finally {
     await releaseProjectRunnerLock(lockPath);
+  }
+}
+
+async function withDaemonProcessLogging(action: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  const controller = new AbortController();
+  const daemonLog = daemonLogRuntimeFromEnv();
+  let cleanStopRequested = false;
+  let removeCrashCapture: (() => void) | null = null;
+  const requestStop = (): void => {
+    cleanStopRequested = true;
+    controller.abort();
+  };
+  process.on("SIGINT", requestStop);
+  process.on("SIGTERM", requestStop);
+  try {
+    if (daemonLog) {
+      appendDaemonLaunchMarker(daemonLog.logPath, { startGitSha: daemonLog.startGitSha });
+      removeCrashCapture = installDaemonCrashCapture(daemonLog.logPath);
+    }
+    await action(controller.signal);
+    if (daemonLog && cleanStopRequested) appendDaemonStopMarker(daemonLog.logPath);
+  } finally {
+    process.off("SIGINT", requestStop);
+    process.off("SIGTERM", requestStop);
+    removeCrashCapture?.();
   }
 }
 

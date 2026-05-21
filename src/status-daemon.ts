@@ -1,4 +1,21 @@
-import type { RuntimeDaemonState } from "./runtime-state.js";
+import { join, resolve } from "node:path";
+import { inspectDaemonHealth } from "./daemon-health.js";
+import { RuntimeStateStore, type RuntimeDaemonState } from "./runtime-state.js";
+
+export async function getDaemonStatus(repo = process.cwd()): Promise<string> {
+  const root = resolve(repo);
+  const health = await inspectDaemonHealth(root);
+  const runtime = await new RuntimeStateStore(root).read();
+  const runLogPath = join(root, ".agent-os", "runs", "agent-os.jsonl");
+  return [
+    `Daemon: ${health.status} - ${health.message}`,
+    `PID file: ${health.pidPath}`,
+    `Run events: ${runLogPath}`,
+    `Crash log: ${health.logPath}`,
+    `Next safe action: ${health.nextSafeAction}; inspect ${runLogPath} for normal diagnostics and use ${health.logPath} only for crash investigations`,
+    ...daemonRuntimeDetails(runtime.daemon)
+  ].join("\n");
+}
 
 export function daemonRuntimeDetails(daemon: RuntimeDaemonState | undefined): string[] {
   if (!daemon) return [];

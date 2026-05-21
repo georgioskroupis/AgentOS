@@ -9,7 +9,7 @@ import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceReco
 import { formatReviewRunnerFailures } from "./review.js";
 import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking } from "./review-budget.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
-import { daemonCredentialDetails, daemonRuntimeDetails } from "./status-daemon.js";
+import { daemonCredentialDetails, daemonRuntimeDetails, getDaemonStatus } from "./status-daemon.js";
 import { branchUpdateDetails } from "./status-branch-update.js";
 import { contextBudgetDetails, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
 import { appendEvidenceStatus, validationDetails } from "./status-validation.js";
@@ -45,19 +45,6 @@ export async function getStatus(repo = process.cwd(), limit = 20): Promise<strin
       : "No AgentOS run events recorded."
   ];
   return lines.join("\n");
-}
-
-export async function getDaemonStatus(repo = process.cwd()): Promise<string> {
-  const root = resolve(repo);
-  const health = await inspectDaemonHealth(root);
-  const runtime = await new RuntimeStateStore(root).read();
-  return [
-    `Daemon: ${health.status} - ${health.message}`,
-    `PID file: ${health.pidPath}`,
-    `Log file: ${health.logPath}`,
-    `Next safe action: ${health.nextSafeAction}`,
-    ...daemonRuntimeDetails(runtime.daemon)
-  ].join("\n");
 }
 
 export async function getRegistryStatus(registryPath = "agent-os.yml", limit = 20): Promise<string> {
@@ -397,7 +384,7 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   return "inspect the latest handoff, validation evidence, PR state, and Linear comments";
 }
 
-export { daemonLaunchCommand, inspectDaemonHealth };
+export { daemonLaunchCommand, getDaemonStatus, inspectDaemonHealth };
 
 function hasApprovedPullRequest(issue: IssueState): boolean {
   return issue.reviewStatus === "approved" && pullRequestUrls(issue).length > 0;
