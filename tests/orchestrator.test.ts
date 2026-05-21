@@ -10,7 +10,7 @@ import type { AgentLifecycleTracker } from "../src/agent-lifecycle.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RunArtifactStore } from "../src/runs.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
-import { DAEMON_IDENTITY_RELATIVE_PATH, readDaemonIdentity } from "../src/daemon-identity.js";
+import { DAEMON_IDENTITY_RELATIVE_PATH, readDaemonIdentity, writeDaemonIdentity } from "../src/daemon-identity.js";
 import { IssueStateStore } from "../src/issue-state.js";
 import { writeReviewArtifact } from "../src/review.js";
 import { writeValidationEvidence } from "../src/validation.js";
@@ -2564,6 +2564,51 @@ describe("orchestrator", () => {
     expect(runtime.daemon?.preflightStatus).toBe("missing_credentials");
     expect(runtime.daemon?.preflightMessage).toContain("tracker.api_key is required");
     expect((await logger.tail(10)).some((entry) => entry.type === "daemon_preflight_failed")).toBe(true);
+  });
+
+  it("records singleton preflight and refuses dispatch before tracker reads", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-preflight-singleton-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeDaemonIdentity(repo, {
+      pid: 12345,
+      startedAt: "2026-05-21T12:00:00.000Z",
+      startGitSha: "abc123"
+    });
+    const logger = new JsonlLogger(repo);
+    let trackerReads = 0;
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        trackerReads += 1;
+        throw new Error("tracker should not be read when singleton preflight fails");
+      },
+      async fetchIssueStates() {
+        trackerReads += 1;
+        throw new Error("tracker should not be read when singleton preflight fails");
+      }
+    };
+
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" },
+      daemonSingletonGuardOptions: { isProcessAlive: () => true }
+    });
+    await orchestrator.reload();
+    const result = await orchestrator.runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(trackerReads).toBe(0);
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.daemon?.preflightStatus).toBe("singleton_conflict");
+    expect(runtime.daemon?.preflightMessage).toContain("already running for this repo");
+    expect((await logger.tail(10)).some((entry) => entry.type === "daemon_preflight_failed" && entry.message?.includes("already running for this repo"))).toBe(true);
   });
 
   it("records missing GitHub auth preflight without leaking credential values", async () => {

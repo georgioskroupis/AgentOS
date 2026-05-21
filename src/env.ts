@@ -3,7 +3,7 @@ import { exists, readText } from "./fs-utils.js";
 import type { ServiceConfig } from "./types.js";
 
 export type RepoEnvStatus = "missing" | "loaded" | "malformed" | "stale";
-export type DaemonPreflightStatus = "ready" | "missing_credentials" | "malformed_env" | "stale_env";
+export type DaemonPreflightStatus = "ready" | "missing_credentials" | "malformed_env" | "stale_env" | "singleton_conflict";
 export type CredentialAvailability = "present" | "missing" | "unchecked";
 
 export interface RepoEnvLoadResult {

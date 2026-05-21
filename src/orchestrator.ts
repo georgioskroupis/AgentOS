@@ -11,8 +11,8 @@ import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./lan
 import { landingFreshnessPatch } from "./landing-preflight.js";
 import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { JsonlLogger } from "./logging.js";
-import { initialDaemonFreshnessState, isDaemonFreshnessStale, refreshDaemonFreshness } from "./daemon-freshness.js";
-import { writeDaemonIdentity } from "./daemon-identity.js";
+import { initialDaemonFreshnessState, isDaemonFreshnessStale } from "./daemon-freshness.js";
+import { type ReadDaemonIdentityOptions } from "./daemon-identity.js";
 import { LinearClient } from "./linear.js";
 import { summarizeText } from "./output-capture.js";
 import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
@@ -20,7 +20,9 @@ import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequest
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { redactText } from "./redaction.js";
+import { recordOrchestratorDaemonPreflightRuntime, refreshOrchestratorDaemonRuntime } from "./orchestrator-daemon-runtime.js";
 import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment, runLandingShepherdGate } from "./orchestrator-landing-preflight.js";
+import { evaluateOrchestratorStartupPreflight, type OrchestratorStartupPreflightResult } from "./orchestrator-startup-preflight.js";
 import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
 import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
@@ -51,7 +53,7 @@ import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfi
 import { createWorkspaceForRun } from "./orchestrator-workspace-bootstrap.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
-export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; }
+export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
 
 export interface OrchestratorRunSummary {
@@ -90,6 +92,8 @@ export class Orchestrator {
   private freshnessWarningMarker: string | null = null;
   private repoEnv: RepoEnvLoadResult | null = null;
   private preflight: DaemonPreflightResult | null = null;
+  private startupPreflight: OrchestratorStartupPreflightResult | null = null;
+  private startupSingletonPreflightDone = false;
   private preflightWarningMarker: string | null = null;
 
   constructor(private readonly options: OrchestratorOptions) {
@@ -103,7 +107,20 @@ export class Orchestrator {
     this.repoEnv = resolvedEnv.repoEnv;
     this.workflow = await loadWorkflow(this.options.workflowPath);
     this.config = resolveServiceConfig(this.workflow, resolvedEnv.env);
-    this.preflight = await daemonPreflightWithLandingCredentialCheck(this.config, daemonPreflight(this.config, this.repoEnv), resolve(this.options.repoRoot));
+    const credentialPreflight = await daemonPreflightWithLandingCredentialCheck(this.config, daemonPreflight(this.config, this.repoEnv), resolve(this.options.repoRoot));
+    if (this.startupPreflight?.daemonPreflight.status === "singleton_conflict") {
+      this.preflight = this.startupPreflight.daemonPreflight;
+    } else if (!this.startupSingletonPreflightDone) {
+      this.startupPreflight = await evaluateOrchestratorStartupPreflight({
+        repoRoot: resolve(this.options.repoRoot),
+        daemonPreflight: credentialPreflight,
+        singletonGuardOptions: this.options.daemonSingletonGuardOptions
+      });
+      this.startupSingletonPreflightDone = true;
+      this.preflight = this.startupPreflight.daemonPreflight;
+    } else {
+      this.preflight = credentialPreflight;
+    }
     if (this.options.maxConcurrentAgents != null && Number.isInteger(this.options.maxConcurrentAgents) && this.options.maxConcurrentAgents > 0) {
       this.config.agent.maxConcurrentAgents = Math.min(this.config.agent.maxConcurrentAgents, this.options.maxConcurrentAgents);
     }
@@ -120,6 +137,18 @@ export class Orchestrator {
       if (options.dispatchLimit == null) return Number.POSITIVE_INFINITY;
       return Math.max(0, options.dispatchLimit - dispatched);
     };
+    if (this.preflight?.status === "singleton_conflict") {
+      await recordOrchestratorDaemonPreflightRuntime({ daemonStartedAt: this.daemonStartedAt, workflow: this.workflow, preflight: this.preflight, repoEnv: this.repoEnv, runtimeState: this.runtimeState });
+      await this.logger.write({
+        type: "daemon_preflight_failed",
+        message: this.preflight.message,
+        payload: {
+          ...this.preflight,
+          startupPreflight: this.startupPreflight
+        }
+      });
+      return { dispatched: 0, retryDispatched: 0, candidateDispatched: 0, candidates: 0 };
+    }
     await this.refreshDaemonRuntimeState();
     if (this.preflight && !preflightAllowsDispatch(this.preflight)) {
       await this.logger.write({
@@ -303,54 +332,23 @@ export class Orchestrator {
   }
 
   private async refreshDaemonRuntimeState(options: { forceMainRefresh?: boolean } = {}): Promise<void> {
-    const repoRoot = resolve(this.options.repoRoot);
-    const freshness = await refreshDaemonFreshness({
-      state: this.daemonFreshness,
-      repoRoot,
-      mainBranch: this.config.github.baseBranch,
-      refreshIntervalTicks: this.config.daemon.mainBranchRefreshIntervalTicks,
+    const runtime = await refreshOrchestratorDaemonRuntime({
+      repoRoot: this.options.repoRoot,
+      workflow: this.workflow,
+      config: this.config,
+      daemonStartedAt: this.daemonStartedAt,
+      daemonFreshness: this.daemonFreshness,
+      freshnessWarningMarker: this.freshnessWarningMarker,
+      preflight: this.preflight,
+      repoEnv: this.repoEnv,
+      runtimeState: this.runtimeState,
+      logger: this.logger,
+      preflightWarningMarker: this.preflightWarningMarker,
       forceMainRefresh: options.forceMainRefresh
     });
-    this.daemonFreshness = freshness;
-    await writeDaemonIdentity(repoRoot, { startedAt: this.daemonStartedAt, startGitSha: freshness.startGitSha });
-    await this.runtimeState.setDaemon({
-      startedAt: this.daemonStartedAt,
-      startGitSha: freshness.startGitSha,
-      startMainGitSha: freshness.startMainGitSha,
-      currentGitSha: freshness.currentGitSha,
-      currentMainGitSha: freshness.currentMainGitSha,
-      workflowPath: this.workflow.workflowPath,
-      freshnessStatus: freshness.freshnessStatus,
-      freshnessMessage: freshness.freshnessMessage,
-      preflightStatus: this.preflight?.status,
-      preflightMessage: this.preflight?.message ?? null,
-      repoEnvPath: this.preflight?.repoEnvPath ?? this.repoEnv?.path ?? null,
-      repoEnvStatus: this.preflight?.repoEnvStatus ?? this.repoEnv?.status,
-      credentialPreflight: this.preflight ?? undefined
-    });
-    if (freshness.freshnessMessage && this.freshnessWarningMarker !== freshness.freshnessMessage) {
-      this.freshnessWarningMarker = freshness.freshnessMessage;
-      await this.logger.write({
-        type: "daemon_freshness_warning",
-        message: freshness.freshnessMessage,
-        payload: {
-          daemonStartedAt: this.daemonStartedAt,
-          workflowPath: this.workflow.workflowPath,
-          startGitSha: freshness.startGitSha,
-          startMainGitSha: freshness.startMainGitSha,
-          currentGitSha: freshness.currentGitSha,
-          currentMainGitSha: freshness.currentMainGitSha
-        }
-      });
-    }
-    if (this.preflight && !preflightAllowsDispatch(this.preflight) && this.preflightWarningMarker !== this.preflight.message) {
-      this.preflightWarningMarker = this.preflight.message;
-      await this.logger.write({
-        type: "daemon_preflight_warning",
-        message: this.preflight.message,
-        payload: this.preflight
-      });
-    }
+    this.daemonFreshness = runtime.daemonFreshness;
+    this.freshnessWarningMarker = runtime.freshnessWarningMarker;
+    this.preflightWarningMarker = runtime.preflightWarningMarker;
   }
 
   private async reconstructStartupState(): Promise<void> {

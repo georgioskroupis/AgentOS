@@ -9,6 +9,7 @@ export * from "./github.js";
 export * from "./issue-state.js";
 export * from "./workspace.js";
 export * from "./orchestrator.js";
+export * from "./orchestrator-startup-preflight.js";
 export * from "./status.js";
 export * from "./redaction.js";
 export * from "./validation.js";
