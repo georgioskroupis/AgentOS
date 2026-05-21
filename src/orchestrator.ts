@@ -28,6 +28,8 @@ import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
 import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
+import { autoRecoverPushedWork } from "./orchestrator-pushed-work-recovery.js";
+import { isRecoverablePartialWorkState, isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
@@ -56,7 +58,6 @@ export interface OrchestratorOptions {
   env?: NodeJS.ProcessEnv;
   maxConcurrentAgents?: number;
 }
-
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
 
 export interface OrchestratorRunSummary {
@@ -546,6 +547,29 @@ export class Orchestrator {
       messages.push(`marked stale run for ${issue.identifier}: workspace is missing`);
     }
 
+    const recovery = workspacePath
+      ? await inspectWorkspaceRecovery(resolve(this.options.repoRoot), {
+          issueIdentifier: issue.identifier,
+          workspacePath,
+          headSha: state?.headSha ?? null,
+          validation: state?.validation
+        }).catch(() => null)
+      : null;
+    if (recovery?.recoverable) {
+      if (await this.tryAutoRecoverPushedWork(issue, recovery, `${reason}; recovered clean pushed work`)) {
+        if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; recovered clean pushed work`).catch(() => undefined);
+        messages.push(`recovered clean pushed work for stale run ${issue.identifier}`);
+        return { stale: true, terminal: false, retryRebuilt: false, messages };
+      }
+      const message = `recoverable partial work found: ${recovery.reasons.join("; ")}`;
+      await this.recordIssueState(issue, recoverablePartialWorkStatePatch(message));
+      await this.runtimeState.clearIssue(issue.id);
+      this.retries.delete(issue.id);
+      await this.markLinearRecoveryNeeded(issue, recovery);
+      messages.push(`paused stale run for ${issue.identifier}: recoverable partial work`);
+      return { stale: true, terminal: false, retryRebuilt: false, messages };
+    }
+
     if (state?.phase === "review" || state?.phase === "fix" || (pullRequestUrls(state).length > 0 && state?.reviewStatus !== "approved")) {
       await this.recordIssueState(issue, {
         phase: "human-required",
@@ -760,17 +784,11 @@ export class Orchestrator {
 
     const recovery = await this.dispatchRecoveryDiagnostics(issue, state, scopeReport);
     if (recovery?.recoverable && (state ? isRecoverablePartialWorkState(state) : true)) {
+      if (await this.tryAutoRecoverPushedWork(issue, recovery, "dispatch recovery: clean pushed work was reconstructed before redispatch")) {
+        return true;
+      }
       const message = `recoverable partial work found: ${recovery.reasons.join("; ")}`;
-      await this.recordIssueState(issue, {
-        phase: "human-required",
-        reviewStatus: "human_required",
-        lifecycleStatus: "implementation_failure",
-        lastError: message,
-        errorCategory: "workspace",
-        stopReason: message,
-        nextRetryAt: undefined,
-        retryAttempt: undefined
-      });
+      await this.recordIssueState(issue, recoverablePartialWorkStatePatch(message));
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
       await this.markLinearRecoveryNeeded(issue, recovery);
@@ -2643,6 +2661,21 @@ export class Orchestrator {
     });
   }
 
+  private async tryAutoRecoverPushedWork(issue: Issue, recovery: WorkspaceRecoveryDiagnostics, reason: string): Promise<boolean> {
+    return autoRecoverPushedWork({
+      issue,
+      recovery,
+      reason,
+      repoRoot: this.options.repoRoot,
+      githubCommand: this.config.github.command,
+      logger: this.logger,
+      markSucceeded: async (workspace, handoff, state) => {
+        await this.markLinearSucceeded(issue, workspace, handoff, state);
+        this.completedMarkers.set(issue.id, completionMarker(issue));
+      }
+    });
+  }
+
   private async markLinearNeedsInput(issue: Issue, workspace: Workspace, attempt: number | null, error: string): Promise<void> {
     await this.commentIssue(issue, needsInputCommentBody(workspace, displayAttempt(attempt), error), "run_needs_input");
     await this.moveIssue(issue, this.config.tracker.needsInputState);
@@ -2763,34 +2796,4 @@ export class Orchestrator {
       })
     );
   }
-}
-
-function isSupervisorContinuationPaused(state: IssueState | null): boolean {
-  if (!state?.lifecycleStatus || !["human_continuation", "supervisor_continuation", "externally_fixed"].includes(state.lifecycleStatus)) return false;
-  const decision = latestAuthoritativeDecision(state);
-  return Boolean(decision && decision.type !== "fix_findings");
-}
-
-function latestAuthoritativeDecision(state: IssueState | null | undefined): HumanDecisionState | null {
-  return latestAuthoritativeHumanDecision([...(state?.humanDecisions ?? []), ...(state?.lastHumanDecision ? [state.lastHumanDecision] : [])]);
-}
-
-function lifecycleStatusForHumanDecision(decision: HumanDecisionState): LifecycleStatus {
-  if (decision.type === "fix_findings") return "human_continuation";
-  return decision.type === "proceed_to_merge_after_supervisor_fix" ? "externally_fixed" : "supervisor_continuation";
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolvePromise) => {
-    const timer = setTimeout(resolvePromise, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      resolvePromise();
-    }, { once: true });
-  });
-}
-
-function isRecoverablePartialWorkState(state: IssueState): boolean {
-  const error = state.lastError?.toLowerCase() ?? "";
-  return state.phase === "needs-input" || state.phase === "human-required" || state.lifecycleStatus === "implementation_failure" || state.reviewStatus === "human_required" || Boolean(state.nextRetryAt) || error.includes("stall") || error.includes("missing_handoff");
 }

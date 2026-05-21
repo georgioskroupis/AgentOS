@@ -962,6 +962,57 @@ describe("issue inspection", () => {
     expect(output).toContain(`Next safe action: resume ${workspace}`);
   });
 
+  it("does not present completed clean pushed recovery as actionable operator work", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-completed-clean-pushed-"));
+    const workspace = join(repo, ".agent-os", "workspaces", "AG-1");
+    const remote = join(repo, "remote.git");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await run("git", ["init", "--bare", remote], repo);
+    await run("git", ["init", "-b", "main"], workspace);
+    await run("git", ["config", "user.email", "agentos@example.test"], workspace);
+    await run("git", ["config", "user.name", "AgentOS Test"], workspace);
+    await writeFile(join(workspace, "README.md"), "initial\n", "utf8");
+    await run("git", ["add", "README.md"], workspace);
+    await run("git", ["commit", "-m", "initial"], workspace);
+    await run("git", ["remote", "add", "origin", remote], workspace);
+    await run("git", ["push", "-u", "origin", "main"], workspace);
+    await run("git", ["checkout", "-b", "agent/AG-1"], workspace);
+    await writeFile(join(workspace, "README.md"), "implemented\n", "utf8");
+    await run("git", ["add", "README.md"], workspace);
+    await run("git", ["commit", "-m", "implement AG-1"], workspace);
+    const headSha = await run("git", ["rev-parse", "HEAD"], workspace);
+    await run("git", ["push", "-u", "origin", "agent/AG-1"], workspace);
+
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "completed",
+          reviewStatus: "pending",
+          workspacePath: workspace,
+          headSha,
+          prs: [{ url: "https://github.com/o/r/pull/1", role: "primary", source: "handoff", discoveredAt: "2026-05-21T00:00:00.000Z" }],
+          prUrl: "https://github.com/o/r/pull/1",
+          validation: { status: "passed", repoHead: headSha, checkedAt: "2026-05-21T00:00:00.000Z" },
+          updatedAt: "2026-05-21T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-1");
+
+    expect(output).not.toContain("Workspace recovery: recoverable partial work");
+    expect(output).not.toContain("recover the existing pushed branch");
+    expect(output).toContain("Next safe action: review the selected PR and move the Linear issue to Merging when approved");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("reports recoverable terminal workspace drift as a read-only status warning", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-status-terminal-workspace-drift-"));
     const repo = join(root, "alpha");

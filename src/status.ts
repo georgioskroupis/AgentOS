@@ -294,7 +294,7 @@ function issueStatusLine(issue: IssueState, runtime: Awaited<ReturnType<RuntimeS
   if ((issue.reviewStatus === "human_required" || issue.phase === "human-required") && latestRunnerFailure) {
     return withEvidence(`waiting on Human Review - reviewer runner failure (${latestRunnerFailure.reviewer}: ${latestRunnerFailure.reason})`);
   }
-  if (recovery?.recoverable) return withEvidence(`recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`);
+  if (recovery?.recoverable && issue.phase !== "completed") return withEvidence(`recoverable partial work - ${recovery.reasons.join("; ")}; next: ${recovery.nextSafeAction}`);
   const terminalStatus = cleanTerminalStatusLine(issue);
   if (terminalStatus) return withEvidence(terminalStatus);
   if (isReviewSplitRecommendationBlocking(issue)) return withEvidence(`split recommended - ${issue.splitRecommendation?.summary}`);
@@ -335,9 +335,10 @@ function sameSha(left: string | null | undefined, right: string | null | undefin
 }
 
 function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostics | null = null): string {
-  if (recovery?.recoverable) return recovery.nextSafeAction;
+  if (recovery?.recoverable && issue.phase !== "completed") return recovery.nextSafeAction;
   const terminalAction = cleanTerminalNextSafeAction(issue);
   if (terminalAction) return terminalAction;
+  if (issue.phase === "completed" && issue.reviewStatus === "pending") return "review the selected PR and move the Linear issue to Merging when approved";
   if (issue.contextBudget?.status === "exceeded") return "reduce prompt context by narrowing Active-Scope, pruning large artifacts, or splitting follow-up work before redispatch";
   if (issue.errorCategory === "capacity-wait" && issue.nextRetryAt) return `wait until ${issue.nextRetryAt}, then let AgentOS redispatch without incrementing the normal retry budget`;
   const decision = latestAuthoritativeHumanDecision([
@@ -553,6 +554,7 @@ function findRuntimeRetry(retryQueue: RuntimeRetryEntry[], issue: Pick<IssueStat
 
 function shouldFormatRecoveryDiagnostics(issue: IssueState | null, recovery: WorkspaceRecoveryDiagnostics | null): recovery is WorkspaceRecoveryDiagnostics {
   if (!recovery) return false;
+  if (issue?.phase === "completed" && recovery.recoverable) return false;
   if (issue && isTerminalIssueState(issue) && recovery.recoverable) return false;
   if (issue && !recovery.exists && isExpectedTerminalWorkspaceCleanup(issue) && !shouldReportTerminalWorkspaceWarning(issue)) return false;
   return true;
