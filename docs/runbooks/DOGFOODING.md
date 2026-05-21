@@ -82,12 +82,13 @@ bin/agent-os daemon status --repo .
 ```
 
 The command runs in a detached `screen` session, records `.agent-os/daemon.pid`,
-and appends crash-oriented process output to `.agent-os/daemon.log` with launch
-and clean-stop boundaries. Use `.agent-os/runs/agent-os.jsonl` for normal
-orchestrator diagnostics; use `.agent-os/daemon.log` only when investigating
-process startup, shutdown, or uncaught crashes. If a launch leaves a stale PID
-or empty log, `daemon status`, `status`, and `inspect` should name the precise
-cleanup and restart action.
+records daemon identity metadata, and appends crash-oriented process output to
+`.agent-os/daemon.log` with launch and clean-stop boundaries. Use
+`.agent-os/runs/agent-os.jsonl` for normal orchestrator diagnostics; use
+`.agent-os/daemon.log` only when investigating process startup, shutdown, or
+uncaught crashes. If a launch leaves a stale PID, a live PID that cannot be
+verified as this repo's AgentOS daemon, or an empty log, `daemon status`,
+`status`, and `inspect` should name the precise cleanup and restart action.
 Known benign Codex plugin manifest/cache stderr warnings are captured as
 bounded run diagnostics, but they should not appear as active warning noise in
 `status`/`inspect` after terminal issue completion. Use `runs inspect` for the
@@ -179,8 +180,8 @@ For each issue, record:
 - `.agent-os/env` is loaded when present, and missing, malformed, or placeholder
   credentials are reported as daemon preflight health rather than product
   failures.
-- `daemon status` distinguishes stopped, stale-PID, empty-log failed launch,
-  blocked-preflight, and healthy idle states.
+- `daemon status` distinguishes stopped, stale-PID, non-AgentOS PID, empty-log
+  failed launch, blocked-preflight, and healthy idle states.
 - `inspect` reports dirty workspaces, unpushed commits, stale PR heads, stale CI
   heads, and one next safe action.
 - Implementation prompts include an Existing Implementation Audit requirement,
