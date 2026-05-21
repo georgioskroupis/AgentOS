@@ -256,6 +256,15 @@ describe("agent lifecycle tools", () => {
 
     expect(() =>
       assertSupervisorValidationEvidence({
+        evidenceText: evidence,
+        validationPath: ".agent-os/workspaces/AG-1/.agent-os/validation/AG-1.json",
+        issueIdentifier: "AG-1",
+        prHeadSha: "abc1234"
+      })
+    ).not.toThrow();
+
+    expect(() =>
+      assertSupervisorValidationEvidence({
         evidenceText: JSON.stringify({
           schemaVersion: 1,
           issueIdentifier: "AG-1",

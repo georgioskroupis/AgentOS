@@ -7,6 +7,7 @@ import { isLinearIdentifier } from "./linear.js";
 import type { LinearCommentWriteResult, LinearIssueReference } from "./linear.js";
 import { redactText } from "./redaction.js";
 import type { HumanDecisionFindingsState, HumanDecisionType, Issue, LifecycleDuplicateCommentBehavior, PullRequestRef, ServiceConfig } from "./types.js";
+import { workspaceKey } from "./workspace.js";
 
 export const DEFAULT_AGENT_TRACKER_MARKER_FORMAT = "<!-- agentos:event={event} issue={issue} -->";
 
@@ -391,10 +392,12 @@ function normalizeSupervisorFindings(value: string): (typeof supervisorFindingsS
 }
 
 function assertExpectedSupervisorValidationPath(validationPath: string, issueIdentifier: string): void {
-  const expected = `.agent-os/validation/${stableMarkerToken(issueIdentifier, "issue")}.json`;
+  const issueToken = stableMarkerToken(issueIdentifier, "issue");
+  const expected = `.agent-os/validation/${issueToken}.json`;
+  const expectedWorkspacePath = `.agent-os/workspaces/${workspaceKey(issueIdentifier)}/.agent-os/validation/${issueToken}.json`;
   const normalized = validationPath.trim().replace(/\\/g, "/").replace(/^\.\//, "");
-  if (normalized !== expected) {
-    throw new Error(`supervisor decision Validation-JSON must be ${expected}`);
+  if (normalized !== expected && normalized !== expectedWorkspacePath) {
+    throw new Error(`supervisor decision Validation-JSON must be ${expected} or ${expectedWorkspacePath}`);
   }
 }
 
