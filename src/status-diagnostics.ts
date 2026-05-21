@@ -51,7 +51,7 @@ export function runtimeWarningDetails(entries: AgentEvent[], identifier: string)
 }
 
 export function runtimeWarningSummary(entries: AgentEvent[], identifier: string): { summary: string; nextAction: string } | null {
-  const warningEvents = entries.filter((entry) => entry.issueIdentifier?.toLowerCase() === identifier.toLowerCase() && isPluginOrCacheWarning(entry));
+  const warningEvents = entries.filter((entry) => entry.issueIdentifier?.toLowerCase() === identifier.toLowerCase() && isActionablePluginOrCacheWarning(entry));
   if (warningEvents.length === 0) return null;
   const latest = warningEvents.at(-1);
   return {
@@ -61,7 +61,8 @@ export function runtimeWarningSummary(entries: AgentEvent[], identifier: string)
 }
 
 export function recentEventMessage(entry: AgentEvent): string {
-  if (isPluginOrCacheWarning(entry)) return "plugin/cache stderr warning omitted from status output";
+  if (isBenignPluginOrCacheWarning(entry)) return "benign plugin/cache stderr warning omitted from status output";
+  if (isActionablePluginOrCacheWarning(entry)) return "plugin/cache stderr warning omitted from status output";
   return entry.message ?? "";
 }
 
@@ -79,8 +80,13 @@ function formatContextSection(section: ContextBudgetState["sections"][number]): 
   return `- ${section.name}: ~${section.estimatedTokens} token(s), ${section.chars} char(s); reason: ${section.reason}`;
 }
 
-function isPluginOrCacheWarning(entry: AgentEvent): boolean {
+function isActionablePluginOrCacheWarning(entry: AgentEvent): boolean {
   if (!/codex_stderr/i.test(entry.type)) return false;
+  if (isBenignPluginOrCacheWarning(entry)) return false;
   const message = entry.message ?? "";
   return /\b(plugin|cache|manifest)\b/i.test(message) && /\b(warn|warning|deprecated|failed to load)\b/i.test(message);
+}
+
+function isBenignPluginOrCacheWarning(entry: AgentEvent): boolean {
+  return entry.type === "codex_stderr_benign" || (entry.payload as { classification?: string } | undefined)?.classification === "benign_plugin_warning";
 }

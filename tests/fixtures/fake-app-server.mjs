@@ -136,6 +136,20 @@ rl.on("line", (line) => {
     if (process.argv.includes("--exit-before-completion")) {
       process.exit(42);
     }
+    if (process.argv.includes("--benign-stderr-exit-before-completion")) {
+      process.stderr.write(
+        `${JSON.stringify({
+          timestamp: "2026-05-21T19:24:28.206552Z",
+          level: "WARN",
+          fields: {
+            message: "ignoring interface.defaultPrompt: maximum of 3 prompts is supported",
+            path: "/tmp/plugins/openai-developers/.codex-plugin/plugin.json"
+          },
+          target: "codex_core_plugins::manifest"
+        })}\n`
+      );
+      process.exit(0);
+    }
     const complete = () => {
       write({
         method: "turn/completed",

@@ -88,6 +88,10 @@ orchestrator diagnostics; use `.agent-os/daemon.log` only when investigating
 process startup, shutdown, or uncaught crashes. If a launch leaves a stale PID
 or empty log, `daemon status`, `status`, and `inspect` should name the precise
 cleanup and restart action.
+Known benign Codex plugin manifest/cache stderr warnings are captured as
+bounded run diagnostics, but they should not appear as active warning noise in
+`status`/`inspect` after terminal issue completion. Use `runs inspect` for the
+raw bounded stderr artifact only when diagnosing the Codex app-server itself.
 
 Before returning a stalled or exhausted issue to an active state, inspect it:
 

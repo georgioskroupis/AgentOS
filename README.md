@@ -177,7 +177,10 @@ state contradictions and post-merge cleanup drift are surfaced as status
 warnings so operators can reconcile durable state without starting duplicate
 work. They also surface context-budget estimates, validation reuse/budget
 evidence, Codex capacity waits, daemon freshness, and concise plugin/cache
-warning summaries without dumping raw prompt or stderr content.
+warning summaries without dumping raw prompt or stderr content. Known benign
+Codex plugin manifest/cache warnings are retained in run events as bounded
+diagnostics and omitted from active warning summaries; use `runs inspect` only
+when that raw stderr is needed for debugging.
 
 ### `recovery record <issue>`
 
