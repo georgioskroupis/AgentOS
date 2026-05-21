@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
 import { BoundedTextAccumulator, summarizeText } from "../output-capture.js";
 import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js";
+import { isBenignCodexPluginStderr } from "./stderr-classification.js";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -128,6 +129,11 @@ export class CodexAppServerRunner implements AgentRunner {
     child.on("close", (code, signal) => {
       if (ignoreChildClose || turnFinished) return;
       const reason = signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`;
+      const stderrText = stderr.text().trim();
+      if (!signal && code === 0 && isBenignCodexPluginStderr(stderrText)) {
+        failAppServer(new Error(`codex_app_server_closed_clean_exit: ${reason} before turn completion; benign plugin stderr captured separately`));
+        return;
+      }
       const details = stderr.length > 0 ? `: ${summarizeText(stderr.tailText(500), 500).inline}` : "";
       failAppServer(new Error(`codex_app_server_closed: ${reason}${details}`));
     });
@@ -328,12 +334,16 @@ export class CodexAppServerRunner implements AgentRunner {
       }
       const stderrText = stderr.text().trim();
       if (stderrText) {
+        const benignPluginWarning = isBenignCodexPluginStderr(stderrText);
         input.onEvent({
-          type: "codex_stderr",
+          type: benignPluginWarning ? "codex_stderr_benign" : "codex_stderr",
           issueId: input.issue.id,
           issueIdentifier: input.issue.identifier,
           message: stderrText,
-          payload: { capturedChars: stderr.length },
+          payload: {
+            capturedChars: stderr.length,
+            ...(benignPluginWarning ? { classification: "benign_plugin_warning" } : {})
+          },
           timestamp: new Date().toISOString()
         });
       }

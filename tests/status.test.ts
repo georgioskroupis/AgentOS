@@ -818,6 +818,43 @@ describe("issue inspection", () => {
     expect(inspectOutput).not.toContain("noisy details");
   });
 
+  it("keeps benign plugin stderr diagnostics out of active runtime warning summaries", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-benign-warning-noise-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "completed",
+          lifecycleStatus: "merge_success",
+          updatedAt: "2026-05-17T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await new JsonlLogger(repo).write({
+      type: "codex_stderr_benign",
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      message: "Plugin manifest warning noisy details that should not appear in status output",
+      payload: { classification: "benign_plugin_warning", capturedChars: 80 }
+    });
+
+    const statusOutput = await getStatus(repo);
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+
+    expect(statusOutput).not.toContain("runtime warning noise");
+    expect(statusOutput).not.toContain("noisy details");
+    expect(inspectOutput).toContain("Runtime warning summary: none recorded");
+    expect(inspectOutput).toContain("benign plugin/cache stderr warning omitted from status output");
+    expect(inspectOutput).not.toContain("noisy details");
+  });
+
   it("does not recommend redispatch after old fix-findings once a PR is approved", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-status-approved-pr-"));
     await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });

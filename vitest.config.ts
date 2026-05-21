@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     testTimeout: 30_000,
     fileParallelism: false,
-    exclude: ["dist/**", "node_modules/**", ".agent-os/**"]
+    exclude: ["dist/**", "node_modules/**", ".agent-os/**", ".claude/**", "dashboard/**"]
   }
 });

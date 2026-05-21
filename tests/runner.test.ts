@@ -21,6 +21,7 @@ const nestedOrchestratorFixtureCommand = `node ${JSON.stringify(fixture)} --nest
 const nestedOrchestratorShellFixtureCommand = `node ${JSON.stringify(fixture)} --nested-orchestrator-shell`;
 const safeNestedTextSearchFixtureCommand = `node ${JSON.stringify(fixture)} --safe-nested-text-search`;
 const exitBeforeCompletionFixtureCommand = `node ${JSON.stringify(fixture)} --exit-before-completion`;
+const benignStderrExitBeforeCompletionFixtureCommand = `node ${JSON.stringify(fixture)} --benign-stderr-exit-before-completion`;
 const longRawStdoutAndStderrFixtureCommand = `node ${JSON.stringify(fixture)} --long-raw-stdout --large-stderr`;
 const ongoingRawStdoutFixtureCommand = `node ${JSON.stringify(fixture)} --ongoing-raw-stdout`;
 const largeJsonEventSplitFixtureCommand = `node ${JSON.stringify(fixture)} --large-json-event-split`;
@@ -501,6 +502,36 @@ describe("CodexAppServerRunner", () => {
       error: "codex_app_server_closed: exit 42",
       threadId: "thread-1",
       turnId: "turn-1"
+    });
+  });
+
+  it("classifies clean app-server exits with only benign plugin stderr separately", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-benign-stderr-exit-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, benignStderrExitBeforeCompletionFixtureCommand);
+    const events: AgentEvent[] = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Do work before a clean plugin-warning exit",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push(event);
+        }
+      })
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: "codex_app_server_closed_clean_exit: exit 0 before turn completion; benign plugin stderr captured separately",
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+
+    expect(events.find((event) => event.type === "codex_stderr")).toBeUndefined();
+    expect(events.find((event) => event.type === "codex_stderr_benign")).toMatchObject({
+      payload: { classification: "benign_plugin_warning" }
     });
   });
 
