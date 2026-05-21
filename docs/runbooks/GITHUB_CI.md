@@ -37,6 +37,12 @@ squash-merges a PR. Landing freshness compares the selected PR head, validation
 repaired by rerunning validation and waiting for GitHub Actions on the selected
 PR head before moving back to `Merging`.
 
+Marking a draft PR ready is also gated by landing freshness. AgentOS only calls
+`gh pr ready` when high-throughput landing is enabled,
+`github.mark_draft_ready: true` is configured, the trusted approval still
+matches the PR head, and checks are fresh and green. This avoids using GitHub
+draft state as a second control plane under conservative/public workflows.
+
 ## High-Throughput CI Diagnostic Matrix
 
 High-throughput CI diagnostics may read PR status, status-check rollups, and

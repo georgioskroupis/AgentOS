@@ -395,6 +395,34 @@ describe("reviewer artifact retry", () => {
     ]);
   });
 
+  it("classifies reviewer capacity waits without burning missing-artifact retries", async () => {
+    const scenario = await setupReviewScenario({ requiredReviewers: ["self"], maxRetryAttempts: 3 });
+    const attempts = new Map<string, number>();
+
+    await scenario.run(async ({ reviewer }) => {
+      increment(attempts, reviewer);
+      return {
+        status: "failed",
+        error: "You've hit your usage limit. Please try again after May 18th, 2026 1:30 AM."
+      };
+    });
+
+    const state = await scenario.readState();
+    expect(attempts.get("self")).toBe(1);
+    expect(state.reviewStatus).toBe("human_required");
+    expect(state.reviewRunnerFailures).toEqual([
+      expect.objectContaining({
+        classification: "non_mechanical",
+        reason: "capacity_wait",
+        resultStatus: "failed",
+        retryable: false,
+        exhausted: false
+      })
+    ]);
+    expect(state.reviewRunnerFailures[0].message).toContain("Next safe action: wait until");
+    expect(scenario.comments.join("\n")).toContain("capacity_wait");
+  });
+
   it("escalates non-mechanical reviewer failures even when a fresh artifact exists", async () => {
     const scenario = await setupReviewScenario({ requiredReviewers: ["self"], maxRetryAttempts: 3 });
     const attempts = new Map<string, number>();

@@ -62,6 +62,7 @@ github:
   merge_method: squash
   merge_target: primary
   require_checks: true
+  mark_draft_ready: true
   delete_branch: true
   done_state: Done
   allow_human_merge_override: false
@@ -285,7 +286,9 @@ elicitation and user-input requests remain denied by `codex` policy.
 High-throughput landing is a separate switchboard for automatic approved-PR
 promotion toward merge readiness. It is enabled only when `trust_mode` permits
 PR/network and GitHub merge capability, `automation.profile` is
-`high-throughput`, and `github.merge_mode` is `shepherd` or `auto`.
+`high-throughput`, and `github.merge_mode` is `shepherd` or `auto`. Draft PRs
+are marked ready only when `github.mark_draft_ready: true` is also set and the
+same landing preflight confirms the approved head and checks are fresh.
 Conservative/manual defaults keep auto-ready and auto-merge behavior disabled;
 partial opt-ins are treated as blocked landing until the missing gate is made
 explicit.

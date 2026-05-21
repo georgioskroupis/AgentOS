@@ -9714,6 +9714,96 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "dispatch_skipped" && entry.message?.includes("approved PR is merge-ready"))).toBe(true);
   });
 
+  it("marks draft approved PRs ready before auto-promoting landing when configured", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-approved-draft-ready-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  mark_draft_ready: true\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: true,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        issueId: readyIssue.id,
+        issueIdentifier: readyIssue.identifier,
+        phase: "completed",
+        reviewStatus: "approved",
+        prs: [{ url: "https://github.com/o/r/pull/1", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+        updatedAt: "2026-05-05T00:00:00.000Z"
+      }),
+      "utf8"
+    );
+    const todoIssue = { ...readyIssue, state: "Todo", updated_at: "2026-05-06T00:00:00.000Z" };
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Todo") ? [todoIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[todoIssue.id, todoIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(ghStateAfter.readyPrs).toEqual([{ target: "https://github.com/o/r/pull/1", args: [] }]);
+    expect(moves).toEqual(["AG-1 -> Merging"]);
+    expect(comments.join("\n")).toContain("AgentOS PR ready");
+    expect(state.phase).toBe("merge");
+    expect(state.pullRequestReady).toEqual(
+      expect.objectContaining({
+        status: "marked_ready",
+        prUrl: "https://github.com/o/r/pull/1",
+        beforeHeadSha: "abc123",
+        afterHeadSha: "abc123"
+      })
+    );
+  });
+
   it("keeps default workflows from auto-promoting approved PRs toward landing", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-approved-landing-disabled-"));
     await initGitRemote(repo);
@@ -9730,7 +9820,7 @@ describe("orchestrator", () => {
         view: {
           url: "https://github.com/o/r/pull/1",
           state: "OPEN",
-          isDraft: false,
+          isDraft: true,
           mergeable: "MERGEABLE",
           headRefOid: "abc123",
           statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
@@ -9786,6 +9876,8 @@ describe("orchestrator", () => {
     expect(result.dispatched).toBe(0);
     expect(runnerCalled).toBe(false);
     expect(moves).toEqual(["AG-1 -> Human Review"]);
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    expect(ghStateAfter.readyPrs).toBeUndefined();
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.stopReason).toContain("approved PR landing disabled");
     const logs = await logger.tail(20);

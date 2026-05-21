@@ -48,6 +48,7 @@ github:
   merge_method: squash
   merge_target: primary
   require_checks: true
+  mark_draft_ready: false
   delete_branch: true
   done_state: Done
   allow_human_merge_override: false
@@ -237,9 +238,10 @@ High-throughput landing is enabled only when all landing gates are explicit:
 `trust_mode` permits PR/network and GitHub merge capability,
 `automation.profile` is `high-throughput`, and `github.merge_mode` is
 `shepherd` or `auto`. Public template defaults stay
-`ci-locked`/`conservative`/`manual`, so approved PRs are not auto-promoted
-toward merge readiness and merge shepherding is not started by default. Partial
-opt-ins are blocked landing, not implicit auto-ready or auto-merge behavior.
+`ci-locked`/`conservative`/`manual`, with `github.mark_draft_ready: false`, so
+approved PRs are not auto-promoted toward merge readiness and merge shepherding
+is not started by default. Partial opt-ins are blocked landing, not implicit
+auto-ready or auto-merge behavior.
 
 Runtime repair stays bounded by `review.max_iterations`. Automated review
 findings may trigger focused fixer turns on the existing PR. CI repair is only
