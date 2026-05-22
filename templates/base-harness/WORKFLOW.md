@@ -109,6 +109,16 @@ Recommended Symphony-style statuses:
 - Canceled
 - Duplicate
 
+## Workspace Hooks
+
+Relative `workspace.root` values resolve from the directory containing the
+selected `WORKFLOW.md`. AgentOS creates the per-issue workspace directory before
+running `hooks.after_create`, then runs workspace lifecycle hooks from the
+workspace path. `AGENT_OS_SOURCE_REPO` and `AGENT_OS_WORKSPACE` are absolute
+paths; `AGENT_OS_WORKSPACE_KEY` is the sanitized issue key. A workspace is
+reused only after successful bootstrap state is recorded, so partial bootstrap
+directories require explicit recovery instead of silent reuse.
+
 ## Lifecycle Ownership
 
 `lifecycle.mode: orchestrator-owned` is the safe default for installed

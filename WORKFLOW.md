@@ -131,7 +131,7 @@ review:
 - Recommended profile: api
 - Summary source: codex
 - Stack: Node.js, TypeScript, API, Commander CLI, Vitest, Linear GraphQL integration, GitHub CLI integration, Codex App Server JSON-RPC, YAML/Liquid template rendering
-- Validation commands: npm run agent-check, npm run typecheck, npm test, npm run build
+- Validation commands: npm run agent-check, npm run lint, npm run format:check, npm run coverage, npm run typecheck, npm test, npm run build
 - Architecture notes:
   - Repository implements reusable harness and orchestration tooling for agent-assisted software projects.
   - Architecture is organized into harness, enforcement, orchestration, and replication layers.
@@ -144,13 +144,11 @@ review:
   - src/github.ts shells through gh for PR status and squash merge workflows.
   - src/runner/app-server.ts targets Codex App Server through JSON-RPC.
   - src/orchestrator.ts schedules Linear issues, runs Codex agents, reconciles state, records events, runs automated review, and shepherds merges.
-  - scripts/agent-check.sh is the primary project harness check and validates required files, shell syntax, harness contract, typecheck, tests, and build when node_modules exists.
+  - scripts/agent-check.sh is the primary project harness check and validates required files, shell syntax, harness contract, format, lint, typecheck, tests, coverage, build, architecture, dashboard, docs, security, and contract checks when node_modules exists.
   - GitHub Actions CI is present and documented as running npm ci followed by npm run agent-check.
-- Validation gaps:
-  - No npm lint script found.
-  - No dedicated coverage script found.
-  - No explicit formatting check script found.
-  - agent-check skips npm typecheck, tests, and build when node_modules is not installed.
+- Validation posture:
+  - npm lint, format, coverage, typecheck, tests, build, architecture, docs, security, dashboard, and contract checks are available.
+  - Full agent-check requires node_modules. Run npm ci before full validation, or use structure-only checks only for bootstrap diagnostics.
 <!-- AGENTOS:WORKFLOW-CONTEXT:END -->
 
 ## Toolkit Lifecycle
@@ -160,6 +158,16 @@ review:
 3. Apply the harness to a target project with `bin/agent-os init <repo>`.
 4. Validate the target project with `bin/agent-os doctor <repo>`.
 5. Run target checks with `bin/agent-os check <repo>`.
+
+## Workspace Hooks
+
+Relative `workspace.root` values resolve from the directory containing the
+selected `WORKFLOW.md`. AgentOS creates the per-issue workspace directory before
+running `hooks.after_create`, then runs workspace lifecycle hooks from the
+workspace path. `AGENT_OS_SOURCE_REPO` and `AGENT_OS_WORKSPACE` are absolute
+paths; `AGENT_OS_WORKSPACE_KEY` is the sanitized issue key. A workspace is
+reused only after successful bootstrap state is recorded, so partial bootstrap
+directories require explicit recovery instead of silent reuse.
 
 ## Lifecycle Ownership
 
