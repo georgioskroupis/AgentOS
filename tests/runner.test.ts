@@ -121,8 +121,11 @@ describe("CodexAppServerRunner", () => {
       inputTokens: 10,
       outputTokens: 5,
       totalTokens: 15,
-      rateLimits: [{ limitId: "codex", primary: { usedPercent: 1 } }]
+      rateLimits: [{ limitId: "codex", primary: { usedPercent: 1 } }],
+      modelTelemetry: expect.objectContaining({ role: "implementation", model: "inherited", tokenUsage: { input: 10, output: 5, total: 15 } })
     });
+    expect(events).toContain("model_route_selected");
+    expect(events).toContain("model_route_telemetry");
     expect(events).toContain("turn/completed");
     expect(events).toContain("thread/tokenUsage/updated");
     expect(events).toContain("account/rateLimits/updated");

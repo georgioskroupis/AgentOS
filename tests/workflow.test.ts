@@ -70,6 +70,7 @@ describe("workflow", () => {
     expect(config.daemon).toMatchObject({
       mainBranchRefreshIntervalTicks: 5
     });
+    expect(config.modelRouting).toEqual({ mode: "off", roles: {} });
     expect(config.review).toMatchObject({
       enabled: true,
       targetMode: "merge-eligible",
@@ -168,6 +169,42 @@ describe("workflow", () => {
     expect(result.errors).toContain("github.merge_mode=shepherd requires PR/network capability");
     expect(result.errors).toContain("codex.approval_event_policy=allow requires trust_mode=danger");
     expect(result.errors).toContain("codex.user_input_policy=allow requires a trust mode with Codex user input capability");
+  });
+
+  it("parses report-only model routing by role", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-model-routing-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "model_routing:",
+        "  mode: report-only",
+        "  roles:",
+        "    tests-review:",
+        "      model: gpt-5.4-mini",
+        "      reasoning_effort: low",
+        "      cost_bucket: low",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const config = resolveServiceConfig(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+    expect(config.modelRouting).toMatchObject({
+      mode: "report-only",
+      roles: {
+        "tests-review": {
+          model: "gpt-5.4-mini",
+          reasoningEffort: "low",
+          costBucket: "low"
+        }
+      }
+    });
   });
 
   it("parses automation behavior as a separate axis from trust and lifecycle", async () => {

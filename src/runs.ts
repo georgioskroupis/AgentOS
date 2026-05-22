@@ -74,7 +74,7 @@ export interface RunSummary {
       threadId?: string;
       turnId?: string;
     };
-    rateLimits: Array<Record<string, unknown>>;
+    rateLimits: Array<Record<string, unknown>>; modelRouting: import("./types.js").ModelTelemetryEntry[];
   };
   timing?: RunTimingState;
   artifactHashes: Record<string, string>;
@@ -101,7 +101,7 @@ export class RunArtifactStore {
       metrics: {
         tokens: {},
         sessions: {},
-        rateLimits: []
+        rateLimits: [], modelRouting: []
       },
       artifactHashes: {}
     };
@@ -272,7 +272,8 @@ export class RunArtifactStore {
             threadId: result.threadId,
             turnId: result.turnId
           },
-          rateLimits: result.rateLimits ?? current.metrics.rateLimits
+          rateLimits: result.rateLimits ?? current.metrics.rateLimits,
+          modelRouting: result.modelTelemetry ? [...(current.metrics.modelRouting ?? []), result.modelTelemetry] : (current.metrics.modelRouting ?? [])
         },
         timing: finalizedTiming.timing,
         artifactHashes: await this.hashArtifacts(runId)
@@ -613,7 +614,7 @@ export function formatRunInspect(result: { summary: RunSummary; warnings: string
     summary.metrics.sessions.threadId ? `Thread: ${summary.metrics.sessions.threadId}` : null,
     summary.metrics.sessions.turnId ? `Turn: ${summary.metrics.sessions.turnId}` : null,
     tokenLine(summary),
-    rateLimitLine(summary),
+    rateLimitLine(summary), modelRoutingLine(summary),
     formatRunCycleDiagnostics(summary, options),
     summary.error ? `Error: ${summary.error}` : null,
     warnings.length ? `Warnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}` : "Warnings: none"
@@ -637,10 +638,10 @@ function rateLimitLine(summary: RunSummary): string {
   return count > 0 ? `Rate limits: ${count} snapshot${count === 1 ? "" : "s"} recorded` : "Rate limits: none recorded";
 }
 
+function modelRoutingLine(summary: RunSummary): string { const routes = summary.metrics.modelRouting ?? []; return routes.length === 0 ? "Model routing: none recorded" : `Model routing: ${routes.map((route) => `${route.role}=${route.applied ? route.model : route.proposedModel ? `${route.mode}:${route.proposedModel}` : route.model}${route.escalationReason ? ` promoted(${route.escalationReason})` : ""}; ${route.elapsedMs}ms; tokens=${route.tokenUsage.total ?? "unknown"}; cost=${route.costBucket}`).join(" | ")}`; }
 function summarizeOptional(value: string | undefined): string | undefined {
   return value ? summarizeText(value).inline : undefined;
 }
-
 function createRunId(identifier: string, timestamp: string): string {
   const stamp = timestamp.replace(/[-:.TZ]/g, "").slice(0, 14);
   const safeIdentifier = identifier.replace(/[^A-Za-z0-9._-]/g, "_");

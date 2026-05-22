@@ -5,6 +5,7 @@ import { parseAutomationConfig, validateAutomationConfig } from "./automation.js
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, readText } from "./fs-utils.js";
 import { parseLifecycleConfig, validateLifecycleConfig } from "./lifecycle.js";
+import { parseModelRoutingConfig } from "./model-routing.js";
 import { defaultThreadSandboxForTrustMode, defaultTurnSandboxPolicyForTrustMode, parseGitHubMergeMode, parseTrustMode, trustCapabilities, validateTrustCompatibility } from "./trust.js";
 import type { CodexEventPolicy, ContextBudgetConfig, Issue, ReviewBudgetConfig, ServiceConfig, ValidationBudgetConfig, WorkflowDefinition } from "./types.js";
 
@@ -56,6 +57,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
   const agent = objectAt(cfg, "agent");
   const contextBudget = objectAt(cfg, "context_budget");
   const validationBudget = objectAt(cfg, "validation_budget");
+  const modelRouting = objectAt(cfg, "model_routing");
   const codex = objectAt(cfg, "codex");
   const github = objectAt(cfg, "github");
   const daemon = objectAt(cfg, "daemon");
@@ -109,6 +111,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
     },
     contextBudget: contextBudgetConfigAt(contextBudget),
     validationBudget: validationBudgetConfigAt(validationBudget),
+    modelRouting: parseModelRoutingConfig(modelRouting),
     codex: {
       command: stringAt(codex, "command", DEFAULT_CODEX_APP_SERVER_COMMAND),
       approvalPolicy: codex.approval_policy,

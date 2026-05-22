@@ -1,7 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
+import { defaultModelRoutingConfig, modelTelemetry, selectModelRoute } from "../model-routing.js";
 import { BoundedTextAccumulator, summarizeText } from "../output-capture.js";
 import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js";
+import { codexCommandStop } from "./command-stop.js";
 import { isBenignCodexPluginStderr } from "./stderr-classification.js";
 
 interface PendingRequest {
@@ -21,10 +23,22 @@ export async function verifyCodexAppServer(command = DEFAULT_CODEX_APP_SERVER_CO
 
 export class CodexAppServerRunner implements AgentRunner {
   async run(input: Parameters<AgentRunner["run"]>[0]): Promise<AgentRunResult> {
+    const startedAt = Date.now();
+    const route = selectModelRoute(input.config.modelRouting ?? defaultModelRoutingConfig(), input.modelRouting ?? { role: "implementation" });
+    input.onEvent({
+      type: "model_route_selected",
+      issueId: input.issue.id,
+      issueIdentifier: input.issue.identifier,
+      message: `${route.role}: ${route.applied ? route.model : route.proposedModel ? `${route.mode} ${route.proposedModel}` : "inherited"}`,
+      payload: route,
+      timestamp: new Date().toISOString()
+    });
     const support = await verifyCodexAppServer(input.config.codex.command);
     if (!support.ok) {
+      const telemetry = modelTelemetry(route, { elapsedMs: Date.now() - startedAt });
       return {
         status: "failed",
+        modelTelemetry: telemetry,
         error: `codex_app_server_unavailable: command did not expose App Server protocol (${input.config.codex.command})`
       };
     }
@@ -270,13 +284,18 @@ export class CodexAppServerRunner implements AgentRunner {
         persistExtendedHistory: true
       })) as Record<string, any>;
       threadId = String(thread.thread?.id ?? thread.threadId ?? thread.id ?? "");
-      const turn = (await send("turn/start", {
+      const turnStartParams: Record<string, unknown> = {
         threadId,
         input: [{ type: "text", text: input.prompt }],
         cwd: input.workspace.path,
         approvalPolicy: input.config.codex.approvalPolicy ?? "never",
         sandboxPolicy: normalizeSandboxPolicy(input.config.codex.turnSandboxPolicy, input.workspace.path)
-      })) as Record<string, any>;
+      };
+      if (route.applied) {
+        turnStartParams.model = route.model;
+        if (route.reasoningEffort) turnStartParams.reasoningEffort = route.reasoningEffort;
+      }
+      const turn = (await send("turn/start", turnStartParams)) as Record<string, any>;
       turnId = String(turn.turn?.id ?? turn.turnId ?? turn.id ?? "");
 
       const completion = await waitForTurn({
@@ -301,6 +320,15 @@ export class CodexAppServerRunner implements AgentRunner {
       child.kill("SIGTERM");
       const status = completion.params?.turn?.status;
       const completionError = completion.params?.turn?.error?.message;
+      const telemetry = modelTelemetry(route, { elapsedMs: Date.now() - startedAt, inputTokens, outputTokens, totalTokens });
+      input.onEvent({
+        type: "model_route_telemetry",
+        issueId: input.issue.id,
+        issueIdentifier: input.issue.identifier,
+        message: `${telemetry.role}: ${telemetry.model}`,
+        payload: telemetry,
+        timestamp: telemetry.recordedAt
+      });
       return {
         status: status === "completed" ? "succeeded" : status === "interrupted" ? "canceled" : "failed",
         threadId,
@@ -309,6 +337,7 @@ export class CodexAppServerRunner implements AgentRunner {
         outputTokens,
         totalTokens,
         rateLimits,
+        modelTelemetry: telemetry,
         error: completionError ? summarizeText(String(completionError)).inline : undefined
       };
     } catch (error) {
@@ -316,6 +345,15 @@ export class CodexAppServerRunner implements AgentRunner {
       clearTimeout(turnTimer);
       ignoreChildClose = true;
       child.kill("SIGTERM");
+      const telemetry = modelTelemetry(route, { elapsedMs: Date.now() - startedAt, inputTokens, outputTokens, totalTokens });
+      input.onEvent({
+        type: "model_route_telemetry",
+        issueId: input.issue.id,
+        issueIdentifier: input.issue.identifier,
+        message: `${telemetry.role}: ${telemetry.model}`,
+        payload: telemetry,
+        timestamp: telemetry.recordedAt
+      });
       return {
         status: runnerStatusForError(error),
         threadId,
@@ -324,6 +362,7 @@ export class CodexAppServerRunner implements AgentRunner {
         outputTokens,
         totalTokens,
         rateLimits,
+        modelTelemetry: telemetry,
         error: summarizeText(error instanceof Error ? error.message : String(error)).inline
       };
     } finally {
@@ -462,136 +501,6 @@ function codexEventPolicyViolation(
     return "codex_user_input_request_denied";
   }
   return null;
-}
-
-function codexCommandStop(message: Record<string, any>): { reason: string; command: string; exitCode: number | null } | null {
-  if (message.method !== "item/started" && message.method !== "item/completed") return null;
-  const item = message.params?.item;
-  if (!item || item.type !== "commandExecution") return null;
-  const command = String(item.command ?? "");
-  if (executesNestedOrchestrator(command)) {
-    return { reason: "nested_orchestrator_forbidden", command, exitCode: null };
-  }
-  const status = String(item.status ?? "");
-  const exitCode = typeof item.exitCode === "number" ? item.exitCode : null;
-  if (!["completed", "failed"].includes(status) || exitCode === 0) return null;
-  if (/\b(agent-create-pr\.sh|gh\s+pr\s+create)\b/.test(command)) {
-    return { reason: "agent_pr_creation_failed", command, exitCode };
-  }
-  return null;
-}
-
-function executesNestedOrchestrator(command: string): boolean {
-  return splitCommandSegments(command).some((segment) => segmentExecutesNestedOrchestrator(segment));
-}
-
-function segmentExecutesNestedOrchestrator(segment: string): boolean {
-  const words = shellWords(segment);
-  if (words.length === 0) return false;
-  const first = basename(words[0]);
-  if (first === "env" || first === "command") {
-    return segmentExecutesNestedOrchestrator(words.slice(1).join(" "));
-  }
-  if (first === "npx") {
-    const nested = words.slice(1).filter((word) => !word.startsWith("-"));
-    return segmentExecutesNestedOrchestrator(nested.join(" "));
-  }
-  const shellScript = shellCommandArgument(first, words);
-  if (shellScript) {
-    return executesNestedOrchestrator(shellScript);
-  }
-  const offset = first === "node" && basename(words[1] ?? "") === "agent-os" ? 1 : 0;
-  const executable = basename(words[offset]);
-  return executable === "agent-os" && words[offset + 1] === "orchestrator" && (words[offset + 2] === "once" || words[offset + 2] === "run");
-}
-
-function shellCommandArgument(first: string, words: string[]): string | null {
-  if (first !== "bash" && first !== "sh" && first !== "zsh") return null;
-  for (let index = 1; index < words.length; index += 1) {
-    const word = words[index];
-    if (word === "--") break;
-    if (word === "-c" || (/^-[A-Za-z]+$/.test(word) && word.includes("c"))) {
-      return words[index + 1] ?? null;
-    }
-  }
-  return null;
-}
-
-function splitCommandSegments(command: string): string[] {
-  const segments: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-  for (let index = 0; index < command.length; index += 1) {
-    const char = command[index];
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      current += char;
-      escaped = true;
-      continue;
-    }
-    if ((char === "'" || char === '"') && !quote) {
-      quote = char;
-      current += char;
-      continue;
-    }
-    if (char === quote) {
-      quote = null;
-      current += char;
-      continue;
-    }
-    if (!quote && (char === ";" || char === "\n" || ((char === "&" || char === "|") && command[index + 1] === char))) {
-      if (current.trim()) segments.push(current.trim());
-      current = "";
-      if (char !== ";" && char !== "\n") index += 1;
-      continue;
-    }
-    current += char;
-  }
-  if (current.trim()) segments.push(current.trim());
-  return segments;
-}
-
-function shellWords(command: string): string[] {
-  const words: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-  for (const char of command.trim()) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if ((char === "'" || char === '"') && !quote) {
-      quote = char;
-      continue;
-    }
-    if (char === quote) {
-      quote = null;
-      continue;
-    }
-    if (!quote && /\s/.test(char)) {
-      if (current) words.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  if (current) words.push(current);
-  return words.filter((word) => !/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(word));
-}
-
-function basename(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
 function captureShell(command: string, timeoutMs: number): Promise<string> {

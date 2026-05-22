@@ -54,6 +54,44 @@ describe("reviewer artifact retry", () => {
     expect(state.reviewRunnerFailures[0]).toEqual(expect.objectContaining({ reason: "malformed_artifact", retryable: true }));
   });
 
+  it("persists reviewer model telemetry into the canonical review artifact", async () => {
+    const scenario = await setupReviewScenario({ requiredReviewers: ["self"], maxRetryAttempts: 0 });
+
+    await scenario.run(async ({ input, reviewer, artifactPath }) => {
+      await writeApprovedArtifact(input, artifactPath, reviewer);
+      return {
+        status: "succeeded",
+        totalTokens: 21,
+        modelTelemetry: {
+          role: "self-review",
+          mode: "report-only",
+          applied: false,
+          configured: true,
+          model: "inherited",
+          reasoningEffort: null,
+          proposedModel: "gpt-5.4-mini",
+          proposedReasoningEffort: "low",
+          costBucket: "low",
+          escalationReason: null,
+          refusedReason: null,
+          recordedAt: "2026-05-22T00:00:00.000Z",
+          elapsedMs: 123,
+          tokenUsage: { total: 21 }
+        }
+      };
+    });
+
+    const canonicalArtifact = JSON.parse(await readFile(join(scenario.repo, ".agent-os", "reviews", "AG-1", "iteration-1", "self.json"), "utf8"));
+    expect(canonicalArtifact.modelTelemetry).toEqual([
+      expect.objectContaining({
+        role: "self-review",
+        proposedModel: "gpt-5.4-mini",
+        elapsedMs: 123,
+        tokenUsage: { total: 21 }
+      })
+    ]);
+  });
+
   it("retries a stalled reviewer runner when the artifact is untrusted", async () => {
     const scenario = await setupReviewScenario({ requiredReviewers: ["self"], maxRetryAttempts: 1 });
     const attempts = new Map<string, number>();

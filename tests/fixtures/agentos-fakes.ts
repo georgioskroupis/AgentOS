@@ -59,6 +59,7 @@ export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): Servi
     },
     contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
     validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
+    modelRouting: { mode: "off", roles: {} },
     codex: {
       command: "node tests/fixtures/fake-app-server.mjs",
       approvalEventPolicy: "deny",
