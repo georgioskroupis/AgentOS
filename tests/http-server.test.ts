@@ -80,7 +80,7 @@ describe("AgentOS HTTP API", () => {
     await expect(fetch(`${server!.url}/`).then((response) => response.text())).resolves.toContain("/api/v1/state");
     const missing = await fetch(`${server!.url}/api/v1/NOPE`);
     expect(missing.status).toBe(404);
-    await expect(missing.json()).resolves.toMatchObject({ success: false, error: { code: "not_found" } });
+    await expect(missing.json()).resolves.toMatchObject({ success: false, error: { code: "issue_not_found" } });
   });
 
   it("coalesces refresh requests and reports unsupported methods", async () => {

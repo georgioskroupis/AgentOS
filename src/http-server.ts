@@ -174,7 +174,7 @@ async function routeRequest(input: {
   if (issueMatch) {
     if (method !== "GET") return writeJson(input.response, 405, errorEnvelope("method_not_allowed", "GET required"));
     const issue = await buildAgentOsIssueApiState(input.repoRoot, decodeURIComponent(issueMatch[1]));
-    if (!issue) return writeJson(input.response, 404, errorEnvelope("not_found", `unknown issue: ${decodeURIComponent(issueMatch[1])}`));
+    if (!issue) return writeJson(input.response, 404, errorEnvelope("issue_not_found", `unknown issue: ${decodeURIComponent(issueMatch[1])}`));
     writeJson(input.response, 200, issue);
     return;
   }
