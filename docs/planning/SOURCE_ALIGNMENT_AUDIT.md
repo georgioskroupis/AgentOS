@@ -109,7 +109,7 @@ The remaining Harness gaps are real:
 
 AgentOS aligns with Symphony on the core scheduler shape:
 
-- Linear is the control plane for the current single-project loop.
+- Linear is the control plane for single-project and registry orchestration.
 - `WORKFLOW.md` is repository-owned policy.
 - Eligible issues in active states are fetched, filtered, and dispatched.
 - Work runs in deterministic per-issue workspaces.
@@ -125,7 +125,7 @@ AgentOS aligns with Symphony on the core scheduler shape:
   workflow validation.
 - Simulation/replay modes are local-only and non-networked.
 
-AgentOS is not yet fully Symphony-faithful:
+AgentOS still has these Symphony-faithfulness deviations:
 
 - Symphony treats the orchestrator primarily as scheduler, runner, and tracker
   reader. AgentOS currently gives the orchestrator first-class tracker write
@@ -134,16 +134,16 @@ AgentOS is not yet fully Symphony-faithful:
   tooling. AgentOS still has meaningful workflow business logic in
   `src/orchestrator.ts`, especially lifecycle comments, state transitions,
   review handoff, retry classification, and merge shepherding.
-- Symphony's issue abstraction is broader than PRs. AgentOS supports no-PR and
-  multi-PR handoffs, and PR E recentered workflow wording on issues, but
-  automated review and merge shepherding still use a single primary PR.
+- Symphony's issue abstraction is broader than PRs. AgentOS supports no-PR,
+  investigation-only, one-PR, and multi-PR handoffs with explicit PR roles, but
+  multi-PR paths remain less heavily dogfooded than the one-PR path.
 - Symphony calls for authoritative orchestrator state for dispatch, retries, and
   reconciliation. AgentOS now has durable run summaries, issue state, and a
   schema-versioned runtime state file for startup retry reconstruction.
 - Symphony expects every eligible active issue to have an agent running in an
-  isolated workspace. AgentOS v0.1 RC1 is intentionally single-project and
-  `max_concurrent_agents: 1` for dogfood; true registry-wide scheduling is a
-  non-goal for this milestone.
+  isolated workspace. AgentOS now has registry-wide scheduling with global and
+  per-project caps; large-scope decomposition and unattended runtime stability
+  still need post-MVP hardening.
 
 ## 4. Where AgentOS Is Stricter Than The OpenAI Examples
 
@@ -238,15 +238,16 @@ AgentOS has corrected the most obvious PR-centric drift:
 
 Remaining PR-centric pressure:
 
-- Automated review is explicitly scoped to PR-producing runs, but it still
-  reviews one primary PR.
-- Review prompts and GitHub context currently use the primary PR URL.
-- Merge shepherding is built around one primary PR per issue.
+- Automated review is explicitly scoped to PR-producing runs and now selects
+  configured merge-eligible PR roles.
+- Review prompts and GitHub context are explicit about selected PR targets.
+- Merge shepherding is selected-target based and avoids review-only or
+  do-not-merge PR roles.
 - Runbooks and skills still emphasize PR creation heavily because recent
   dogfood blockers were PR-path failures.
-- Investigation-only, planning-only, and follow-up-issue workflows are now
-  documented, but they need dogfood examples before they are as proven as the
-  implementation-with-PR path.
+- Investigation-only, planning-only, and follow-up-issue workflows are
+  documented and covered by MVP certification evidence, but less frequent paths
+  should continue to receive dogfood examples.
 
 Deterministic PR creation should stay. It is the correct harness capability
 when a PR is needed.
@@ -277,13 +278,14 @@ these areas:
 - Some missing capability failures escalate immediately to humans instead of
   opening a small capability-building issue.
 
-PR D should define high-throughput automation as an automation/repair behavior
-profile, not as a `trust_mode`. PR F should implement or tighten bounded repair
-and feedback behavior separately.
+High-throughput automation is now separate from `trust_mode` through lifecycle,
+landing, and repair policy gates. The remaining work is cost/runtime tuning and
+additional unattended dogfood evidence.
 
 ## 8. Where AgentOS Is Missing Agent-Legibility Capabilities
 
-AgentOS has good orchestration legibility and weaker application legibility.
+AgentOS has strong orchestration legibility and template-level application
+legibility. Project-specific app proof depth remains opt-in.
 
 Current strengths:
 
@@ -296,14 +298,13 @@ Current strengths:
 - `status`, `inspect`, `runs list`, `runs inspect`, `runs simulate`, and
   `runs replay`.
 
-Missing or thin:
+Missing or intentionally lightweight:
 
-- Target-project startup command registry.
-- Standard log capture and querying contract for target projects.
-- Metrics/traces contract for API and service projects.
-- Screenshot or video proof guidance for UI projects.
-- Browser inspection checklist where applicable.
-- CI log artifact ingestion into run artifacts.
+- Deep, project-specific startup command registry beyond the lightweight
+  `docs/quality/APP_LEGIBILITY.md` checklist.
+- Rich log, metrics, and trace querying contracts for target projects.
+- Required screenshot/video/browser proof for non-UI projects.
+- Provider-specific CI log ingestion into every run artifact.
 - Runtime failure summaries that explain why a run stopped in one machine-
   readable object.
 - Runtime health now reports daemon liveness, stale PID files, empty-log failed
@@ -311,11 +312,9 @@ Missing or thin:
   command. `status`/`inspect` report recoverable partial work, stale PR or CI
   heads, unpushed commits, and a next safe action.
 - Always-on scheduling for doc-gardening and quality-score refresh loops.
-- Template-level checklist for what every project should expose so agents can
-  inspect app behavior without human narration.
 
-PR G should add the project harness legibility checklist and lightweight
-template guidance. It should not overbuild a generic observability platform.
+The MVP deliberately stops at portable proof hooks and docs rather than
+requiring every target project to run a generic observability platform.
 
 ## 9. Which Deviations Are Intentional Public-Safety Defaults
 
@@ -370,8 +369,9 @@ Refactor-needed deviations:
 
 - Lifecycle ownership is explicit, but `hybrid` and `agent-owned` still need
   more dogfood before they should be considered mature.
-- Agent-owned lifecycle mode exists only as an experimental strict-validation-
-  gated path. It still needs repo-local tracker tools before broad use.
+- Agent-owned lifecycle mode remains an experimental strict-validation-gated
+  path. Repo-local tracker tools exist, but broader dogfood evidence is still
+  needed before it should replace the orchestrator-owned default.
 - High-throughput behavior is modeled as automation policy and now includes
   bounded CI repair/retry, draft PR readiness, branch freshness, merge
   shepherding, and post-merge cleanup for trusted dogfood workflows. Protected
@@ -379,13 +379,15 @@ Refactor-needed deviations:
 - Review and feedback loops still need more dogfood evidence and cost/runtime
   tuning, but mechanical failures now have bounded repair paths when trust and
   automation policy allow them.
-- No-PR and multi-PR issue paths are documented, but need dogfood evidence and
-  richer review/merge handling before they are as mature as one-PR paths.
-- Multi-PR review and merge behavior still relies on a primary PR in several
-  code paths.
-- Stage 9A durable retry/startup reconstruction has a first single-project
-  implementation; true multi-project daemon scheduling remains separate.
-- Agent legibility for target applications needs a template-level checklist.
+- No-PR, investigation-only, one-PR, and multi-PR paths now have certification
+  evidence. Multi-PR review/merge handling is explicit, but should continue to
+  receive dogfood coverage because it is less common than one-PR work.
+- Stage 9A durable retry/startup reconstruction and registry-wide scheduling
+  have MVP coverage; the remaining work is operational hardening and optional
+  dashboard/API surfaces.
+- Agent legibility for target applications now has checklist and proof scripts;
+  project-specific depth should remain opt-in so lightweight repositories do not
+  inherit heavyweight observability requirements.
 
 ## 12. Current Source-Faithfulness Score
 
@@ -397,14 +399,15 @@ Harness Engineering alignment: A-
 - Weaker on application-legibility proof for arbitrary target projects and
   cost/runtime optimization of broad validation.
 
-Symphony alignment: B+
+Symphony alignment: A-
 
 - Strong on issue tracker control plane, per-issue workspaces, `WORKFLOW.md`,
   bounded dispatch, Codex App Server, explicit trust posture, durable startup
   recovery, registry-wide scheduling, observability, and optional-PR issue
   outcomes with explicit PR roles.
-- Weaker on scheduler/runner/tracker-reader boundary, mature agent-owned
-  tracker writes, non-Linear tracker adapters, and optional HTTP dashboard/API.
+- Weaker on mature agent-owned tracker writes, non-Linear tracker adapters,
+  optional HTTP dashboard/API, and long-running unattended dogfood stability at
+  larger issue sizes.
 
 Top three intentional deviations:
 
@@ -418,8 +421,8 @@ Top three refactor-needed deviations:
 
 1. Continue dogfooding explicit Linear lifecycle ownership, especially
    `hybrid`, without losing idempotency or safety.
-2. Productize application legibility and proof-of-work evidence for arbitrary
-   target projects.
+2. Mature agent-owned tracker writes and Human Review drift guards without
+   weakening idempotent orchestrator safety.
 3. Reduce validation/runtime cost and add optional dashboard/API surfaces
    without weakening the existing mechanical guardrails.
 
@@ -439,6 +442,11 @@ mechanical/flaky/ambiguous CI outcomes, trusted decision evidence refresh,
 draft PR readiness, selected-target merge, cleanup warnings, conservative
 public defaults, and protected-branch/merge-queue report-only behavior.
 
-The remaining MVP evidence should focus on final end-to-end certification,
-application legibility proof for target projects, validation/runtime cost, and
-optional operator surfaces rather than re-proving the completed PR C-G stack.
+Final MVP certification is recorded in `docs/releases/MVP.md`. That artifact
+maps the 12 required MVP scenarios to concrete tests, release artifacts, and
+proof-script coverage, and records the intentional remaining deviations and
+non-MVP future work.
+
+Post-MVP evidence should focus on unattended stability, validation/runtime cost,
+model-routing cost telemetry, optional dashboard/API surfaces, and broader
+tracker adapters rather than re-proving the completed MVP capability stack.
