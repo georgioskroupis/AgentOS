@@ -13,3 +13,8 @@ Use this format:
 
 ## Consequences
 ```
+
+Current decisions:
+
+- `docs/decisions/0001-one-toolkit-repo.md`
+- `docs/decisions/0002-optional-extension-boundaries.md`

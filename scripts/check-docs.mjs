@@ -11,7 +11,9 @@ const requiredDocs = [
   "docs/README.md",
   "docs/architecture/README.md",
   "docs/architecture/AGENT_OS.md",
+  "docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md",
   "docs/decisions/README.md",
+  "docs/decisions/0002-optional-extension-boundaries.md",
   "docs/product/README.md",
   "docs/quality/APP_LEGIBILITY.md",
   "docs/quality/PROOF_OF_WORK.md",
@@ -24,6 +26,7 @@ const requiredDocs = [
   "docs/runbooks/MIGRATIONS.md",
   "docs/runbooks/DOGFOODING.md",
   "docs/planning/SOURCE_ALIGNMENT_AUDIT.md",
+  "docs/releases/CERTIFICATION_TRACEABILITY.md",
   "docs/security/SECURITY.md",
   "docs/security/ORCHESTRATOR_TRUST_MODEL.md"
 ];

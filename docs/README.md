@@ -11,14 +11,17 @@ Start with:
 
 - `docs/product/README.md`
 - `docs/architecture/README.md`
+- `docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md`
 - `docs/quality/APP_LEGIBILITY.md`
 - `docs/quality/PROOF_OF_WORK.md`
 - `docs/quality/QUALITY_SCORE.md`
 - `docs/quality/TEST_SUITE.md`
 - `docs/architecture/AGENT_OS.md`
 - `docs/decisions/README.md`
+- `docs/decisions/0002-optional-extension-boundaries.md`
 - `docs/planning/SOURCE_ALIGNMENT_AUDIT.md`
 - `docs/releases/MVP.md`
+- `docs/releases/CERTIFICATION_TRACEABILITY.md`
 - `docs/releases/high-throughput-landing-certification.json`
 - `docs/runbooks/README.md`
 - `docs/runbooks/LINEAR_SETUP.md`

@@ -130,6 +130,7 @@ required=(
   "scripts/check-architecture.mjs"
   "scripts/check-dashboard.mjs"
   "scripts/check-harness-contract.mjs"
+  "scripts/certification-e2e.sh"
 )
 
 missing=0
@@ -170,6 +171,7 @@ bash -n "$root/templates/base-harness/scripts/agent-linear-handoff.sh"
 bash -n "$root/templates/base-harness/scripts/agent-linear-plan-issues.sh"
 bash -n "$root/scripts/agent-bootstrap-worktree.sh"
 bash -n "$root/templates/base-harness/scripts/agent-bootstrap-worktree.sh"
+bash -n "$root/scripts/certification-e2e.sh"
 bash -n "$root/dashboard/serve.sh"
 run_phase "harness contract" node "$root/scripts/check-harness-contract.mjs"
 
