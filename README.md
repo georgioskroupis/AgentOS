@@ -326,6 +326,11 @@ repo-local `scripts/agent-linear-*` tools can own substantive comments, PR
 metadata, and handoff posting while workflow validation gates `agent-owned`
 until tracker tools, idempotency, transition, fallback, and maturity
 requirements are declared.
+If external Linear/GitHub automations move a human-held issue out of
+`Human Review`, AgentOS records external state drift, refuses implementation
+dispatch, and moves it back to the configured review state when lifecycle
+policy permits. Disable conflicting external status automation when AgentOS is
+the lifecycle owner.
 Issues are the unit of work; PRs are optional outputs. A handoff may represent
 an already-satisfied no-op, investigation-only result, planning-only result,
 one docs/code PR, multiple PRs for a larger issue, or follow-up issue discovery.

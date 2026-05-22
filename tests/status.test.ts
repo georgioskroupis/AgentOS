@@ -939,6 +939,47 @@ describe("issue inspection", () => {
     expect(output).not.toContain("Next safe action: redispatch from Todo/In Progress");
   });
 
+  it("surfaces external Human Review state drift in status and inspect output", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-external-state-drift-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "human-required",
+          reviewStatus: "human_required",
+          externalStateDrift: {
+            status: "reconciled",
+            expectedState: "Human Review",
+            currentState: "In Progress",
+            detectedAt: "2026-05-08T21:15:00.000Z",
+            reconciledAt: "2026-05-08T21:16:00.000Z",
+            reason: "local AgentOS state still requires Human Review",
+            nextAction: "keep the issue in Human Review; record a trusted structured human decision before returning it to an active implementation state",
+            reconciliation: "moved_to_expected_state"
+          },
+          updatedAt: "2026-05-08T21:16:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const statusOutput = await getStatus(repo);
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+
+    expect(statusOutput).toContain("AG-1: status warning - external state drift: expected Human Review, observed In Progress; reconciled back to Human Review");
+    expect(statusOutput).toContain("record a trusted structured human decision before returning it to an active implementation state");
+    expect(inspectOutput).toContain("External state drift: reconciled");
+    expect(inspectOutput).toContain("Expected tracker state: Human Review");
+    expect(inspectOutput).toContain("Observed tracker state: In Progress");
+    expect(inspectOutput).toContain("Status warnings:");
+  });
+
   it("reports daemon liveness states and status next safe actions", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-daemon-health-"));
     await mkdir(join(repo, ".agent-os"), { recursive: true });

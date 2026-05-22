@@ -40,6 +40,7 @@ import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullReques
 import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, dependencyDispatchStopPatch, isRecordedMergeTerminal, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
+import { detectExternalHumanReviewStateDrift, recordExternalHumanReviewStateDrift } from "./orchestrator-state-drift.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
 import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewBudgetContinuation, reviewSupervisorMergeDecision } from "./review-budget.js";
@@ -668,8 +669,16 @@ export class Orchestrator {
     });
     if (linearComments === "failed") return null;
     state = await this.ingestHumanDecisions(latest, state, linearComments ?? undefined, { authoritativeCommentSet: Boolean(linearComments) });
-    // Scope reports only gate dispatch; authoritative lifecycle blocks should
-    // short-circuit before emitting repeat noise.
+    const drift = detectExternalHumanReviewStateDrift({ config: this.config, issue: latest, state, allowsImplementationContinuation: allowsImplementationContinuation(state, latestAuthoritativeDecision(state)) });
+    if (drift) {
+      await recordExternalHumanReviewStateDrift({
+        issue: latest, drift,
+        recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch), clearRuntimeIssue: async (issueId, issueIdentifier) => { await this.runtimeState.clearIssue(issueId, issueIdentifier); },
+        deleteRetry: (issueId) => { this.retries.delete(issueId); }, logger: this.logger,
+        commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key), moveIssue: (targetIssue, stateName) => this.moveIssue(targetIssue, stateName)
+      });
+      return null;
+    }
     if (await this.classifyAlreadyMergedIssue(latest, state, "dispatch skipped because recorded PR is already merged")) {
       return null;
     }
@@ -849,12 +858,7 @@ export class Orchestrator {
     });
     await this.runtimeState.clearIssue(issue.id, issue.identifier);
     this.retries.delete(issue.id);
-    await this.logger.write({
-      type: "dispatch_skipped",
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      message
-    });
+    await this.logger.write({ type: "dispatch_skipped", issueId: issue.id, issueIdentifier: issue.identifier, message });
     return state;
   }
 

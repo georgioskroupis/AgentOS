@@ -238,6 +238,14 @@ non-authoritative context and do not change lifecycle state. Agent-authored
 handoff files can record structured decisions as context, but they do not
 control redispatch, merge, or supervisor-continuation guardrails.
 
+If another Linear/GitHub automation moves a locally human-held issue out of
+`tracker.review_state` without an authoritative structured decision, AgentOS
+records `external_state_drift`, refuses implementation dispatch, and, where the
+configured lifecycle policy allows it, comments and moves the issue back to
+`tracker.review_state`. `agent-os status` and `agent-os inspect` show the
+expected state, observed state, and next operator action. Merging remains an
+explicit human action and is not treated as Human Review drift.
+
 If a `Merging` issue reaches the merge shepherd before automated review is
 approved and no authoritative supervisor merge decision is recorded, AgentOS
 refuses the merge and moves the issue through `tracker.needs_input_state`

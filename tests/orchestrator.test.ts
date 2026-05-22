@@ -10414,6 +10414,191 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "linear_update_skipped" && entry.message?.includes("move to In Progress: refused because issue is in Human Review"))).toBe(true);
   });
 
+  it("detects and reconciles external Human Review drift before dispatch", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-review-drift-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [In Progress]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const inProgressIssue = { ...readyIssue, state: "In Progress", updated_at: "2026-05-08T21:15:00.000Z" };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: inProgressIssue.id,
+      issueIdentifier: inProgressIssue.identifier,
+      phase: "human-required",
+      reviewStatus: "human_required",
+      stopReason: "reviewer requires human judgment",
+      updatedAt: "2026-05-08T21:00:00.000Z"
+    });
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [inProgressIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[inProgressIssue.id, inProgressIssue]]);
+      },
+      async upsertComment(_issue, body) {
+        comments.push(body);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("agentos:event=external_state_drift:AG-1");
+    expect(comments.join("\n")).toContain("expected this issue to remain in `Human Review`");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.externalStateDrift).toMatchObject({
+      status: "reconciled",
+      expectedState: "Human Review",
+      currentState: "In Progress",
+      reason: "local AgentOS state still requires Human Review",
+      reconciliation: "moved_to_expected_state"
+    });
+    const logs = await logger.tail(20);
+    expect(logs.some((entry) => entry.type === "external_state_drift" && entry.message?.includes("expected Human Review but Linear is In Progress"))).toBe(true);
+  });
+
+  it("blocks dispatch on external Human Review drift when reconciliation is unavailable", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-review-drift-blocked-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [In Progress]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const inProgressIssue = { ...readyIssue, state: "In Progress" };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: inProgressIssue.id,
+      issueIdentifier: inProgressIssue.identifier,
+      phase: "completed",
+      reviewStatus: "pending",
+      updatedAt: "2026-05-08T21:00:00.000Z"
+    });
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [inProgressIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[inProgressIssue.id, inProgressIssue]]);
+      },
+      async upsertComment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(comments.join("\n")).toContain("AgentOS external state drift detected");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.externalStateDrift).toMatchObject({
+      status: "blocked",
+      expectedState: "Human Review",
+      currentState: "In Progress",
+      reconciliation: "unsupported"
+    });
+  });
+
+  it("allows trusted fix-findings re-entry from Human Review without drift blocking", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-review-fix-reentry-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const todoIssue = { ...readyIssue, state: "Todo", ...supervisorAssignee };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: todoIssue.id,
+      issueIdentifier: todoIssue.identifier,
+      phase: "human-required",
+      reviewStatus: "human_required",
+      updatedAt: "2026-05-08T21:00:00.000Z"
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [todoIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[todoIssue.id, todoIssue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-fix-findings",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-08T21:01:00.000Z",
+            body: "AgentOS-Human-Decision: fix-findings\nDecision-Summary: continue with the reviewer fixes"
+          }
+        ];
+      },
+      async move() {}
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          runnerCalled = true;
+          await writePassingHandoff(input.workspace.path, todoIssue.identifier, input.prompt, "AgentOS-Outcome: already-satisfied");
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(true);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state?.externalStateDrift).toBeUndefined();
+    expect(state?.lastHumanDecision?.type).toBe("fix_findings");
+  });
+
   it("refuses fresh dispatch when a prior failed run left dirty recoverable workspace work", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-dirty-salvage-"));
     const workflowPath = join(repo, "WORKFLOW.md");
