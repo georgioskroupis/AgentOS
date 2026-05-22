@@ -255,7 +255,11 @@ records `external_state_drift`, refuses implementation dispatch, and, where the
 configured lifecycle policy allows it, comments and moves the issue back to
 `tracker.review_state`. `agent-os status` and `agent-os inspect` show the
 expected state, observed state, and next operator action. Merging remains an
-explicit human action and is not treated as Human Review drift.
+explicit human action and is not treated as Human Review drift. This also
+applies when a linked GitHub pull request is marked ready and an external
+Linear/GitHub integration moves an approved Human Review issue into the running
+state; AgentOS treats that as drift unless the issue is explicitly moved to
+`tracker.merge_state` or resumed with a trusted structured decision.
 
 If a `Merging` issue reaches the merge shepherd before automated review is
 approved and no authoritative supervisor merge decision is recorded, AgentOS

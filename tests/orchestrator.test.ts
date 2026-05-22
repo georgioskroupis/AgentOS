@@ -10482,6 +10482,94 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "external_state_drift" && entry.message?.includes("expected Human Review but Linear is In Progress"))).toBe(true);
   });
 
+  it("reconciles approved PR Human Review drift instead of landing from In Progress", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-approved-pr-review-drift-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [In Progress]\n  running_state: In Progress\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  mark_draft_ready: true\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: true,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        issueId: readyIssue.id,
+        issueIdentifier: readyIssue.identifier,
+        phase: "completed",
+        reviewStatus: "approved",
+        prs: [{ url: "https://github.com/o/r/pull/1", role: "primary", source: "handoff", discoveredAt: "2026-05-05T00:00:00.000Z" }],
+        updatedAt: "2026-05-05T00:00:00.000Z"
+      }),
+      "utf8"
+    );
+    const inProgressIssue = { ...readyIssue, state: "In Progress", updated_at: "2026-05-22T07:07:26.475Z" };
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("In Progress") ? [inProgressIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[inProgressIssue.id, inProgressIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    const state = await new IssueStateStore(repo).read("AG-1");
+    const logs = await logger.tail(20);
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("approved pull request awaiting an explicit Human Review or Merging decision");
+    expect(ghStateAfter.readyPrs).toBeUndefined();
+    expect(state?.externalStateDrift).toMatchObject({
+      status: "reconciled",
+      expectedState: "Human Review",
+      currentState: "In Progress",
+      reason: "local AgentOS state records an approved pull request awaiting an explicit Human Review or Merging decision"
+    });
+    expect(logs.some((entry) => entry.type === "external_state_drift" && entry.message?.includes("approved pull request awaiting an explicit Human Review or Merging decision"))).toBe(true);
+  });
+
   it("blocks dispatch on external Human Review drift when reconciliation is unavailable", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-human-review-drift-blocked-"));
     const workflowPath = join(repo, "WORKFLOW.md");
