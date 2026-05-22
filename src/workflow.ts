@@ -6,6 +6,7 @@ import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { exists, readText } from "./fs-utils.js";
 import { parseLifecycleConfig, validateLifecycleConfig } from "./lifecycle.js";
 import { parseModelRoutingConfig } from "./model-routing.js";
+import { knownTrackerKinds, trackerAdapterForKind } from "./tracker-adapters.js";
 import { defaultThreadSandboxForTrustMode, defaultTurnSandboxPolicyForTrustMode, parseGitHubMergeMode, parseTrustMode, trustCapabilities, validateTrustCompatibility } from "./trust.js";
 import type { CodexEventPolicy, ContextBudgetConfig, Issue, ReviewBudgetConfig, ServiceConfig, ValidationBudgetConfig, WorkflowDefinition } from "./types.js";
 
@@ -65,9 +66,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
   const trustMode = parseTrustMode(cfg.trust_mode);
 
   const trackerKind = stringAt(tracker, "kind", "linear");
-  if (trackerKind !== "linear") {
-    throw new Error(`unsupported_tracker_kind: ${trackerKind}`);
-  }
+  trackerAdapterForKind(trackerKind);
 
   const apiKeyRaw = stringAt(tracker, "api_key", "$LINEAR_API_KEY");
   const apiKey = resolveEnvReference(apiKeyRaw, env);
@@ -78,7 +77,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
     automation: parseAutomationConfig(automation),
     lifecycle: parseLifecycleConfig(lifecycle),
     tracker: {
-      kind: "linear",
+      kind: trackerKind,
       endpoint: stringAt(tracker, "endpoint", "https://api.linear.app/graphql"),
       apiKey,
       projectSlug,
@@ -219,6 +218,7 @@ export function validateWorkflowDefinition(workflow: WorkflowDefinition, env: No
   }
 
   if (strict) {
+    if (!knownTrackerKinds().includes(config.tracker.kind.toLowerCase())) errors.push(`unsupported_tracker_kind: ${config.tracker.kind}; registered adapters: ${knownTrackerKinds().join(", ")}`);
     if (!config.tracker.apiKey) errors.push("tracker.api_key did not resolve from the environment");
     if (/@latest\b/.test(config.codex.command)) errors.push("codex.command must be pinned in strict mode");
     if (config.github.allowHumanMergeOverride) errors.push("github.allow_human_merge_override must be false in strict mode");

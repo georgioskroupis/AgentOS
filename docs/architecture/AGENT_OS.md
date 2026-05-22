@@ -22,6 +22,16 @@ The orchestrator reads eligible Linear issues, creates deterministic workspaces,
 renders strict prompts from `WORKFLOW.md`, launches Codex App Server runs, and
 records JSONL events for status inspection.
 
+Tracker access is adapter-backed. `tracker.kind` selects a registered adapter;
+`linear` is the built-in production adapter, while tests can register fake
+adapters through the same factory. Every adapter must return the normalized
+Issue domain model: stable `id` and `identifier`, state name, integer-or-null
+priority, ISO-8601 timestamps or null, lowercased labels, parent/child refs,
+and blockers represented through inverse `blocks`/`blocked_by` relations. The
+required operations are candidate fetch by active state, issue fetch by ids, and
+issue state lookup by ids; comments, moves, terminal scans, and idempotent
+upserts are optional capabilities used only when the workflow path needs them.
+
 It keeps orchestration logic narrow:
 
 - Linear is the scheduler control plane.

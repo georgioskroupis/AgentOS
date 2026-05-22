@@ -1,6 +1,7 @@
 import type { Issue, IssueComment, IssueTracker, LifecycleDuplicateCommentBehavior, ServiceConfig } from "./types.js";
 import { latestIssueComments } from "./issue-state.js";
 import { redactText } from "./redaction.js";
+import { normalizeTrackerIssue } from "./tracker-normalization.js";
 import type {
   LinearPlannedIssueLookupOptions,
   LinearPlannedIssueReference,
@@ -534,7 +535,7 @@ function normalizeLinearIssue(node: unknown): Issue {
     : [];
   const parent = raw.parent ? issueRefFromLinearNode(raw.parent) : null;
   const children = Array.isArray(raw.children?.nodes) ? raw.children.nodes.map(issueRefFromLinearNode) : [];
-  return {
+  return normalizeTrackerIssue({
     id: String(raw.id),
     identifier: String(raw.identifier),
     title: String(raw.title),
@@ -552,7 +553,7 @@ function normalizeLinearIssue(node: unknown): Issue {
     children,
     created_at: raw.createdAt ?? null,
     updated_at: raw.updatedAt ?? null
-  };
+  });
 }
 
 function issueRefFromLinearNode(related: any): Issue["blocked_by"][number] {

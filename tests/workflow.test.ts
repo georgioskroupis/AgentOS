@@ -137,6 +137,19 @@ describe("workflow", () => {
     expect(validateWorkflowDefinition(loose, { LINEAR_API_KEY: "", HOME: "/tmp" }, true).errors).toContain("tracker.api_key did not resolve from the environment");
   });
 
+  it("rejects unknown tracker kinds with registered adapter guidance", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-tracker-kind-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      ["---", "tracker:", "  kind: jira", "  api_key: token", "  project_slug: AgentOS", "---", "Do work"].join("\n"),
+      "utf8"
+    );
+
+    const workflow = await loadWorkflow(workflowPath);
+    expect(validateWorkflowDefinition(workflow, { HOME: "/tmp" }, true).errors[0]).toMatch(/unsupported_tracker_kind: jira; registered adapters: .*linear/);
+  });
+
   it("validates trust-mode PR and network compatibility", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-trust-"));
     const workflowPath = join(repo, "WORKFLOW.md");

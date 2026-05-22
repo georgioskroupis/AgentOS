@@ -45,7 +45,7 @@ export interface ProjectConfig {
   workflow?: string;
   harnessProfile?: HarnessProfile;
   tracker?: {
-    kind: "linear";
+    kind: string;
     projectSlug: string;
   };
   maxConcurrency?: number;
@@ -102,7 +102,7 @@ export interface ServiceConfig {
     trustedDecisionActors: string[];
   };
   tracker: {
-    kind: "linear";
+    kind: string;
     endpoint: string;
     apiKey: string;
     projectSlug: string;
