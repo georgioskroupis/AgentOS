@@ -1,6 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 mode="full"
+heartbeat_seconds="${AGENT_CHECK_HEARTBEAT_SECONDS:-30}"
+
+case "$heartbeat_seconds" in
+  ''|*[!0-9]*)
+    heartbeat_seconds=30
+    ;;
+esac
+
+if [[ "$heartbeat_seconds" -lt 1 ]]; then
+  heartbeat_seconds=30
+fi
+
+run_phase() {
+  local label="$1"
+  shift
+  local started_at now elapsed rc pid heartbeat_pid
+  started_at="$(date +%s)"
+  echo "==> ${label} started"
+  "$@" &
+  pid="$!"
+  (
+    while sleep "$heartbeat_seconds"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        now="$(date +%s)"
+        echo "==> ${label} still running after $((now - started_at))s"
+      else
+        exit 0
+      fi
+    done
+  ) &
+  heartbeat_pid="$!"
+  if wait "$pid"; then
+    rc=0
+  else
+    rc="$?"
+  fi
+  kill "$heartbeat_pid" >/dev/null 2>&1 || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+  now="$(date +%s)"
+  elapsed="$((now - started_at))"
+  if [[ "$rc" -eq 0 ]]; then
+    echo "==> ${label} passed in ${elapsed}s"
+  else
+    echo "==> ${label} failed in ${elapsed}s"
+  fi
+  return "$rc"
+}
 
 case "${1:-}" in
   --structure-only)
@@ -27,6 +74,7 @@ required=(
   "docs/quality/APP_LEGIBILITY.md"
   "docs/quality/PROOF_OF_WORK.md"
   "docs/quality/QUALITY_SCORE.md"
+  "docs/quality/TEST_SUITE.md"
   "docs/security/SECURITY.md"
   "docs/runbooks/README.md"
   "scripts/agent-linear-comment.sh"
@@ -73,16 +121,16 @@ if [[ -f package.json ]]; then
     exit 1
   fi
   scripts="$(npm run 2>/dev/null || true)"
-  if grep -q "format:check" <<<"$scripts"; then npm run format:check; fi
-  if grep -q "lint" <<<"$scripts"; then npm run lint; fi
-  if grep -q "typecheck" <<<"$scripts"; then npm run typecheck; fi
-  if grep -q "test" <<<"$scripts"; then npm test; fi
+  if grep -q "format:check" <<<"$scripts"; then run_phase "format check" npm run format:check; fi
+  if grep -q "lint" <<<"$scripts"; then run_phase "lint" npm run lint; fi
+  if grep -q "typecheck" <<<"$scripts"; then run_phase "typecheck" npm run typecheck; fi
+  if grep -q "test" <<<"$scripts"; then run_phase "tests" npm test; fi
 fi
 
 if [[ -f pyproject.toml ]]; then
-  if command -v ruff >/dev/null 2>&1; then ruff check .; fi
-  if command -v mypy >/dev/null 2>&1; then mypy .; fi
-  if command -v pytest >/dev/null 2>&1; then pytest; fi
+  if command -v ruff >/dev/null 2>&1; then run_phase "ruff" ruff check .; fi
+  if command -v mypy >/dev/null 2>&1; then run_phase "mypy" mypy .; fi
+  if command -v pytest >/dev/null 2>&1; then run_phase "pytest" pytest; fi
 fi
 
 echo "Agent harness checks passed."

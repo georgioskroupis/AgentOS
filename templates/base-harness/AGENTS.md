@@ -10,6 +10,7 @@ Start by reading:
 - `WORKFLOW.md`
 - `docs/product/README.md`
 - `docs/quality/QUALITY_SCORE.md`
+- `docs/quality/TEST_SUITE.md`
 - `docs/security/SECURITY.md`
 
 ## Default Workflow

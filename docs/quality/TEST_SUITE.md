@@ -42,6 +42,57 @@ orchestrator combining several boundaries.
   to prove fake adapter contracts, generated harness files, or release
   certification maps rather than fixture contents alone.
 
+## Validation Budget Classes
+
+- Focused checks: run the smallest relevant `npm test -- <file>`, script check,
+  or smoke proof while editing a narrow behavior.
+- Full local harness: run `npm run agent-check` before handoff when local
+  dependencies are available and the change affects source, workflow, tests, or
+  public docs.
+- Reused unchanged-head evidence: reuse previous full validation only when the
+  selected head, workflow/config hash, trust mode, automation profile, repair
+  policy, and validation risk profile still match.
+- GitHub CI authority: when local full validation is unavailable or a local run
+  is inconclusive, record the focused local checks and require green GitHub CI
+  before merge.
+
+`scripts/agent-check.sh` reports phase start, periodic still-running heartbeat
+lines, and final per-phase duration. Set `AGENT_CHECK_HEARTBEAT_SECONDS` to tune
+the heartbeat interval for local runs. This makes slow-but-healthy validation
+visible without lowering coverage expectations.
+
+During VER-110 validation, local `npm run agent-check` with
+`AGENT_CHECK_HEARTBEAT_SECONDS=60` showed:
+
+- harness contract, format, lint, and typecheck completed quickly with accurate
+  phase durations;
+- unit/integration tests emitted heartbeat lines and passed after about 637s;
+- coverage began a second full Vitest pass and continued emitting heartbeat
+  lines beyond 600s before the supervisor stopped the local run to avoid tying
+  up the shared shell session.
+
+That run demonstrates the issue is no longer silent/stall-like locally. It also
+confirms the remaining cost problem is the deliberate full test plus full
+coverage double pass, which should be handled by future validation-budget work
+only with a replacement proof strategy.
+
+## Slow-Path Timing Notes
+
+VER-110 focused validation confirmed that the slow-but-legitimate local paths
+are concentrated in integration scenarios that exercise fake Linear, GitHub,
+workspace, review, CI, and status behavior together:
+
+```bash
+npm test -- tests/status.test.ts tests/orchestrator.test.ts -t "dispatches eligible issues|records already-satisfied|records investigation-only|runs automated reviewers|runs a bounded CI fixer|keeps using bounded CI fixer|records clean recovered branch|status" --reporter verbose
+```
+
+That representative slice passed in about 26 seconds. Individual slow tests
+included automated review, mechanical CI fixer, changed-CI-fingerprint retry,
+and terminal workspace/status drift scenarios. These are legitimate
+integration-budget tests, not obsolete coverage. Future timeout work should
+prefer extracting narrow helpers or shared fake setup only where it preserves
+the cross-boundary assertion.
+
 ## Inventory
 
 | File | Layer | Contract Protected |
