@@ -63,6 +63,18 @@ describe("architecture and docs checks", () => {
       code: 1
     });
   });
+
+  it("reports unclassified test files in the test-suite inventory", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-test-suite-fail-"));
+    await writeDocsFixture(repo);
+    await mkdir(join(repo, "tests"), { recursive: true });
+    await writeFile(join(repo, "tests", "new-behavior.test.ts"), "import { it } from 'vitest';\nit('protects behavior', () => {});\n", "utf8");
+
+    await expect(execNode(docsScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("does not classify tests/new-behavior.test.ts"),
+      code: 1
+    });
+  });
 });
 
 async function writeArchitectureFixture(repo: string): Promise<void> {
@@ -116,6 +128,7 @@ async function writeDocsFixture(repo: string): Promise<void> {
     "docs/quality/APP_LEGIBILITY.md",
     "docs/quality/PROOF_OF_WORK.md",
     "docs/quality/QUALITY_SCORE.md",
+    "docs/quality/TEST_SUITE.md",
     "docs/runbooks/README.md",
     "docs/runbooks/LINEAR_SETUP.md",
     "docs/runbooks/MAINTENANCE.md",
@@ -139,6 +152,8 @@ async function writeDocsFixture(repo: string): Promise<void> {
       text = "pre-dispatch reconciliation\nrecoverable partial work\ndaemon liveness\nExisting Implementation Audit\ncheck:architecture\ncheck:docs\n";
     } else if (path.endsWith("QUALITY_SCORE.md")) {
       text = qualityScoreFixture();
+    } else if (path.endsWith("TEST_SUITE.md")) {
+      text = testSuiteFixture();
     } else if (path.endsWith("MAINTENANCE.md")) {
       text = "Generic maintenance prompt: do not use a hard-coded roadmap range.\n";
     }
@@ -184,6 +199,29 @@ async function writeMaintenanceTemplateFixture(repo: string): Promise<void> {
         : "recurring maintenance template\n";
     await writeFile(join(repo, "templates", "maintenance", `${slug}.md`), `# ${slug}\n${extra}\n`, "utf8");
   }
+}
+
+function testSuiteFixture(): string {
+  return [
+    "# Test Suite Map",
+    "",
+    "## Layer Rules",
+    "",
+    "Prefer narrow tests.",
+    "",
+    "## Audit Findings",
+    "",
+    "No unclassified tests.",
+    "",
+    "## Inventory",
+    "",
+    "| File | Layer | Contract Protected |",
+    "| --- | --- | --- |",
+    "",
+    "## When To Prune",
+    "",
+    "Prune obsolete coverage only."
+  ].join("\n");
 }
 
 function qualityScoreFixture(): string {

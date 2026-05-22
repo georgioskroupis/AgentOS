@@ -16,6 +16,7 @@ const requiredDocs = [
   "docs/quality/APP_LEGIBILITY.md",
   "docs/quality/PROOF_OF_WORK.md",
   "docs/quality/QUALITY_SCORE.md",
+  "docs/quality/TEST_SUITE.md",
   "docs/runbooks/README.md",
   "docs/runbooks/LINEAR_SETUP.md",
   "docs/runbooks/MAINTENANCE.md",
@@ -36,6 +37,7 @@ checkMarkdownLinks();
 checkCommandReferences();
 checkSourceAlignmentCurrency();
 checkQualityScoreRubric();
+checkTestSuiteInventory();
 checkMaintenanceTemplates();
 
 if (failures.length > 0) {
@@ -141,6 +143,27 @@ function checkQualityScoreRubric() {
   ]) {
     if (!new RegExp(`\\|\\s*${escapeRegExp(area)}\\s*\\|`, "i").test(text)) {
       fail(`docs/quality/QUALITY_SCORE.md missing rubric area ${area}`, "Keep the quality score structurally aligned with AgentOS maintenance health categories.");
+    }
+  }
+}
+
+function checkTestSuiteInventory() {
+  const text = read("docs/quality/TEST_SUITE.md");
+  if (text == null) return;
+  const testsDir = join(root, "tests");
+  if (!existsSync(testsDir)) return;
+  const testFiles = readdirSync(testsDir)
+    .filter((entry) => entry.endsWith(".test.ts"))
+    .map((entry) => `tests/${entry}`)
+    .sort();
+  for (const path of testFiles) {
+    if (!text.includes(`\`${path}\``)) {
+      fail(`docs/quality/TEST_SUITE.md does not classify ${path}`, "Add every test file to the test-suite inventory with its layer and protected contract.");
+    }
+  }
+  for (const heading of ["Layer Rules", "Audit Findings", "Inventory", "When To Prune"]) {
+    if (!text.includes(`## ${heading}`)) {
+      fail(`docs/quality/TEST_SUITE.md missing ${heading}`, "Keep the test-suite audit structured so future agents can update it mechanically.");
     }
   }
 }

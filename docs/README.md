@@ -14,6 +14,7 @@ Start with:
 - `docs/quality/APP_LEGIBILITY.md`
 - `docs/quality/PROOF_OF_WORK.md`
 - `docs/quality/QUALITY_SCORE.md`
+- `docs/quality/TEST_SUITE.md`
 - `docs/architecture/AGENT_OS.md`
 - `docs/decisions/README.md`
 - `docs/planning/SOURCE_ALIGNMENT_AUDIT.md`
