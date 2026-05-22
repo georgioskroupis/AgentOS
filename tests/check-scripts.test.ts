@@ -42,6 +42,49 @@ describe("architecture and docs checks", () => {
     });
   });
 
+  it("reports missing lifecycle boundary contracts", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-boundary-missing-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(join(repo, "src", "lifecycle-events.ts"), "export interface LifecycleEvent { schemaVersion: 1 }\n", "utf8");
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("missing lifecycle boundary contract export"),
+      code: 1
+    });
+  });
+
+  it("reports direct tracker writes and raw tracker mutations in core scheduler code", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-tracker-write-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(
+      join(repo, "src", "orchestrator.ts"),
+      [
+        'import { LinearClient } from "./linear.js";',
+        "export class Orchestrator {",
+        "  private tracker = {} as { move?: (issue: string, state: string) => Promise<void> };",
+        "  async run() {",
+        "    await this.tracker.move?.(\"AG-1\", \"Human Review\");",
+        "    return `mutation AgentOSIssueMove { issueUpdate { success } }`;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("direct tracker lifecycle write"),
+      code: 1
+    });
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("GraphQL mutation string"),
+      code: 1
+    });
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("Linear writer integration directly"),
+      code: 1
+    });
+  });
+
   it("accepts a minimal docs fixture", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-pass-"));
     await writeDocsFixture(repo);
@@ -134,7 +177,67 @@ async function writeArchitectureFixture(repo: string): Promise<void> {
   await writeFile(join(repo, "README.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
   await writeFile(join(repo, "skills/implement-feature/SKILL.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
   await writeFile(join(repo, "templates/base-harness/.agents/skills/implement-feature/SKILL.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
-  await writeFile(join(repo, "src", "types.ts"), "export interface Thing { value: string }\n", "utf8");
+  await writeFile(
+    join(repo, "src", "types.ts"),
+    [
+      "export interface Issue { id: string; identifier: string }",
+      "export interface IssueComment { id: string; body: string }",
+      "export interface IssueTracker {",
+      "  fetchCandidates(activeStates: string[]): Promise<Issue[]>;",
+      "  fetchIssueStates(issueIds: string[]): Promise<Map<string, Issue | null>>;",
+      "  fetchTerminalIssues?(terminalStates: string[]): Promise<Issue[]>;",
+      "  fetchIssueComments?(issueIdentifierOrId: string, limit?: number): Promise<IssueComment[]>;",
+      "  comment?(issueIdentifierOrId: string, body: string): Promise<void>;",
+      "  upsertComment?(issueIdentifierOrId: string, body: string, key: string): Promise<void>;",
+      "  move?(issueIdentifierOrId: string, stateName: string): Promise<void>;",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    join(repo, "src", "tracker-boundaries.ts"),
+    [
+      'import type { IssueTracker } from "./types.js";',
+      'export interface TrackerReader { fetchCandidates: IssueTracker["fetchCandidates"]; fetchIssueStates: IssueTracker["fetchIssueStates"]; fetchTerminalIssues?: IssueTracker["fetchTerminalIssues"]; fetchIssueComments?: IssueTracker["fetchIssueComments"]; }',
+      'export interface TrackerLifecycleWriter { comment?: IssueTracker["comment"]; upsertComment?: IssueTracker["upsertComment"]; move?: IssueTracker["move"]; }',
+      "export interface TrackerCapabilities extends TrackerReader, TrackerLifecycleWriter {}"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    join(repo, "src", "lifecycle-events.ts"),
+    [
+      'export const lifecycleActors = ["agent", "scheduler_safety", "extension", "supervisor"] as const;',
+      "export type LifecycleActor = (typeof lifecycleActors)[number];",
+      'export const lifecycleEventTypes = ["run_started", "progress_comment", "pr_metadata_recorded", "handoff_recorded", "state_transition_requested", "review_ready", "scheduler_safety_write_requested", "evidence_verification_failed"] as const;',
+      "export type LifecycleEventType = (typeof lifecycleEventTypes)[number];",
+      'export const lifecycleEventSources = ["orchestrator", "repo_tool", "client_tool", "extension", "supervisor"] as const;',
+      "export type LifecycleEventSource = (typeof lifecycleEventSources)[number];",
+      'export const schedulerSafetyWriteReasons = ["bootstrap_failed_before_agent_start", "pre_dispatch_safety_block", "retry_budget_exhausted", "stale_run_recovery_required", "terminal_cleanup_reconciliation", "agent_owned_lifecycle_missing_evidence"] as const;',
+      "export type SchedulerSafetyWriteReason = (typeof schedulerSafetyWriteReasons)[number];",
+      "export interface LifecycleEvent { schemaVersion: 1; actor: LifecycleActor; type: LifecycleEventType; issueId: string; issueIdentifier: string; source: LifecycleEventSource; createdAt: string; }",
+      "export interface LifecycleController { record(event: LifecycleEvent): Promise<void>; }"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    join(repo, "src", "orchestrator.ts"),
+    [
+      "export class Orchestrator {",
+      "  private tracker = {} as { move?: (issue: string, state: string) => Promise<void>; comment?: (issue: string, body: string) => Promise<void>; upsertComment?: (issue: string, body: string, key: string) => Promise<void> };",
+      "  private async moveIssue(issue: { identifier: string }, stateName: string | null) {",
+      "    if (!stateName || !this.tracker.move) return;",
+      "    await this.tracker.move(issue.identifier, stateName);",
+      "  }",
+      "  private async commentIssue(issue: { identifier: string }, body: string, key?: string) {",
+      "    if (!this.tracker.comment && !this.tracker.upsertComment) return;",
+      "    await (key && this.tracker.upsertComment ? this.tracker.upsertComment(issue.identifier, body, key) : this.tracker.comment!(issue.identifier, body));",
+      "  }",
+      "  async run() { return true; }",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
   await writeFile(join(repo, "src/runner", "app-server.ts"), "export const runner = true;\n", "utf8");
   await writeFile(join(repo, "src", "fs-utils.ts"), "export const fsUtils = true;\n", "utf8");
   await writeFile(join(repo, "src", "github.ts"), "export const github = true;\n", "utf8");

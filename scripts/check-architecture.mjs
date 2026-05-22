@@ -7,6 +7,8 @@ const failures = [];
 const canonicalStates = ["Todo", "In Progress", "Human Review", "Merging", "Done", "Closed", "Canceled", "Duplicate"];
 
 checkLayerBoundaries();
+checkLifecycleBoundaryContracts();
+checkCoreTrackerWriteBoundaries();
 checkDuplicateWorkflowConcepts();
 checkDuplicateStateNames("WORKFLOW.md");
 checkDuplicateStateNames("templates/base-harness/WORKFLOW.md");
@@ -45,6 +47,79 @@ function checkCliDoesNotOwnDomainLogic() {
   if (text == null) return;
   for (const snippet of ["class Orchestrator", "class LinearClient", "class WorkspaceManager", "function evaluateMergeReadiness"]) {
     if (text.includes(snippet)) fail(`src/cli.ts owns domain logic ${snippet}`, "Move domain behavior into src/orchestrator.ts, src/linear.ts, src/workspace.ts, or another owned module, and keep the CLI as command wiring.");
+  }
+}
+
+function checkLifecycleBoundaryContracts() {
+  const lifecycleEvents = read("src/lifecycle-events.ts");
+  if (lifecycleEvents) {
+    for (const token of [
+      "export const lifecycleActors",
+      "export type LifecycleActor",
+      "export const lifecycleEventTypes",
+      "export type LifecycleEventType",
+      "export const lifecycleEventSources",
+      "export type LifecycleEventSource",
+      "export const schedulerSafetyWriteReasons",
+      "export type SchedulerSafetyWriteReason",
+      "export interface LifecycleEvent",
+      "export interface LifecycleController"
+    ]) {
+      if (!lifecycleEvents.includes(token)) {
+        fail("src/lifecycle-events.ts is missing lifecycle boundary contract export", `Add ${token} so lifecycle writes have a typed event boundary before extraction.`);
+      }
+    }
+    for (const actor of ["agent", "scheduler_safety", "extension", "supervisor"]) {
+      if (!lifecycleEvents.includes(`"${actor}"`)) {
+        fail("src/lifecycle-events.ts is missing a lifecycle actor", `Add lifecycle actor ${actor} to keep the event schema complete.`);
+      }
+    }
+    for (const reason of [
+      "bootstrap_failed_before_agent_start",
+      "pre_dispatch_safety_block",
+      "retry_budget_exhausted",
+      "stale_run_recovery_required",
+      "terminal_cleanup_reconciliation",
+      "agent_owned_lifecycle_missing_evidence"
+    ]) {
+      if (!lifecycleEvents.includes(`"${reason}"`)) {
+        fail("src/lifecycle-events.ts is missing a scheduler safety reason", `Add ${reason} so scheduler-owned writes remain exhaustively enumerated.`);
+      }
+    }
+  }
+
+  const trackerBoundaries = read("src/tracker-boundaries.ts");
+  if (trackerBoundaries) {
+    for (const token of ["export interface TrackerReader", "export interface TrackerLifecycleWriter", "export interface TrackerCapabilities"]) {
+      if (!trackerBoundaries.includes(token)) {
+        fail("src/tracker-boundaries.ts is missing tracker boundary capability types", `Add ${token} so tracker reads and lifecycle writes are separated at the type boundary.`);
+      }
+    }
+    if (!/export\s+interface\s+TrackerCapabilities\s+extends\s+TrackerReader\s*,\s*TrackerLifecycleWriter/.test(trackerBoundaries)) {
+      fail("src/tracker-boundaries.ts does not compose tracker capabilities from reader/writer boundaries", "Keep TrackerCapabilities as the compatibility composition of TrackerReader and TrackerLifecycleWriter until lifecycle extraction is complete.");
+    }
+  }
+}
+
+function checkCoreTrackerWriteBoundaries() {
+  const path = "src/orchestrator.ts";
+  const text = read(path);
+  if (text == null) return;
+
+  if (/from\s+["']\.\/linear\.js["']/.test(text) || /\bnew\s+LinearClient\b/.test(text)) {
+    fail(`${path} imports or constructs Linear writer integration directly`, "Core scheduler code must depend on tracker/lifecycle boundaries, not Linear writer implementation details.");
+  }
+  if (/\bmutation\s+[A-Za-z_][A-Za-z0-9_]*/.test(text)) {
+    fail(`${path} contains a GraphQL mutation string`, "Move tracker write implementation into tracker adapters or lifecycle tools; core scheduler code must not contain raw GraphQL mutations.");
+  }
+
+  const compatibilityRanges = ["moveIssue", "commentIssue"].map((name) => methodRange(text, name)).filter(Boolean);
+  for (const match of text.matchAll(/\bthis\.tracker\.(move|comment|upsertComment)\b/g)) {
+    if (compatibilityRanges.some((range) => match.index >= range.start && match.index <= range.end)) continue;
+    fail(
+      `${path} contains direct tracker lifecycle write ${match[0]}`,
+      "Emit a lifecycle event or route through the lifecycle boundary. VER-128 only grandfathers moveIssue/commentIssue compatibility helpers until lifecycle extraction."
+    );
   }
 }
 
@@ -208,6 +283,40 @@ function read(path) {
   }
   if (!statSync(fullPath).isFile()) return null;
   return readFileSync(fullPath, "utf8");
+}
+
+function methodRange(text, methodName) {
+  const methodPattern = new RegExp(`\\n\\s*private\\s+async\\s+${escapeRegExp(methodName)}\\s*\\(`);
+  const match = methodPattern.exec(text);
+  if (!match) return null;
+  const parametersStart = text.indexOf("(", match.index);
+  if (parametersStart === -1) return null;
+  let parameterDepth = 0;
+  let signatureEnd = -1;
+  for (let index = parametersStart; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "(") parameterDepth += 1;
+    if (char === ")") {
+      parameterDepth -= 1;
+      if (parameterDepth === 0) {
+        signatureEnd = index;
+        break;
+      }
+    }
+  }
+  if (signatureEnd === -1) return null;
+  const bodyStart = text.indexOf("{", signatureEnd);
+  if (bodyStart === -1) return null;
+  let depth = 0;
+  for (let index = bodyStart; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return { start: match.index, end: index };
+    }
+  }
+  return null;
 }
 
 function fail(message, fix) {
