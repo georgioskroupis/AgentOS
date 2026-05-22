@@ -398,14 +398,14 @@ describe("issue inspection", () => {
           reviewStatus: "human_required",
           reviewBudget: {
             status: "exceeded",
-            mode: "recommend-only",
+            mode: "prepare-draft",
             evaluatedAt: "2026-05-16T00:00:00.000Z",
             summary: "1 review budget signal(s) exceeded.",
             signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }]
           },
           splitRecommendation: {
             recommended: true,
-            action: "recommend-only",
+            action: "prepare-draft",
             reason: "review budget exceeded for broad or non-mechanical signals",
             summary: "Recommend split or follow-up work for AG-2: changed_file_count.",
             signals: [{ name: "changed_file_count", classification: "broad", current: 9, threshold: 3, summary: "9 changed file(s) exceed the review budget." }],
@@ -439,9 +439,51 @@ describe("issue inspection", () => {
 
     const output = await inspectIssue(repo, "AG-2");
 
-    expect(output).toContain("Review budget: exceeded (recommend-only)");
-    expect(output).toContain("Split recommendation: recommend-only");
+    expect(output).toContain("Review budget: exceeded (prepare-draft)");
+    expect(output).toContain("Split recommendation: prepare-draft");
     expect(output).toContain("Next safe action: record a split-follow-up decision");
+  });
+
+  it("labels active recommend-only review budget split recommendations as advisory", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-review-budget-active-advisory-"));
+    const stateRoot = join(repo, ".agent-os", "state", "issues");
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(
+      join(stateRoot, "AG-2.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-2",
+          issueIdentifier: "AG-2",
+          phase: "fix",
+          reviewStatus: "changes_requested",
+          reviewBudget: {
+            status: "exceeded",
+            mode: "recommend-only",
+            evaluatedAt: "2026-05-16T00:00:00.000Z",
+            summary: "1 review budget signal(s) exceeded.",
+            signals: [{ name: "review_token_total", classification: "broad", current: 250000, threshold: 200000, summary: "Review/fix token volume is 250000." }]
+          },
+          splitRecommendation: {
+            recommended: true,
+            action: "recommend-only",
+            reason: "review budget exceeded for broad or non-mechanical signals",
+            summary: "Recommend split or follow-up work for AG-2: review_token_total.",
+            signals: [{ name: "review_token_total", classification: "broad", current: 250000, threshold: 200000, summary: "Review/fix token volume is 250000." }],
+            recordedAt: "2026-05-16T00:00:00.000Z"
+          },
+          updatedAt: "2026-05-16T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-2");
+
+    expect(output).toContain("Split recommendation: advisory (recommend-only)");
+    expect(output).toContain("Next safe action: continue bounded mechanical repair when safe");
   });
 
   it("labels approved review budget split recommendations as advisory", async () => {

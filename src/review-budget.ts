@@ -26,6 +26,20 @@ export interface ReviewBudgetEvaluation {
   shouldRecommendSplit: boolean;
 }
 
+export interface ReviewBudgetContinuationInput {
+  budgetDecision: ReviewBudgetEvaluation;
+  blockingFindings: ReviewFinding[];
+  config: ServiceConfig;
+  humanRequired: boolean;
+  repeatedFindingHashes: string[];
+  iteration: number;
+}
+
+export interface ReviewBudgetContinuation {
+  advisoryMechanicalSplitRecommendation: boolean;
+  hardReviewBudgetStop: boolean;
+}
+
 export function evaluateReviewBudget(input: ReviewBudgetEvaluationInput): ReviewBudgetEvaluation {
   const config = input.config.review.budget;
   const evaluatedAt = input.now ?? new Date().toISOString();
@@ -134,6 +148,55 @@ export function formatSplitRecommendation(recommendation: ReviewSplitRecommendat
   const lines = [`Split recommendation: ${label}`, `Split reason: ${recommendation.reason}`, `Split summary: ${recommendation.summary}`];
   if (recommendation.proposals?.length) lines.push("Follow-up proposals:", ...recommendation.proposals.map((proposal) => `- ${proposal.title}${proposal.artifactPath ? ` (${proposal.artifactPath})` : ""}`));
   return lines.join("\n");
+}
+
+export function isRecommendOnlySplitRecommendation(recommendation: ReviewSplitRecommendation | null | undefined): boolean {
+  return recommendation?.recommended === true && recommendation.action === "recommend-only";
+}
+
+export function isMechanicalReviewBudgetFinding(finding: ReviewFinding, config: ServiceConfig): boolean {
+  return classifyFinding(finding, config.review.budget.broadCategories) === "mechanical";
+}
+
+export function hasHardReviewBudgetStop(signals: ReviewBudgetSignal[]): boolean {
+  const hardStops = new Set(["review_iteration_count", "fixer_iteration_count"]);
+  return signals.some((signal) => hardStops.has(signal.name));
+}
+
+export function isAdvisoryMechanicalSplitRecommendation(input: {
+  splitRecommendation: ReviewSplitRecommendation | null | undefined;
+  budget: ReviewBudgetState;
+  blockingFindings: ReviewFinding[];
+  config: ServiceConfig;
+  humanRequired: boolean;
+  repeatedFindingHashes: string[];
+  iteration: number;
+}): boolean {
+  return (
+    isRecommendOnlySplitRecommendation(input.splitRecommendation) &&
+    input.blockingFindings.length > 0 &&
+    input.blockingFindings.every((finding) => isMechanicalReviewBudgetFinding(finding, input.config)) &&
+    !input.humanRequired &&
+    input.repeatedFindingHashes.length === 0 &&
+    input.iteration < input.config.review.maxIterations &&
+    !hasHardReviewBudgetStop(input.budget.signals)
+  );
+}
+
+export function reviewBudgetContinuation(input: ReviewBudgetContinuationInput): ReviewBudgetContinuation {
+  const hardReviewBudgetStop = hasHardReviewBudgetStop(input.budgetDecision.budget.signals);
+  const advisoryMechanicalSplitRecommendation = input.budgetDecision.shouldRecommendSplit
+    ? isAdvisoryMechanicalSplitRecommendation({
+        splitRecommendation: input.budgetDecision.splitRecommendation,
+        budget: input.budgetDecision.budget,
+        blockingFindings: input.blockingFindings,
+        config: input.config,
+        humanRequired: input.humanRequired,
+        repeatedFindingHashes: input.repeatedFindingHashes,
+        iteration: input.iteration
+      })
+    : false;
+  return { advisoryMechanicalSplitRecommendation, hardReviewBudgetStop };
 }
 
 // This reads only the durable local issue state. Callers that use it as a

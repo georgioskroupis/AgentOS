@@ -7480,7 +7480,7 @@ describe("orchestrator", () => {
     await expect(readFile(join(repo, ".agent-os", "follow-ups", "AG-1-review-budget.md"), "utf8")).resolves.toContain("Parent issue: AG-1");
   });
 
-  it("keeps review budget blocking when concrete mechanical findings remain", async () => {
+  it("keeps recommend-only review budget signals advisory when concrete mechanical findings can be fixed", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-budget-mechanical-blocking-"));
     await initGitRemote(repo);
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -7488,6 +7488,102 @@ describe("orchestrator", () => {
     await writeFile(
       workflowPath,
       `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 2\n  required_reviewers: [self]\n  optional_reviewers: []\n  budget:\n    max_changed_files: 1\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          headRefOid: "abc123",
+          statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+          files: [{ path: "src/a.ts" }, { path: "src/b.ts" }]
+        }
+      }),
+      "utf8"
+    );
+
+    let fixRuns = 0;
+    let fixed = false;
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move() {},
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        if (input.prompt.startsWith("Do ")) {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        if (input.prompt.startsWith("You are fixing")) {
+          fixRuns += 1;
+          fixed = true;
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/1");
+          return { status: "succeeded" };
+        }
+        const artifactPath = input.prompt.match(/Write exactly one JSON file at:\n(.+)/)?.[1]?.trim();
+        if (!artifactPath) return { status: "failed", error: "missing artifact path" };
+        await writeReviewArtifact(join(input.workspace.path, artifactPath), {
+          reviewer: "self",
+          decision: fixed ? "approved" : "changes_requested",
+          ...reviewArtifactScope(input),
+          summary: fixed ? "approved" : "mechanical finding",
+          findings: fixed
+            ? []
+            : [
+                {
+                  reviewer: "self",
+                  decision: "changes_requested",
+                  severity: "P1",
+                  file: "src/a.ts",
+                  line: 12,
+                  body: "The narrow deterministic branch still returns the wrong value.",
+                  findingHash: "mechanical-budget-finding"
+                }
+              ]
+        });
+        return { status: "succeeded" };
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(fixRuns).toBe(1);
+    expect(comments.join("\n")).toContain("automated review requested fixes");
+    expect(comments.join("\n")).toContain("Review budget advisory");
+    expect(comments.join("\n")).not.toContain("review budget recommends split/follow-up");
+    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
+    expect(state.reviewStatus).toBe("approved");
+    expect(state.splitRecommendation.signals.map((signal: { name: string }) => signal.name)).toContain("changed_file_count");
+  });
+
+  it("stops for human review when a recommend-only budget signal has no repair iteration remaining", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-review-budget-hard-stop-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: true\n  max_iterations: 2\n  required_reviewers: [self]\n  optional_reviewers: []\n  budget:\n    mode: recommend-only\n    max_review_iterations: 1\n    max_changed_files: 1\n---\nDo {{ issue.identifier }}`,
       "utf8"
     );
     await writeFile(
@@ -7566,8 +7662,7 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("review budget recommends split/follow-up");
     const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
     expect(state.reviewStatus).toBe("human_required");
-    expect(state.findings[0].findingHash).toBe("mechanical-budget-finding");
-    expect(state.splitRecommendation.signals.map((signal: { name: string }) => signal.name)).toContain("changed_file_count");
+    expect(state.reviewBudget.signals.map((signal: { name: string }) => signal.name)).toContain("review_iteration_count");
   });
 
   it("refreshes fixer validation evidence before evaluating review rerun budget", async () => {

@@ -42,8 +42,8 @@ import { allowsImplementationContinuation, formatHumanDecision, formatLinearComm
 import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, dependencyDispatchStopPatch, isRecordedMergeTerminal, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
-import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
-import { approvedReviewValidationBlockReason, formatApprovedReviewComment, reviewIterationLogMessage } from "./review-budget-orchestration.js";
+import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewBudgetContinuation, reviewSupervisorMergeDecision } from "./review-budget.js";
+import { approvedReviewValidationBlockReason, formatApprovedReviewComment, formatReviewFixRequestedComment, formatReviewHumanRequiredComment, formatReviewSplitRecommendedComment, reviewHumanRequiredReason, reviewIterationLogMessage } from "./review-budget-orchestration.js";
 import { reviewerConcurrencyFor, runReviewerIteration } from "./reviewer-scheduler.js";
 import { categorizeRunError, isDependencyDispatchStop, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
@@ -72,6 +72,7 @@ interface RunningEntry {
   abortController: AbortController;
   promise: Promise<void>;
 }
+
 export class Orchestrator {
   private workflow!: WorkflowDefinition;
   private config!: ServiceConfig;
@@ -1881,41 +1882,38 @@ export class Orchestrator {
         return latestState;
       }
 
-      if (budgetDecision.shouldRecommendSplit && budgetDecision.splitRecommendation) {
+      const { advisoryMechanicalSplitRecommendation, hardReviewBudgetStop } = reviewBudgetContinuation({ budgetDecision, blockingFindings: blocking, config: this.config, humanRequired, repeatedFindingHashes: repeated, iteration });
+
+      if (budgetDecision.shouldRecommendSplit && budgetDecision.splitRecommendation && !advisoryMechanicalSplitRecommendation) {
         const splitRecommendation = await prepareReviewFollowUpProposal(repoRoot, issue, budgetDecision.splitRecommendation);
         latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", reviewBudget: budgetDecision.budget, splitRecommendation, findings, reviewRunnerFailures });
-        await this.commentIssue(issue, ["### AgentOS review budget recommends split/follow-up", "", "The Wiggum loop stopped because the configured review budget was exceeded for broad or non-mechanical signals.", "", reviewTargetList, `- Iteration: ${iteration}`, "", formatReviewBudgetState(budgetDecision.budget), "", formatSplitRecommendation(splitRecommendation)].join("\n"));
+        await this.commentIssue(issue, formatReviewSplitRecommendedComment({ reviewTargetList, iteration, budget: budgetDecision.budget, splitRecommendation }));
         await this.logger.write({ type: "review_split_recommended", issueId: issue.id, issueIdentifier: issue.identifier, message: splitRecommendation.reason, payload: { splitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls } });
         return latestState;
       }
 
-      if (humanRequired || repeated.length > 0 || iteration >= this.config.review.maxIterations) {
-        const reason = terminalReviewerFailure
-          ? terminalReviewerFailure.classification === "mechanical" && terminalReviewerFailure.exhausted
-            ? "a reviewer runner failed to produce a trusted artifact after its retry budget was exhausted"
-            : "a reviewer runner failure requires human judgment"
-          : humanRequired
-            ? "a reviewer requested human judgment"
-          : repeated.length > 0
-            ? "the same blocking finding repeated after a fix"
-            : "maximum review iterations reached";
+      if (advisoryMechanicalSplitRecommendation && budgetDecision.splitRecommendation) {
+        await this.logger.write({
+          type: "review_split_recommended",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: `advisory: ${budgetDecision.splitRecommendation.reason}`,
+          payload: { splitRecommendation: budgetDecision.splitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls, advisory: true }
+        });
+      }
+
+      if (humanRequired || repeated.length > 0 || iteration >= this.config.review.maxIterations || hardReviewBudgetStop) {
+        const reason = reviewHumanRequiredReason({ terminalReviewerFailure, humanRequired, repeatedFindingHashes: repeated, hardReviewBudgetStop });
         latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", findings, reviewRunnerFailures });
         await this.commentIssue(
           issue,
-          [
-            "### AgentOS automated review needs human judgment",
-            "",
-            `The Wiggum loop stopped because ${reason}.`,
-            "",
+          formatReviewHumanRequiredComment({
+            reason,
             reviewTargetList,
-            `- Iteration: ${iteration}`,
-            "",
-            "Reviewer runner failures:",
-            formatReviewRunnerFailures(reviewRunnerFailures),
-            "",
-            "Blocking findings:",
-            formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
-          ].join("\n")
+            iteration,
+            reviewRunnerFailuresText: formatReviewRunnerFailures(reviewRunnerFailures),
+            blockingFindingsText: formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
+          })
         );
         await this.logger.write({
           type: "review_human_required",
@@ -1935,16 +1933,14 @@ export class Orchestrator {
       });
       await this.commentIssue(
         issue,
-        [
-          "### AgentOS automated review requested fixes",
-          "",
-          "Blocking findings were found. AgentOS is running a focused fix turn on the existing PR.",
-          "",
+        formatReviewFixRequestedComment({
           reviewTargetList,
-          `- Iteration: ${iteration}`,
-          "",
-          formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
-        ].join("\n")
+          iteration,
+          blockingFindingsText: formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false }),
+          budget: budgetDecision.budget,
+          splitRecommendation: budgetDecision.splitRecommendation,
+          advisorySplitRecommendation: advisoryMechanicalSplitRecommendation
+        })
       );
       await this.recordIssueState(issue, { phase: "fix", reviewStatus: "changes_requested" });
       const fixTiming = runId ? await this.startRunPhase(runId, issue, "fixer-turn", `fixer turn ${iteration}`, { iteration, blockingFindings: blocking.length }) : null;
