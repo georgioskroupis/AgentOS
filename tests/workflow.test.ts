@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadWorkflow, parseWorkflowText, renderPrompt, resolveServiceConfig, validateWorkflowDefinition } from "../src/workflow.js";
 import type { Issue } from "../src/types.js";
@@ -93,6 +93,23 @@ describe("workflow", () => {
     expect(config.workspace.root).toContain(".agent-os/workspaces");
   });
 
+  it("resolves relative workspace roots from the selected workflow directory", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-dir-"));
+    const workflowDir = join(repo, "config", "agentos");
+    const workflowPath = join(workflowDir, "WORKFLOW.md");
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\nworkspace:\n  root: ../runtime/workspaces\n---\nHello`,
+      "utf8"
+    );
+
+    const workflow = await loadWorkflow(workflowPath);
+    const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+
+    expect(config.workspace.root).toBe(resolve(workflowDir, "../runtime/workspaces"));
+  });
+
   it("parses optional loopback server config", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-server-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -149,6 +166,19 @@ describe("workflow", () => {
     const loose = await loadWorkflow(join(repo, "WORKFLOW.md"));
     loose.config = { tracker: { api_key: "$LINEAR_API_KEY", project_slug: "AgentOS" } };
     expect(validateWorkflowDefinition(loose, { LINEAR_API_KEY: "", HOME: "/tmp" }, true).errors).toContain("tracker.api_key did not resolve from the environment");
+  });
+
+  it("keeps the checked-in workflow strict-clean", async () => {
+    const workflow = await loadWorkflow("WORKFLOW.md");
+    const text = await readFile("WORKFLOW.md", "utf8");
+
+    expect(validateWorkflowDefinition(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true)).toMatchObject({
+      ok: true,
+      errors: []
+    });
+    expect(text).not.toContain("No npm lint script found");
+    expect(text).not.toContain("No dedicated coverage script found");
+    expect(text).not.toContain("No explicit formatting check script found");
   });
 
   it("rejects unknown tracker kinds with registered adapter guidance", async () => {

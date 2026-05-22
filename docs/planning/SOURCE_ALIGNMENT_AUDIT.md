@@ -76,6 +76,10 @@ AgentOS aligns well with the Harness Engineering article on these points:
   names, PR-centric wording regression, hidden lifecycle policy, file-size
   budgets, docs index coverage, cross-links, CLI command references, and this
   source-alignment audit staying current.
+- Post-review correction: workspace lifecycle hooks are a core Symphony
+  contract, and they must run from an already-created per-issue workspace with
+  absolute `AGENT_OS_SOURCE_REPO` and `AGENT_OS_WORKSPACE` values. Partial
+  bootstrap directories must not be silently treated as reusable workspaces.
 - Agent legibility has improved. Durable run summaries, events, artifact hashes,
   validation evidence, session/token/rate-limit metrics, `inspect`, and
   `runs inspect` are available.

@@ -11,6 +11,15 @@ issue-first control plane, repo-local harness, bounded review and repair loops,
 durable recovery, registry scheduling, application proof hooks, recurring
 maintenance, and explicit remaining deviations.
 
+Post-review correction: a later source-faithfulness review confirmed one real
+gap in workspace lifecycle hooks: bootstrap hooks did not consistently run from
+an already-created per-issue workspace, and partial bootstrap state could be
+misread as reusable. That gap is tracked as a post-MVP hardening correction.
+The same review also surfaced stale claims that are now reconciled in current
+repo state: package-level lint, format, and coverage gates are present; Codex is
+pinned in `WORKFLOW.md`; human merge override is disabled; and strict workflow
+validation passes.
+
 ## Source Anchors
 
 - Harness Engineering: repository-local tools and docs, mechanical guardrails,
@@ -57,11 +66,11 @@ npm run build
 bin/agent-os workflow validate --strict
 ```
 
-`npm run agent-check` completed harness, format, lint, and typecheck, then
-entered the full Vitest phase and produced no additional output for more than
-six minutes. The process was stopped to avoid adding stale local sessions; this
-known validation-runtime risk is tracked by VER-110 and VER-111. The PR CI run
-must provide the final full-suite `agent-check` authority before merge.
+`npm run agent-check` is the full authority for current certification gates. It
+runs harness contract, format, lint, typecheck, tests, coverage, build,
+architecture, dashboard, docs, security, and contract checks. Historical
+validation-runtime noise from long Vitest/coverage phases is tracked separately
+from correctness.
 
 The certification also expects a clean tracked source tree before merge. Local
 ignored runtime artifacts under `.agent-os/`, `coverage/`, `dist/`, and

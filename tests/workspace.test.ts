@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, readdir, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acquireWorkspaceLock, releaseWorkspaceLock, WorkspaceManager, workspaceKey } from "../src/workspace.js";
+import { acquireWorkspaceLock, releaseWorkspaceLock, WorkspaceManager, workspaceBootstrapHookHash, workspaceBootstrapMarkerPath, workspaceKey } from "../src/workspace.js";
 import type { ServiceConfig } from "../src/types.js";
 
 const defaultReviewBudget: ServiceConfig["review"]["budget"] = {
@@ -27,7 +27,7 @@ describe("workspace", () => {
     expect(workspaceKey("AG 1/hello")).toBe("AG_1_hello");
   });
 
-  it("runs after-create hooks with workspace env", async () => {
+  it("runs after-create hooks from an already-created absolute workspace", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-os-ws-"));
     const source = await mkdtemp(join(tmpdir(), "agent-os-src-"));
     const config: ServiceConfig = {
@@ -47,7 +47,15 @@ describe("workspace", () => {
       polling: { intervalMs: 1000 },
       workspace: { root },
       hooks: {
-        afterCreate: 'mkdir -p "$AGENT_OS_WORKSPACE" && printf "$AGENT_OS_WORKSPACE_KEY" > "$AGENT_OS_WORKSPACE/key.txt"',
+        afterCreate: [
+          'test -d "$AGENT_OS_WORKSPACE"',
+          'test "$(pwd -P)" = "$(cd "$AGENT_OS_WORKSPACE" && pwd -P)"',
+          'case "$AGENT_OS_WORKSPACE" in /*) ;; *) exit 12 ;; esac',
+          'case "$AGENT_OS_SOURCE_REPO" in /*) ;; *) exit 13 ;; esac',
+          'printf "$AGENT_OS_WORKSPACE_KEY" > key.txt',
+          'pwd -P > pwd.txt',
+          'printf "$AGENT_OS_WORKSPACE" > env-workspace.txt'
+        ].join(" && "),
         beforeRun: null,
         afterRun: null,
         beforeRemove: null,
@@ -78,11 +86,167 @@ describe("workspace", () => {
 
     const manager = new WorkspaceManager(config, source);
     const workspace = await manager.createOrReuse("AG-1");
+    expect(isAbsolute(workspace.path)).toBe(true);
     expect(await readFile(join(workspace.path, "key.txt"), "utf8")).toBe("AG-1");
+    expect(await readFile(join(workspace.path, "pwd.txt"), "utf8")).toBe(`${await realpath(workspace.path)}\n`);
+    expect(await readFile(join(workspace.path, "env-workspace.txt"), "utf8")).toBe(workspace.path);
+    const marker = JSON.parse(await readFile(workspaceBootstrapMarkerPath(source, "AG-1"), "utf8")) as Record<string, unknown>;
+    expect(marker).toMatchObject({
+      schemaVersion: 1,
+      workspaceKey: "AG-1",
+      workspacePath: workspace.path,
+      workspaceRoot: resolve(root),
+      sourceRepo: resolve(source),
+      hookCommandHash: workspaceBootstrapHookHash(config.hooks.afterCreate),
+      hookTimeoutMs: 5000
+    });
+    expect(marker).not.toHaveProperty("hookCommand");
     expect(workspace.lockPath).toBeTruthy();
     await expect(stat(workspace.lockPath!)).resolves.toBeTruthy();
     await manager.afterRun(workspace);
     await expect(stat(workspace.lockPath!)).rejects.toThrow();
+  });
+
+  it("reuses successfully initialized workspaces without rerunning after-create", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-reuse-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-reuse-"));
+    const config = serviceConfig(root, {
+      afterCreate: 'count="$AGENT_OS_SOURCE_REPO/count.txt"; current="$(cat "$count" 2>/dev/null || printf 0)"; printf "%s" "$((current + 1))" > "$count"; printf initialized > marker.txt'
+    });
+    const manager = new WorkspaceManager(config, source);
+
+    const first = await manager.createOrReuse("AG-1");
+    await manager.afterRun(first);
+    const second = await manager.createOrReuse("AG-1");
+
+    expect(second.createdNow).toBe(false);
+    expect(await readFile(join(source, "count.txt"), "utf8")).toBe("1");
+    await manager.afterRun(second);
+  });
+
+  it("does not mark failed after-create attempts and releases the lock for retry", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-fail-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-fail-"));
+    const manager = new WorkspaceManager(serviceConfig(root, { afterCreate: "printf partial > partial.txt && exit 9" }), source);
+
+    await expect(manager.createOrReuse("AG-1")).rejects.toThrow("hook_failed exit=9");
+    await expect(stat(workspaceBootstrapMarkerPath(source, "AG-1"))).rejects.toThrow();
+    const retryLock = await acquireWorkspaceLock(root, "AG-1", join(root, "AG-1"));
+    await releaseWorkspaceLock(retryLock);
+  });
+
+  it("reruns bootstrap for empty partial workspaces and refuses non-empty partial workspaces", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-partial-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-partial-"));
+    await mkdir(join(root, "AG-1"), { recursive: true });
+    const emptyRetry = await new WorkspaceManager(serviceConfig(root, { afterCreate: "printf bootstrapped > boot.txt" }), source).createOrReuse("AG-1");
+    expect(await readFile(join(emptyRetry.path, "boot.txt"), "utf8")).toBe("bootstrapped");
+    await new WorkspaceManager(serviceConfig(root), source).afterRun(emptyRetry);
+
+    await mkdir(join(root, "AG-2"), { recursive: true });
+    await writeFile(join(root, "AG-2", "leftover.txt"), "partial", "utf8");
+    await expect(new WorkspaceManager(serviceConfig(root, { afterCreate: "printf ignored > ignored.txt" }), source).createOrReuse("AG-2")).rejects.toThrow(
+      "workspace_partial_bootstrap"
+    );
+  });
+
+  it("recreates stale-marker workspaces and refuses unsafe marker mismatches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-marker-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-marker-"));
+    const markerPath = workspaceBootstrapMarkerPath(source, "AG-1");
+    await mkdir(resolve(markerPath, ".."), { recursive: true });
+    await writeFile(
+      markerPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        workspaceKey: "AG-1",
+        workspacePath: join(root, "AG-1"),
+        workspaceRoot: resolve(root),
+        sourceRepo: resolve(source),
+        hookCommandHash: workspaceBootstrapHookHash("printf stale > stale.txt"),
+        hookTimeoutMs: 5000,
+        initializedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+    const recreated = await new WorkspaceManager(serviceConfig(root, { afterCreate: "printf recreated > recreated.txt" }), source).createOrReuse("AG-1");
+    expect(await readFile(join(recreated.path, "recreated.txt"), "utf8")).toBe("recreated");
+    await new WorkspaceManager(serviceConfig(root), source).afterRun(recreated);
+
+    const mismatch = await new WorkspaceManager(serviceConfig(root, { afterCreate: "printf one > one.txt" }), source).createOrReuse("AG-2");
+    await new WorkspaceManager(serviceConfig(root), source).afterRun(mismatch);
+    await expect(new WorkspaceManager(serviceConfig(root, { afterCreate: "printf two > two.txt" }), source).createOrReuse("AG-2")).rejects.toThrow(
+      "workspace_partial_bootstrap"
+    );
+  });
+
+  it("records initialization markers when no after-create hook is configured", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-no-hook-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-no-hook-"));
+
+    const workspace = await new WorkspaceManager(serviceConfig(root), source).createOrReuse("AG-1");
+    const marker = JSON.parse(await readFile(workspaceBootstrapMarkerPath(source, "AG-1"), "utf8")) as Record<string, unknown>;
+
+    expect(marker.hookCommandHash).toBe(workspaceBootstrapHookHash(null));
+    await new WorkspaceManager(serviceConfig(root), source).afterRun(workspace);
+  });
+
+  it("records no-hook markers for existing non-empty workspaces", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-no-hook-existing-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-no-hook-existing-"));
+    await mkdir(join(root, "AG-1"), { recursive: true });
+    await writeFile(join(root, "AG-1", "existing.txt"), "safe no-hook workspace", "utf8");
+
+    const workspace = await new WorkspaceManager(serviceConfig(root), source).createOrReuse("AG-1");
+    const marker = JSON.parse(await readFile(workspaceBootstrapMarkerPath(source, "AG-1"), "utf8")) as Record<string, unknown>;
+
+    expect(workspace.createdNow).toBe(false);
+    expect(marker.hookCommandHash).toBe(workspaceBootstrapHookHash(null));
+    await new WorkspaceManager(serviceConfig(root), source).afterRun(workspace);
+  });
+
+  it("runs before-run, after-run, and before-remove hooks from the workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-lifecycle-"));
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-lifecycle-"));
+    const config = serviceConfig(root, {
+      beforeRun: 'pwd -P > before-run-pwd.txt && printf "$AGENT_OS_WORKSPACE" > before-run-env.txt',
+      afterRun: 'pwd -P > after-run-pwd.txt',
+      beforeRemove: 'pwd -P > "$AGENT_OS_SOURCE_REPO/before-remove-pwd.txt" && exit 7'
+    });
+    const manager = new WorkspaceManager(config, source);
+    const workspace = await manager.createOrReuse("AG-1");
+
+    await manager.beforeRun(workspace);
+    await manager.afterRun(workspace);
+    expect(await readFile(join(workspace.path, "before-run-pwd.txt"), "utf8")).toBe(`${await realpath(workspace.path)}\n`);
+    expect(await readFile(join(workspace.path, "before-run-env.txt"), "utf8")).toBe(workspace.path);
+    expect(await readFile(join(workspace.path, "after-run-pwd.txt"), "utf8")).toBe(`${await realpath(workspace.path)}\n`);
+
+    const realWorkspacePath = await realpath(workspace.path);
+    await manager.remove("AG-1");
+    expect(await readFile(join(source, "before-remove-pwd.txt"), "utf8")).toBe(`${realWorkspacePath}\n`);
+    await expect(stat(workspace.path)).rejects.toThrow();
+    await expect(stat(workspaceBootstrapMarkerPath(source, "AG-1"))).rejects.toThrow();
+  });
+
+  it("runs the default bootstrap script from the pre-created workspace", async () => {
+    const source = await mkdtemp(join(tmpdir(), "agent-os-src-bootstrap-"));
+    const root = await mkdtemp(join(tmpdir(), "agent-os-ws-bootstrap-"));
+    await run("git", ["init"], source);
+    await run("git", ["config", "user.email", "agentos@example.test"], source);
+    await run("git", ["config", "user.name", "AgentOS Test"], source);
+    await writeFile(join(source, "README.md"), "test\n", "utf8");
+    await run("git", ["add", "README.md"], source);
+    await run("git", ["commit", "-m", "initial"], source);
+    const script = resolve("scripts/agent-bootstrap-worktree.sh");
+    const config = serviceConfig(root, { afterCreate: `bash ${JSON.stringify(script)}` });
+
+    const workspace = await new WorkspaceManager(config, source).createOrReuse("AG-1");
+
+    expect(await readFile(join(workspace.path, "README.md"), "utf8")).toBe("test\n");
+    expect(await readdir(workspace.path)).toContain(".git");
+    await new WorkspaceManager(serviceConfig(root), source).afterRun(workspace);
+    await run("git", ["worktree", "remove", "--force", workspace.path], source);
   });
 
   it("refuses a workspace with a live lock", async () => {
@@ -142,7 +306,7 @@ describe("workspace", () => {
   });
 });
 
-function serviceConfig(root: string): ServiceConfig {
+function serviceConfig(root: string, hooks: Partial<ServiceConfig["hooks"]> = {}): ServiceConfig {
   return {
     trustMode: "ci-locked",
     tracker: {
@@ -159,7 +323,7 @@ function serviceConfig(root: string): ServiceConfig {
     },
     polling: { intervalMs: 1000 },
     workspace: { root },
-    hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 5000 },
+    hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 5000, ...hooks },
     agent: {
       maxConcurrentAgents: 1,
       maxTurns: 20,

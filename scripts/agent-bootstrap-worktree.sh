@@ -18,8 +18,10 @@ if git -C "$source_repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fi
   mkdir -p "$(dirname "$workspace")"
   branch="agent/${workspace_key}"
-  if [[ -d "$workspace" ]]; then
-    rmdir "$workspace" 2>/dev/null || true
+  if [[ -d "$workspace" && -n "$(find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    echo "Refusing to create AgentOS workspace in a non-empty directory without an existing worktree." >&2
+    echo "Inspect or remove $workspace before retrying." >&2
+    exit 1
   fi
   git -C "$source_repo" worktree add -B "$branch" "$workspace" HEAD
 else
