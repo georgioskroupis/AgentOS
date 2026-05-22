@@ -30,6 +30,7 @@ import {
 import { seedMaintenanceIssues } from "./maintenance.js";
 import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
+import { startAgentOsHttpServer, type AgentOsHttpServerHandle } from "./http-server.js";
 import { formatOperatorRecoveryRecord, recordOperatorRecovery } from "./recovery.js";
 import { RegistryOrchestrator } from "./registry-orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
@@ -201,12 +202,27 @@ orchestrator
   .command("once")
   .requiredOption("--repo <path>", "repository path")
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .option("--port <number>", "start the optional loopback HTTP API on this port for the run", parsePositiveIntegerOption("port"))
+  .option("--host <host>", "loopback HTTP API host", "127.0.0.1")
   .action(async (options) => {
     const repo = resolve(options.repo);
     const workflow = resolve(repo, options.workflow);
     await withProjectRunnerLock(repo, "single-project:once", async () => {
       const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
-      await service.runOnce(true);
+      const server = await startHttpServerIfConfigured({
+        repoRoot: repo,
+        workflowPath: workflow,
+        port: options.port,
+        host: options.host,
+        onRefresh: async () => {
+          await service.runOnce(false);
+        }
+      });
+      try {
+        await service.runOnce(true);
+      } finally {
+        await server?.close();
+      }
     });
   });
 
@@ -214,13 +230,28 @@ orchestrator
   .command("run")
   .requiredOption("--repo <path>", "repository path")
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
+  .option("--port <number>", "start the optional loopback HTTP API on this port", parsePositiveIntegerOption("port"))
+  .option("--host <host>", "loopback HTTP API host", "127.0.0.1")
   .action(async (options) => {
     await withDaemonProcessLogging(async (signal) => {
       const repo = resolve(options.repo);
       const workflow = resolve(repo, options.workflow);
       await withProjectRunnerLock(repo, "single-project:run", async () => {
         const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
-        await service.runUntilStopped(signal);
+        const server = await startHttpServerIfConfigured({
+          repoRoot: repo,
+          workflowPath: workflow,
+          port: options.port,
+          host: options.host,
+          onRefresh: async () => {
+            await service.runOnce(false);
+          }
+        });
+        try {
+          await service.runUntilStopped(signal);
+        } finally {
+          await server?.close();
+        }
       });
     });
   });
@@ -755,6 +786,32 @@ async function withDaemonProcessLogging(action: (signal: AbortSignal) => Promise
     process.off("SIGINT", requestStop);
     process.off("SIGTERM", requestStop);
     removeCrashCapture?.();
+  }
+}
+
+async function startHttpServerIfConfigured(input: {
+  repoRoot: string;
+  workflowPath: string;
+  port?: number;
+  host?: string;
+  onRefresh: () => Promise<void>;
+}): Promise<AgentOsHttpServerHandle | null> {
+  try {
+    const resolvedEnv = await resolveRepoEnv(input.repoRoot, process.env);
+    const workflow = await loadWorkflow(input.workflowPath);
+    const config = resolveServiceConfig(workflow, resolvedEnv.env);
+    const server = await startAgentOsHttpServer({
+      repoRoot: input.repoRoot,
+      config,
+      port: input.port,
+      host: input.host,
+      onRefresh: input.onRefresh
+    });
+    if (server) console.error(`AgentOS HTTP API listening at ${server.url}`);
+    return server;
+  } catch (error) {
+    console.error(`AgentOS HTTP API disabled: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
   }
 }
 

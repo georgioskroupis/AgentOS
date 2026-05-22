@@ -163,6 +163,10 @@ export interface ServiceConfig {
   daemon: {
     mainBranchRefreshIntervalTicks: number;
   };
+  server?: {
+    port: number | null;
+    host: string;
+  };
   review: {
     enabled: boolean;
     targetMode?: ReviewTargetMode;

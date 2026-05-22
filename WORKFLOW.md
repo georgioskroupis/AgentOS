@@ -79,6 +79,9 @@ github:
   allow_human_merge_override: false
 daemon:
   main_branch_refresh_interval_ticks: 5
+server:
+  port:
+  host: 127.0.0.1
 review:
   enabled: true
   target_mode: merge-eligible
@@ -442,6 +445,16 @@ Daemon freshness checks compare the daemon's start SHA for `github.base`
 `daemon.main_branch_refresh_interval_ticks` daemon ticks and immediately after
 shepherd merges. A stale daemon reports the SHA delta and the manual operator
 action `git pull && bin/agent-os daemon restart --repo <repo> --workflow WORKFLOW.md`.
+
+The optional loopback HTTP API is disabled unless `server.port` is set or the
+daemon is launched with `--port <number>`. When enabled,
+`agent-os orchestrator run --repo <repo> --workflow WORKFLOW.md --port 4317`
+serves `GET /api/v1/state`, `GET /api/v1/<issue>`, `POST /api/v1/refresh`, and
+a small HTML shell on `GET /`. The API reads durable runtime, issue, and run
+artifacts, summarizes Codex token/rate-limit telemetry, and coalesces refresh
+requests so operator dashboards can ask for a poll/reconcile pass without
+starting a second daemon. Binding defaults to `127.0.0.1`; startup failures
+disable only the HTTP API and do not stop orchestration.
 
 Review targets are selected by `review.target_mode`: the default
 `merge-eligible` reviews `primary` and `docs` PRs, while `primary` reviews only

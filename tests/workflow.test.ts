@@ -70,6 +70,7 @@ describe("workflow", () => {
     expect(config.daemon).toMatchObject({
       mainBranchRefreshIntervalTicks: 5
     });
+    expect(config.server).toEqual({ port: null, host: "127.0.0.1" });
     expect(config.modelRouting).toEqual({ mode: "off", roles: {} });
     expect(config.review).toMatchObject({
       enabled: true,
@@ -90,6 +91,19 @@ describe("workflow", () => {
       })
     });
     expect(config.workspace.root).toContain(".agent-os/workspaces");
+  });
+
+  it("parses optional loopback server config", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-server-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\nserver:\n  port: 4317\n  host: 127.0.0.1\n---\nHello`,
+      "utf8"
+    );
+    const workflow = await loadWorkflow(workflowPath);
+    const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+    expect(config.server).toEqual({ port: 4317, host: "127.0.0.1" });
   });
 
   it("renders prompts strictly", async () => {

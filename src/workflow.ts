@@ -62,6 +62,7 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
   const codex = objectAt(cfg, "codex");
   const github = objectAt(cfg, "github");
   const daemon = objectAt(cfg, "daemon");
+  const server = objectAt(cfg, "server");
   const workflowDir = dirname(workflow.workflowPath);
   const trustMode = parseTrustMode(cfg.trust_mode);
 
@@ -138,6 +139,10 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
     daemon: {
       mainBranchRefreshIntervalTicks: positiveIntAt(daemon, "main_branch_refresh_interval_ticks", 5)
     },
+    server: {
+      port: nullablePositiveIntAt(server, "port"),
+      host: stringAt(server, "host", "127.0.0.1")
+    },
     review: {
       enabled: booleanAt(objectAt(cfg, "review"), "enabled", true),
       targetMode: reviewTargetModeAt(objectAt(cfg, "review"), "target_mode", "merge-eligible"),
@@ -152,6 +157,12 @@ export function resolveServiceConfig(workflow: WorkflowDefinition, env: NodeJS.P
       budget: reviewBudgetConfigAt(objectAt(objectAt(cfg, "review"), "budget"), positiveIntAt(objectAt(cfg, "review"), "max_iterations", 3))
     }
   };
+}
+
+function nullablePositiveIntAt(obj: Record<string, unknown>, key: string): number | null {
+  if (obj[key] == null) return null;
+  const value = positiveIntAt(obj, key, 0);
+  return value > 0 ? value : null;
 }
 
 export function validateDispatchConfig(config: ServiceConfig): void {
