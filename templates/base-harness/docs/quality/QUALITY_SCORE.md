@@ -5,7 +5,7 @@ Use this rubric to make quality expectations explicit.
 | Area | Target |
 | --- | --- |
 | Context | `AGENTS.md`, architecture, workflow, product docs, and issue prompts give agents the smallest current source of truth |
-| Validation | One local command verifies common gates and handoffs record validation evidence |
+| Validation | One local command verifies common gates, handoffs record validation evidence, and test-suite layers are documented |
 | Observability | Status, logs, run artifacts, CI state, validation timing, and app proof point operators to the next safe action |
 | Lifecycle | Workflow states, ownership, handoff outcomes, and tracker-write boundaries are documented and enforced |
 | Review loops | Review expectations, fixer iterations, escalation paths, and accepted-risk decisions are explicit |
@@ -25,5 +25,6 @@ Run:
 ./scripts/agent-check.sh
 ```
 
-Also fill in `docs/quality/APP_LEGIBILITY.md` for the project and attach
+Also fill in `docs/quality/APP_LEGIBILITY.md` and
+`docs/quality/TEST_SUITE.md` for the project and attach
 `App-Proof:` or `Proof-Artifact:` lines to handoffs when runtime proof matters.

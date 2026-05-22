@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -74,6 +74,17 @@ describe("architecture and docs checks", () => {
       stderr: expect.stringContaining("does not classify tests/new-behavior.test.ts"),
       code: 1
     });
+  });
+
+  it("keeps agent-check scripts noisy enough for long validation phases", async () => {
+    const rootScript = await readFile("scripts/agent-check.sh", "utf8");
+    const templateScript = await readFile("templates/base-harness/scripts/agent-check.sh", "utf8");
+    for (const script of [rootScript, templateScript]) {
+      expect(script).toContain("AGENT_CHECK_HEARTBEAT_SECONDS");
+      expect(script).toContain("still running after");
+      expect(script).toContain("passed in");
+      expect(script).toContain("failed in");
+    }
   });
 });
 

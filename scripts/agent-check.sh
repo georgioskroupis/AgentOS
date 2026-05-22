@@ -3,6 +3,53 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mode="full"
+heartbeat_seconds="${AGENT_CHECK_HEARTBEAT_SECONDS:-30}"
+
+case "$heartbeat_seconds" in
+  ''|*[!0-9]*)
+    heartbeat_seconds=30
+    ;;
+esac
+
+if [[ "$heartbeat_seconds" -lt 1 ]]; then
+  heartbeat_seconds=30
+fi
+
+run_phase() {
+  local label="$1"
+  shift
+  local started_at now elapsed rc pid heartbeat_pid
+  started_at="$(date +%s)"
+  echo "==> ${label} started"
+  "$@" &
+  pid="$!"
+  (
+    while sleep "$heartbeat_seconds"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        now="$(date +%s)"
+        echo "==> ${label} still running after $((now - started_at))s"
+      else
+        exit 0
+      fi
+    done
+  ) &
+  heartbeat_pid="$!"
+  if wait "$pid"; then
+    rc=0
+  else
+    rc="$?"
+  fi
+  kill "$heartbeat_pid" >/dev/null 2>&1 || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+  now="$(date +%s)"
+  elapsed="$((now - started_at))"
+  if [[ "$rc" -eq 0 ]]; then
+    echo "==> ${label} passed in ${elapsed}s"
+  else
+    echo "==> ${label} failed in ${elapsed}s"
+  fi
+  return "$rc"
+}
 
 case "${1:-}" in
   --structure-only)
@@ -40,8 +87,10 @@ required=(
   "templates/base-harness/scripts/agent-capture-proof.sh"
   "docs/quality/APP_LEGIBILITY.md"
   "docs/quality/PROOF_OF_WORK.md"
+  "docs/quality/TEST_SUITE.md"
   "templates/base-harness/docs/quality/APP_LEGIBILITY.md"
   "templates/base-harness/docs/quality/PROOF_OF_WORK.md"
+  "templates/base-harness/docs/quality/TEST_SUITE.md"
   "scripts/agent-create-pr.sh"
   "templates/base-harness/scripts/agent-create-pr.sh"
   "scripts/agent-linear-comment.sh"
@@ -117,7 +166,7 @@ bash -n "$root/templates/base-harness/scripts/agent-linear-handoff.sh"
 bash -n "$root/templates/base-harness/scripts/agent-linear-plan-issues.sh"
 bash -n "$root/scripts/agent-bootstrap-worktree.sh"
 bash -n "$root/templates/base-harness/scripts/agent-bootstrap-worktree.sh"
-node "$root/scripts/check-harness-contract.mjs"
+run_phase "harness contract" node "$root/scripts/check-harness-contract.mjs"
 
 if [[ "$mode" == "structure-only" ]]; then
   echo "AgentOS structure-only check passed."
@@ -129,15 +178,15 @@ if [[ ! -d "$root/node_modules" ]]; then
   exit 1
 fi
 
-npm --prefix "$root" run format:check
-npm --prefix "$root" run lint
-npm --prefix "$root" run typecheck
-npm --prefix "$root" run test
-npm --prefix "$root" run coverage
-npm --prefix "$root" run build
-npm --prefix "$root" run check:architecture
-npm --prefix "$root" run check:docs
-npm --prefix "$root" run check:security
-npm --prefix "$root" run check:contracts
+run_phase "format check" npm --prefix "$root" run format:check
+run_phase "lint" npm --prefix "$root" run lint
+run_phase "typecheck" npm --prefix "$root" run typecheck
+run_phase "unit/integration tests" npm --prefix "$root" run test
+run_phase "coverage" npm --prefix "$root" run coverage
+run_phase "build" npm --prefix "$root" run build
+run_phase "architecture check" npm --prefix "$root" run check:architecture
+run_phase "docs check" npm --prefix "$root" run check:docs
+run_phase "security check" npm --prefix "$root" run check:security
+run_phase "contract check" npm --prefix "$root" run check:contracts
 
 echo "AgentOS check passed."
