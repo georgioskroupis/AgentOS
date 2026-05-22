@@ -7,7 +7,7 @@ import { JsonlLogger } from "./logging.js";
 import { loadRegistry, RegistryStateStore, resolveRegistryProjectPaths, type RegistryProjectSummary } from "./registry.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { formatReviewRunnerFailures } from "./review.js";
-import { formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking } from "./review-budget.js";
+import { formatReviewBudgetState, formatSplitRecommendation, isRecommendOnlySplitRecommendation, isReviewSplitRecommendationBlocking } from "./review-budget.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
 import { daemonCredentialDetails, daemonRuntimeDetails, getDaemonStatus } from "./status-daemon.js";
 import { branchUpdateDetails } from "./status-branch-update.js";
@@ -355,15 +355,6 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   if (issue.lifecycleStatus === "externally_fixed" || decision?.type === "proceed_to_merge_after_supervisor_fix") {
     return "verify fresh validation and green CI, then move the issue to Merging; do not redispatch Codex unless a new fix-findings decision is recorded";
   }
-  if (isReviewSplitRecommendationBlocking(issue)) {
-    return "record a split-follow-up decision or create linked follow-up issue(s) before another broad review/fix iteration";
-  }
-  if (isActiveCiRetryWait(issue)) {
-    return "wait for the GitHub Actions rerun to settle, refresh PR status, and continue review only on the selected head";
-  }
-  if (issue.ciRetry?.status === "exhausted" || issue.ciRetry?.status === "failed") {
-    return "inspect the failed check and record a human decision before retrying, repairing, or accepting risk";
-  }
   if (hasApprovedPullRequest(issue)) {
     return "mark the PR ready only after fresh validation and green CI, then move the issue to Merging for the shepherd";
   }
@@ -372,6 +363,18 @@ function nextSafeAction(issue: IssueState, recovery: WorkspaceRecoveryDiagnostic
   }
   if (decision?.type === "approve_as_is" || decision?.type === "accept_risk" || decision?.type === "split_follow_up") {
     return "keep Codex paused; move to Merging only when remaining risk is accepted and required validation/CI evidence is fresh";
+  }
+  if (isRecommendOnlySplitRecommendation(issue.splitRecommendation)) {
+    return "continue bounded mechanical repair when safe, or record a split-follow-up decision if the advisory identifies broad follow-up work";
+  }
+  if (isReviewSplitRecommendationBlocking(issue)) {
+    return "record a split-follow-up decision or create linked follow-up issue(s) before another broad review/fix iteration";
+  }
+  if (isActiveCiRetryWait(issue)) {
+    return "wait for the GitHub Actions rerun to settle, refresh PR status, and continue review only on the selected head";
+  }
+  if (issue.ciRetry?.status === "exhausted" || issue.ciRetry?.status === "failed") {
+    return "inspect the failed check and record a human decision before retrying, repairing, or accepting risk";
   }
   if (issue.reviewStatus === "human_required" || issue.phase === "human-required") {
     if (latestReviewRunnerFailure(issue)) {
@@ -396,7 +399,7 @@ function isActiveCiRetryWait(issue: IssueState): boolean {
 }
 
 function isSplitRecommendationAdvisory(issue: IssueState | null): boolean {
-  return Boolean(issue && (issue.reviewStatus === "approved" || isAuthoritativeTerminalIssueState(issue)));
+  return Boolean(issue && (isRecommendOnlySplitRecommendation(issue.splitRecommendation) || issue.reviewStatus === "approved" || isAuthoritativeTerminalIssueState(issue)));
 }
 
 function isCommentReadDispatchStop(issue: IssueState): boolean {

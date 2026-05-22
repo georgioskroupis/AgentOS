@@ -2,7 +2,7 @@ import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateReviewBudget, isReviewSplitRecommendationOpen, prepareReviewFollowUpProposal } from "../src/review-budget.js";
+import { evaluateReviewBudget, isReviewSplitRecommendationBlocking, isReviewSplitRecommendationOpen, prepareReviewFollowUpProposal } from "../src/review-budget.js";
 import { fakeIssue, fakeServiceConfig } from "./fixtures/agentos-fakes.js";
 import type { HumanDecisionState, ReviewFinding, ReviewSplitRecommendation, ServiceConfig } from "../src/types.js";
 
@@ -315,6 +315,20 @@ describe("review budget", () => {
 
     expect(isReviewSplitRecommendationOpen({ splitRecommendation: recommendation, humanDecisions: [oldDecision], lastHumanDecision: oldDecision })).toBe(true);
     expect(isReviewSplitRecommendationOpen({ splitRecommendation: recommendation, humanDecisions: [oldDecision, freshDecision], lastHumanDecision: freshDecision })).toBe(false);
+  });
+
+  it("keeps recommend-only split recommendations open for merge gates until decided", () => {
+    const recommendation: ReviewSplitRecommendation = {
+      recommended: true,
+      action: "recommend-only",
+      reason: "review budget exceeded for broad or non-mechanical signals",
+      summary: "Recommend split or follow-up work for AG-1: review_token_total.",
+      signals: [{ name: "review_token_total", classification: "broad", current: 250000, threshold: 200000, summary: "Review/fix token volume is 250000." }],
+      recordedAt: "2026-05-16T00:05:00.000Z"
+    };
+
+    expect(isReviewSplitRecommendationBlocking({ reviewStatus: "changes_requested", splitRecommendation: recommendation })).toBe(true);
+    expect(isReviewSplitRecommendationBlocking({ reviewStatus: "human_required", splitRecommendation: { ...recommendation, action: "prepare-draft" } })).toBe(true);
   });
 
   it("prepares a linked follow-up proposal when configured", async () => {
