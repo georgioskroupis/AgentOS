@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "certification": "VER-54 high-throughput landing",
+  "parentIssue": "VER-54",
+  "certificationIssue": "VER-87",
+  "status": "certified",
+  "sourcePrinciples": [
+    "Harness Engineering: bounded mechanical correction, review/fix loops, CI/log legibility, cheap correction, and recurring cleanup",
+    "Symphony: Linear as control plane, issues as work unit, bounded orchestration, explicit trust posture, observability, and scheduler/runner/tracker-reader boundaries"
+  ],
+  "childIssues": [
+    {
+      "id": "VER-83",
+      "role": "landing policy and branch freshness foundation",
+      "requiredForCertification": true
+    },
+    {
+      "id": "VER-84",
+      "role": "CI diagnostics and bounded flaky retry",
+      "requiredForCertification": true
+    },
+    {
+      "id": "VER-85",
+      "role": "review-comment response and draft PR readiness",
+      "requiredForCertification": true
+    },
+    {
+      "id": "VER-86",
+      "role": "merge shepherd idempotence and post-merge cleanup repair",
+      "requiredForCertification": true
+    },
+    {
+      "id": "VER-87",
+      "role": "combined certification and parent closeout",
+      "requiredForCertification": true
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "landing-gates-pass",
+      "status": "covered",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "shepherds a mergeable PR from Merging to Done without running Codex"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "blocks merge shepherding when landing validation evidence is stale for the selected head"
+        }
+      ]
+    },
+    {
+      "id": "ci-diagnostics-mechanical-flaky-ambiguous",
+      "status": "covered",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "runs a bounded CI fixer turn for mechanical failed checks with logs"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "requests bounded flaky CI reruns and records the attempt"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "escalates failed checks without logs instead of running a CI fixer"
+        }
+      ]
+    },
+    {
+      "id": "approval-and-supervisor-evidence-refresh",
+      "status": "covered",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "accepts supervisor-recovered current validation evidence and records the current CI check head"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "permits merge after authoritative split follow-up decision with fresh validation"
+        }
+      ]
+    },
+    {
+      "id": "draft-pr-ready-when-configured",
+      "status": "covered",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "marks draft approved PRs ready before auto-promoting landing when configured"
+        },
+        {
+          "path": "tests/github.test.ts",
+          "testName": "marks a draft pull request ready through the GitHub CLI boundary"
+        }
+      ]
+    },
+    {
+      "id": "selected-target-only",
+      "status": "covered",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "does not merge review-only PR roles from Merging"
+        }
+      ]
+    },
+    {
+      "id": "post-merge-cleanup",
+      "status": "covered",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "does not run merge again when recorded merge state is already terminal"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "records cleanup warnings instead of retrying when local branch deletion is blocked by an AgentOS worktree"
+        },
+        {
+          "path": "tests/github.test.ts",
+          "testName": "cleans local and remote same-repository AgentOS branches after merge"
+        }
+      ]
+    },
+    {
+      "id": "default-public-template-stays-conservative",
+      "status": "covered",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "does not start merge shepherding when landing gates are only partially enabled"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "keeps default workflows from auto-promoting approved PRs toward landing"
+        },
+        {
+          "path": "tests/landing-policy.test.ts",
+          "testName": "keeps the public base workflow template out of landing mode"
+        }
+      ]
+    },
+    {
+      "id": "protected-branch-and-merge-queue-report-only",
+      "status": "covered",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "reports protected branch / merge queue requirements as report-only during branch-update planning"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "reports merge conflicts as report-only during branch-update planning and does not run gh pr update-branch"
+        }
+      ]
+    }
+  ],
+  "knownRemainingDeviations": [
+    "High-throughput landing is opt-in for trusted dogfood/internal workflows; public templates remain conservative and manual by default.",
+    "Protected branch and merge queue requirements are report-only until a future issue implements provider-specific merge-queue support.",
+    "The orchestrator still owns merge shepherd tracker transitions in orchestrator-owned mode; hybrid and agent-owned tracker writes remain separately gated."
+  ],
+  "nonMvpFutureWork": [
+    "Registry-wide final MVP certification across multiple projects.",
+    "Pluggable tracker adapters beyond Linear.",
+    "Optional HTTP dashboard and JSON API productization.",
+    "Validation/test-suite runtime optimization and cost-aware model routing."
+  ]
+}

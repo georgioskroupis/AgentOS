@@ -93,7 +93,11 @@ Use this as a lightweight rubric for harnessed repositories.
 - GitHub CI exists and the merge shepherd requires at least one successful check
   before merging the selected primary target and moving `Merging` issues to
   `Done`; post-merge cleanup failures are operator-visible warnings, not
-  implementation retries.
+  implementation retries. High-throughput landing certification is recorded in
+  `docs/releases/high-throughput-landing-certification.json`, mapping VER-54
+  child work to concrete tests for landing gates, CI diagnostics, trusted
+  decisions, draft PR readiness, selected-target merge, cleanup, conservative
+  defaults, and report-only protected-branch/merge-queue handling.
 - `agent-os orchestrator once-registry`, `agent-os orchestrator run-registry`,
   and `agent-os status --registry` coordinate multiple registered projects with
   global and per-project capacity, fair dispatch, project runner locks,

@@ -261,14 +261,19 @@ these areas:
 - Generic elicitation/user-input is denied even in the dogfood workflow. This is
   safe, but it means some valid high-trust workflows require new deterministic
   tools instead of inline approval.
-- PR feedback handling is present but not yet a mature agent-to-agent loop.
-  AgentOS can summarize feedback and run fixer turns, but the behavior is not
-  yet a broad "respond to human and agent feedback until satisfied" capability.
-- CI repair is documented through skills, but the orchestrator does not yet
-  prefer bounded mechanical repair loops when CI logs are available.
-- Merge automation exists only behind the `Merging` state and `github.merge_mode`
-  gates. The OpenAI examples describe agents often driving PRs closer to merge
-  in high-trust settings.
+- PR feedback handling is now a bounded agent-to-agent loop for configured
+  PR-producing work: review artifacts are retried narrowly, blocking mechanical
+  findings can trigger fixer turns, repeated or ambiguous findings still
+  escalate, and review budget policy recommends split/follow-up work when scope
+  is too broad.
+- CI repair and retry are opt-in high-throughput behavior: deterministic
+  same-repository Actions logs can drive focused CI fixer turns, supported flaky
+  failures can request bounded reruns, and ambiguous, logless, protected-branch,
+  merge-queue, or external checks remain report-only/human-required.
+- Merge automation exists only behind explicit landing gates, the configured
+  `Merging` state, and `github.merge_mode` gates. The dogfood workflow now also
+  supports draft PR readiness, branch freshness, selected-target merge, and
+  idempotent post-merge cleanup in that high-trust path.
 - Some missing capability failures escalate immediately to humans instead of
   opening a small capability-building issue.
 
@@ -367,10 +372,13 @@ Refactor-needed deviations:
   more dogfood before they should be considered mature.
 - Agent-owned lifecycle mode exists only as an experimental strict-validation-
   gated path. It still needs repo-local tracker tools before broad use.
-- High-throughput behavior is modeled as automation policy, but additional
-  runtime repair-loop behavior remains PR F work.
-- Review and feedback loops should escalate less often for mechanical failures
-  when policy allows bounded repair.
+- High-throughput behavior is modeled as automation policy and now includes
+  bounded CI repair/retry, draft PR readiness, branch freshness, merge
+  shepherding, and post-merge cleanup for trusted dogfood workflows. Protected
+  branch and merge queue automation remain report-only future work.
+- Review and feedback loops still need more dogfood evidence and cost/runtime
+  tuning, but mechanical failures now have bounded repair paths when trust and
+  automation policy allow them.
 - No-PR and multi-PR issue paths are documented, but need dogfood evidence and
   richer review/merge handling before they are as mature as one-PR paths.
 - Multi-PR review and merge behavior still relies on a primary PR in several
@@ -381,21 +389,22 @@ Refactor-needed deviations:
 
 ## 12. Current Source-Faithfulness Score
 
-Harness Engineering alignment: B+
+Harness Engineering alignment: A-
 
 - Strong on repository-local harnessing, short `AGENTS.md`, standard tools,
-  executable validation, validation artifacts, review loop, and run
-  observability.
-- Weaker on high-throughput feedback handling, application-legibility
-  templates, recurring cleanup, and agent-to-agent completion of PR feedback.
+  executable validation, validation artifacts, review/fix loops, CI diagnostics,
+  high-throughput landing, recurring cleanup templates, and run observability.
+- Weaker on application-legibility proof for arbitrary target projects and
+  cost/runtime optimization of broad validation.
 
-Symphony alignment: B-
+Symphony alignment: B+
 
 - Strong on issue tracker control plane, per-issue workspaces, `WORKFLOW.md`,
-  bounded dispatch, Codex App Server, explicit trust posture, and observability.
-- Weaker on scheduler/runner/tracker-reader boundary, agent-owned tracker
-  writes, full restart recovery, primary-PR assumptions, and registry-wide
-  daemon scheduling.
+  bounded dispatch, Codex App Server, explicit trust posture, durable startup
+  recovery, registry-wide scheduling, observability, and optional-PR issue
+  outcomes with explicit PR roles.
+- Weaker on scheduler/runner/tracker-reader boundary, mature agent-owned
+  tracker writes, non-Linear tracker adapters, and optional HTTP dashboard/API.
 
 Top three intentional deviations:
 
@@ -407,81 +416,29 @@ Top three intentional deviations:
 
 Top three refactor-needed deviations:
 
-1. Dogfood explicit Linear lifecycle ownership, especially `hybrid`, without
-   losing idempotency or safety.
-2. Keep automation/repair behavior separate from trust mode and add bounded
-   high-throughput repair semantics in PR F.
-3. Mature no-PR and multi-PR runtime behavior beyond the current documented
-   handoff/state semantics, especially review and merge target selection.
+1. Continue dogfooding explicit Linear lifecycle ownership, especially
+   `hybrid`, without losing idempotency or safety.
+2. Productize application legibility and proof-of-work evidence for arbitrary
+   target projects.
+3. Reduce validation/runtime cost and add optional dashboard/API surfaces
+   without weakening the existing mechanical guardrails.
 
-## 13. Recommended Next PRs C-G
+## 13. Current Dogfood Evidence
 
-PR C: Explicit lifecycle ownership.
+Current evidence is no longer a single PR-stack checkpoint. The AgentOS Linear
+roadmap has dogfooded no-PR outcomes, implementation PRs, review/fixer loops,
+CI diagnostics, flaky retry, draft readiness, branch freshness, merge
+shepherding, post-merge cleanup, durable startup reconstruction,
+registry-wide scheduling, and maintenance templates across VER-42 through the
+VER-54 child issues.
 
-- Add `lifecycle.mode` or equivalent and route Linear write decisions through it.
-- Preserve `orchestrator-owned` as the stable safe mode.
-- Add `hybrid` where practical.
-- Treat `agent-owned` as experimental and make strict validation fail unless
-  tracker tools, idempotency markers, allowed transitions, duplicate-comment
-  behavior, fallback behavior, and the durable-recovery maturity acknowledgement
-  are configured.
-- Keep lifecycle ownership separate from `trust_mode` and automation policy.
+High-throughput landing closeout evidence is recorded in
+`docs/releases/high-throughput-landing-certification.json`. That artifact maps
+VER-83 through VER-87 to concrete tests for enabled landing gates,
+mechanical/flaky/ambiguous CI outcomes, trusted decision evidence refresh,
+draft PR readiness, selected-target merge, cleanup warnings, conservative
+public defaults, and protected-branch/merge-queue report-only behavior.
 
-PR D: High-throughput automation profile definition.
-
-- Do not add `high-throughput` as a `trust_mode`.
-- Keep `trust_mode` for sandbox, network, and tool permissions only.
-- Add `automation.profile` and `automation.repair_policy` for repair-loop
-  behavior.
-- Define high-throughput as bounded repair/feedback behavior that prefers cheap
-  mechanical correction when policy allows it, without activating new runtime
-  loops until PR F.
-
-PR E: Recenter the system on issues, not PRs.
-
-- Done in PR E for workflow docs, templates, skills, runbooks, state tests, and
-  the primary-PR compatibility path.
-- Remaining follow-up: dogfood no-PR, investigation-only, planning-only, and
-  multi-PR examples before broadening review or merge behavior.
-
-PR F: Make review and feedback loops more agent-to-agent, less human-blocking.
-
-- Keep separate from PR D: PR D defines profiles and capabilities; PR F changes
-  bounded loop behavior.
-- Preserve `review.max_iterations` and repeated-finding detection.
-- Prefer fixer/CI-diagnostics loops for mechanical issues where trust and
-  automation policy permit.
-- Escalate for ambiguous requirements, safety/security judgment, repeated
-  failure, missing capability, or denied approval/user-input.
-
-PR G: Improve agent legibility checklist for future projects.
-
-- Add template/runbook guidance for startup, logs, smoke tests, metrics, traces,
-  screenshots/video, browser inspection, CI logs, validation artifacts, quality
-  score, doc-gardening, and cleanup.
-- Maintain recurring issue templates for doc-gardening, quality, drift, and
-  cleanup reporting.
-- Keep checks lightweight unless a mechanical invariant is obvious.
-
-After PRs C-G, validate Stage 9A durable retry/startup reconstruction in
-dogfood before true multi-project daemon scheduling.
-
-## 14. Dogfood Evidence
-
-Current dogfood evidence supports moving from PR A to this audit PR:
-
-- VER-40 created branch `agent/VER-40`.
-- Commit `b78b990` was produced.
-- Draft PR #22 was opened through deterministic PR creation.
-- No MCP elicitation occurred.
-- Validation evidence was accepted.
-- Review artifacts were written from the review sandbox and approved.
-- Linear moved to `Human Review`.
-- Run `run_20260501155028_VER-40_c3e8cf` finished `succeeded`.
-- `runs inspect` reported no warnings.
-- Workspace locks were released.
-- Runtime `.agent-os/` stayed ignored and uncommitted.
-
-This evidence proves the immediate VER-39 blocker is cleared. It does not prove
-that broad dogfood should resume or that PR C-G behavior is safe to implement
-without the staged reviews above.
+The remaining MVP evidence should focus on final end-to-end certification,
+application legibility proof for target projects, validation/runtime cost, and
+optional operator surfaces rather than re-proving the completed PR C-G stack.
