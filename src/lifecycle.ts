@@ -93,6 +93,10 @@ export function usesFullOrchestratorHandoff(config: ServiceConfig): boolean {
   return config.lifecycle.mode === "orchestrator-owned";
 }
 
+export function lifecycleAllowsClientTrackerTools(config: ServiceConfig): boolean {
+  return config.lifecycle?.mode === "agent-owned";
+}
+
 export function hybridHandoffComment(input: { issueIdentifier: string; workspacePath: string; reviewStatus?: string; reviewIteration?: number }): string {
   const reviewLine = input.reviewStatus
     ? [`- Automated review status: \`${input.reviewStatus}\`${input.reviewIteration ? ` after iteration ${input.reviewIteration}` : ""}`]

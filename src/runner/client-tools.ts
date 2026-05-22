@@ -1,4 +1,5 @@
-import type { ServiceConfig } from "./types.js";
+import { lifecycleAllowsClientTrackerTools } from "../lifecycle.js";
+import type { ServiceConfig } from "../types.js";
 
 type FetchLike = typeof fetch;
 
@@ -38,7 +39,7 @@ export function linearGraphqlClientTools(config: ServiceConfig): ClientToolDefin
 }
 
 export function isLinearGraphqlToolAvailable(config: ServiceConfig): boolean {
-  return config.lifecycle?.mode === "agent-owned" && config.tracker.kind === "linear" && Boolean(config.tracker.apiKey);
+  return lifecycleAllowsClientTrackerTools(config) && config.tracker.kind === "linear" && Boolean(config.tracker.apiKey);
 }
 
 export async function handleClientToolCall(input: {
@@ -55,7 +56,7 @@ export async function handleClientToolCall(input: {
 
 export async function executeLinearGraphql(config: ServiceConfig, rawInput: unknown, fetchImpl: FetchLike = fetch): Promise<LinearGraphqlToolResult> {
   if (config.tracker.kind !== "linear") return { success: false, error: { code: "unsupported_tracker_kind", message: "linear_graphql requires tracker.kind=linear" } };
-  if (config.lifecycle.mode !== "agent-owned") return { success: false, error: { code: "tool_unavailable", message: "linear_graphql is available only in lifecycle.mode=agent-owned" } };
+  if (!lifecycleAllowsClientTrackerTools(config)) return { success: false, error: { code: "tool_unavailable", message: "client tracker tools are not enabled for this lifecycle mode" } };
   if (!config.tracker.apiKey) return { success: false, error: { code: "missing_auth", message: "Linear API key is not configured" } };
 
   const parsed = parseLinearGraphqlInput(rawInput);

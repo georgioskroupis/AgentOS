@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { executeLinearGraphql, handleClientToolCall, linearGraphqlClientTools } from "../src/linear-graphql-tool.js";
+import { executeLinearGraphql, handleClientToolCall, linearGraphqlClientTools } from "../src/runner/client-tools.js";
 import { fakeServiceConfig } from "./fixtures/agentos-fakes.js";
 
 describe("linear_graphql client tool", () => {

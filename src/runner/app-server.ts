@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
-import { handleClientToolCall, linearGraphqlClientTools } from "../linear-graphql-tool.js";
 import { defaultModelRoutingConfig, modelTelemetry, selectModelRoute } from "../model-routing.js";
 import { BoundedTextAccumulator, summarizeText } from "../output-capture.js";
 import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js";
+import { handleClientToolCall, linearGraphqlClientTools } from "./client-tools.js";
 import { codexCommandStop } from "./command-stop.js";
 import { isBenignCodexPluginStderr } from "./stderr-classification.js";
 

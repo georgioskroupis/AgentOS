@@ -163,10 +163,7 @@ export interface ServiceConfig {
   daemon: {
     mainBranchRefreshIntervalTicks: number;
   };
-  server?: {
-    port: number | null;
-    host: string;
-  };
+  server?: { port: number | null; host: string };
   review: {
     enabled: boolean;
     targetMode?: ReviewTargetMode;
@@ -641,7 +638,6 @@ export interface ReviewRunnerFailure {
   exhausted: boolean;
   recordedAt: string;
 }
-
 export interface ReviewFinding {
   reviewer: string;
   decision: "approved" | "changes_requested" | "human_required";
