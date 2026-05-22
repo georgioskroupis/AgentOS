@@ -88,6 +88,9 @@ required=(
   "docs/quality/APP_LEGIBILITY.md"
   "docs/quality/PROOF_OF_WORK.md"
   "docs/quality/TEST_SUITE.md"
+  "dashboard/index.html"
+  "dashboard/README.md"
+  "dashboard/serve.sh"
   "templates/base-harness/docs/quality/APP_LEGIBILITY.md"
   "templates/base-harness/docs/quality/PROOF_OF_WORK.md"
   "templates/base-harness/docs/quality/TEST_SUITE.md"
@@ -125,6 +128,7 @@ required=(
   "src/review.ts"
   "src/setup-wizard.ts"
   "scripts/check-architecture.mjs"
+  "scripts/check-dashboard.mjs"
   "scripts/check-harness-contract.mjs"
 )
 
@@ -166,6 +170,7 @@ bash -n "$root/templates/base-harness/scripts/agent-linear-handoff.sh"
 bash -n "$root/templates/base-harness/scripts/agent-linear-plan-issues.sh"
 bash -n "$root/scripts/agent-bootstrap-worktree.sh"
 bash -n "$root/templates/base-harness/scripts/agent-bootstrap-worktree.sh"
+bash -n "$root/dashboard/serve.sh"
 run_phase "harness contract" node "$root/scripts/check-harness-contract.mjs"
 
 if [[ "$mode" == "structure-only" ]]; then
@@ -185,6 +190,7 @@ run_phase "unit/integration tests" npm --prefix "$root" run test
 run_phase "coverage" npm --prefix "$root" run coverage
 run_phase "build" npm --prefix "$root" run build
 run_phase "architecture check" npm --prefix "$root" run check:architecture
+run_phase "dashboard check" npm --prefix "$root" run check:dashboard
 run_phase "docs check" npm --prefix "$root" run check:docs
 run_phase "security check" npm --prefix "$root" run check:security
 run_phase "contract check" npm --prefix "$root" run check:contracts

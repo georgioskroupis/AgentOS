@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { IssueStateStore } from "./issue-state.js";
 import { RunArtifactStore, type RunSummary } from "./runs.js";
 import { RuntimeStateStore, type RuntimeState } from "./runtime-state.js";
@@ -152,7 +154,7 @@ async function routeRequest(input: {
   const method = input.request.method ?? "GET";
   const url = new URL(input.request.url ?? "/", "http://127.0.0.1");
   if (method === "GET" && url.pathname === "/") {
-    writeHtml(input.response, dashboardShell());
+    writeHtml(input.response, await dashboardShell(input.repoRoot));
     return;
   }
   if (url.pathname === "/api/v1/state") {
@@ -220,8 +222,11 @@ function errorEnvelope(code: string, message: string): { success: false; error: 
   return { success: false, error: { code, message } };
 }
 
-function dashboardShell(): string {
-  return `<!doctype html>
+async function dashboardShell(repoRoot: string): Promise<string> {
+  try {
+    return await readFile(join(repoRoot, "dashboard", "index.html"), "utf8");
+  } catch {
+    return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -241,6 +246,7 @@ function dashboardShell(): string {
   </script>
 </body>
 </html>`;
+  }
 }
 
 function listen(server: Server, port: number, host: string): Promise<void> {

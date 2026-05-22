@@ -233,6 +233,13 @@ continues to hide direct tracker tools, unsupported tool calls receive a
 structured failure, and durable recovery of fully agent-owned tracker writes
 remains experimental until later validation proves the boundary end to end.
 
+VER-96 and VER-106 add a local observability surface for the scheduler/runner
+boundary. The optional loopback HTTP API exposes durable runtime, issue, run,
+retry, token, and rate-limit summaries plus a coalesced refresh hook; the
+dashboard consumes that API directly instead of scraping files or starting a
+parallel daemon. This follows Symphony's separation between orchestration state
+and operator visibility while keeping Linear as the steering control plane.
+
 ## 6. Where AgentOS Is More PR-Centric Than Symphony
 
 AgentOS has corrected the most obvious PR-centric drift:

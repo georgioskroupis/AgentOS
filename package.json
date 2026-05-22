@@ -10,6 +10,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "check:architecture": "node scripts/check-architecture.mjs",
     "check:contracts": "node scripts/check-harness-contract.mjs",
+    "check:dashboard": "node scripts/check-dashboard.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:security": "node scripts/check-security.mjs",
     "coverage": "vitest run --coverage --testTimeout=30000",
