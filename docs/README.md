@@ -17,6 +17,7 @@ Start with:
 - `docs/architecture/AGENT_OS.md`
 - `docs/decisions/README.md`
 - `docs/planning/SOURCE_ALIGNMENT_AUDIT.md`
+- `docs/releases/high-throughput-landing-certification.json`
 - `docs/runbooks/README.md`
 - `docs/runbooks/LINEAR_SETUP.md`
 - `docs/runbooks/MAINTENANCE.md`
