@@ -51,8 +51,10 @@ function checkCliDoesNotOwnDomainLogic() {
 }
 
 function checkLifecycleBoundaryContracts() {
-  const lifecycleEvents = read("src/lifecycle-events.ts");
-  if (lifecycleEvents) {
+  const lifecycleEvents = readOptional("src/lifecycle-events.ts");
+  if (lifecycleEvents == null) {
+    fail("src/lifecycle-events.ts lifecycle boundary contract file is missing", "Add src/lifecycle-events.ts before lifecycle extraction.");
+  } else {
     for (const token of [
       "export const lifecycleActors",
       "export type LifecycleActor",
@@ -88,8 +90,10 @@ function checkLifecycleBoundaryContracts() {
     }
   }
 
-  const trackerBoundaries = read("src/tracker-boundaries.ts");
-  if (trackerBoundaries) {
+  const trackerBoundaries = readOptional("src/tracker-boundaries.ts");
+  if (trackerBoundaries == null) {
+    fail("src/tracker-boundaries.ts tracker boundary contract file is missing", "Add src/tracker-boundaries.ts before lifecycle extraction.");
+  } else {
     for (const token of ["export interface TrackerReader", "export interface TrackerLifecycleWriter", "export interface TrackerCapabilities"]) {
       if (!trackerBoundaries.includes(token)) {
         fail("src/tracker-boundaries.ts is missing tracker boundary capability types", `Add ${token} so tracker reads and lifecycle writes are separated at the type boundary.`);
@@ -282,6 +286,12 @@ function read(path) {
     return null;
   }
   if (!statSync(fullPath).isFile()) return null;
+  return readFileSync(fullPath, "utf8");
+}
+
+function readOptional(path) {
+  const fullPath = join(root, path);
+  if (!existsSync(fullPath) || !statSync(fullPath).isFile()) return null;
   return readFileSync(fullPath, "utf8");
 }
 

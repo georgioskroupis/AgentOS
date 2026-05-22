@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -38,6 +38,28 @@ describe("architecture and docs checks", () => {
     });
     await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
       stderr: expect.stringContaining("above the 650-line budget"),
+      code: 1
+    });
+  });
+
+  it("reports a missing lifecycle boundary contract file", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-lifecycle-file-missing-"));
+    await writeArchitectureFixture(repo);
+    await rm(join(repo, "src", "lifecycle-events.ts"));
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringMatching(/src\/lifecycle-events\.ts lifecycle boundary contract file is missing[\s\S]*Add src\/lifecycle-events\.ts before lifecycle extraction/),
+      code: 1
+    });
+  });
+
+  it("reports a missing tracker boundary contract file", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-tracker-file-missing-"));
+    await writeArchitectureFixture(repo);
+    await rm(join(repo, "src", "tracker-boundaries.ts"));
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringMatching(/src\/tracker-boundaries\.ts tracker boundary contract file is missing[\s\S]*Add src\/tracker-boundaries\.ts before lifecycle extraction/),
       code: 1
     });
   });
