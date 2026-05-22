@@ -112,10 +112,12 @@ the cross-boundary assertion.
 | `tests/github.test.ts` | Boundary | GitHub CLI boundary, PR status, CI diagnostics, branch updates, readiness, merge, and cleanup semantics |
 | `tests/harness.test.ts` | Boundary | Harness generation includes required portable project files |
 | `tests/high-throughput-certification.test.ts` | Certification | VER-54 certification evidence points to real tests |
+| `tests/http-server.test.ts` | Boundary | Optional loopback HTTP API exposes durable runtime/issue/run summaries and coalesces refresh requests |
 | `tests/issue-state.test.ts` | Unit | Handoff parsing, human decisions, PR roles, legacy migration, and app proof metadata |
 | `tests/landing-policy.test.ts` | Unit | High-throughput landing gates remain explicit and public defaults remain conservative |
 | `tests/landing-preflight.test.ts` | Unit | Landing preflight combines validation, CI, daemon freshness, branch freshness, and report-only blockers |
 | `tests/linear-planned-issues.test.ts` | Boundary | Planning-to-DAG issue creation, idempotency markers, blockers, and credential failure behavior |
+| `tests/linear-graphql-tool.test.ts` | Boundary | Agent-owned Linear GraphQL client tool advertising, input validation, structured failures, and credential reuse |
 | `tests/linear.test.ts` | Boundary | Linear pagination, comments, markers, state moves, relations, and setup-state creation |
 | `tests/maintenance.test.ts` | Boundary | Maintenance templates and seeding helper stay available and structurally valid |
 | `tests/mvp-certification.test.ts` | Certification | MVP certification evidence and source-alignment score remain current |
@@ -137,6 +139,7 @@ the cross-boundary assertion.
 | `tests/scope-report.test.ts` | Unit | Pre-dispatch scope scoring, decomposition evidence, existing implementation audits, and planning guardrails |
 | `tests/setup-wizard.test.ts` | Boundary | Setup wizard dry runs, workflow preservation, review defaults, and local harness installation |
 | `tests/status.test.ts` | Integration | Operator status output, inspect text, daemon freshness, waits, recovery, CI, and next safe actions |
+| `tests/tracker-adapters.test.ts` | Unit | Tracker adapter registry, fake adapter registration, unsupported-kind errors, and issue normalization |
 | `tests/trust.test.ts` | Unit | Trust-mode sandbox/network/tool policy parsing and validation |
 | `tests/validation.test.ts` | Unit | Validation evidence freshness, final-result semantics, reuse profiles, and duplicate full validation detection |
 | `tests/workflow.test.ts` | Unit | Workflow parsing, strict config validation, automation axes, review/merge targets, and public defaults |

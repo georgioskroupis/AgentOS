@@ -112,6 +112,15 @@ or `PATH`, append fixed policy options after user arguments, require lifecycle
 workflow files to stay inside the repo, and reject PR metadata that does not
 belong to the current GitHub repository.
 
+When `lifecycle.mode` is `agent-owned`, the Codex App Server runner may
+advertise a `linear_graphql` client tool to the agent. The tool is intentionally
+hidden from `orchestrator-owned` and `hybrid` runs, requires `tracker.kind:
+linear`, and reuses the configured Linear endpoint and API key without exposing
+the key in the tool schema or prompt. It accepts exactly one GraphQL operation
+with a JSON-object variables payload and returns structured success or failure
+objects so unsupported tools, missing credentials, invalid input, GraphQL
+errors, or transport failures fail closed instead of stalling a turn.
+
 ## Automation And Repair Behavior
 
 Automation policy is not a permission model. It describes how AgentOS should

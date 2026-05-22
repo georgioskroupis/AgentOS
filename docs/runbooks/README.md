@@ -17,3 +17,4 @@ Key runbooks:
 - `MIGRATIONS.md`
 - `DOGFOODING.md`
 - `MAINTENANCE.md`
+- `TRACKER_ADAPTERS.md`

@@ -13,7 +13,6 @@ import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue,
 import { JsonlLogger } from "./logging.js";
 import { initialDaemonFreshnessState, isDaemonFreshnessStale } from "./daemon-freshness.js";
 import { type ReadDaemonIdentityOptions } from "./daemon-identity.js";
-import { LinearClient } from "./linear.js";
 import { summarizeText } from "./output-capture.js";
 import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
 import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequestRefsForUrls } from "./context-pack.js";
@@ -55,6 +54,7 @@ import { validationEvidenceFinding, verifyValidationEvidence } from "./validatio
 import { validationRunContext, verifyHandoffValidationEvidence } from "./orchestrator-validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { createWorkspaceForRun } from "./orchestrator-workspace-bootstrap.js";
+import { createIssueTracker } from "./tracker-adapters.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; }
@@ -125,7 +125,7 @@ export class Orchestrator {
     if (this.options.maxConcurrentAgents != null && Number.isInteger(this.options.maxConcurrentAgents) && this.options.maxConcurrentAgents > 0) {
       this.config.agent.maxConcurrentAgents = Math.min(this.config.agent.maxConcurrentAgents, this.options.maxConcurrentAgents);
     }
-    this.tracker = this.options.tracker ?? new LinearClient(this.config.tracker);
+    this.tracker = this.options.tracker ?? createIssueTracker(this.config);
     this.runner = this.options.runner ?? new CodexAppServerRunner();
   }
 

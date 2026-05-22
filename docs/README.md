@@ -26,6 +26,7 @@ Start with:
 - `docs/runbooks/ROLLOUT.md`
 - `docs/runbooks/MIGRATIONS.md`
 - `docs/runbooks/DOGFOODING.md`
+- `docs/runbooks/TRACKER_ADAPTERS.md`
 - `docs/security/SECURITY.md`
 - `docs/security/ORCHESTRATOR_TRUST_MODEL.md`
 - `docs/releases/v0.1.0-rc1.md`

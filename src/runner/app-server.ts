@@ -3,6 +3,7 @@ import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
 import { defaultModelRoutingConfig, modelTelemetry, selectModelRoute } from "../model-routing.js";
 import { BoundedTextAccumulator, summarizeText } from "../output-capture.js";
 import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js";
+import { handleClientToolCall, linearGraphqlClientTools } from "./client-tools.js";
 import { codexCommandStop } from "./command-stop.js";
 import { isBenignCodexPluginStderr } from "./stderr-classification.js";
 
@@ -81,6 +82,10 @@ export class CodexAppServerRunner implements AgentRunner {
 
     const notify = (method: string, params: Record<string, unknown> = {}) => {
       child.stdin.write(`${JSON.stringify({ method, params })}\n`);
+    };
+
+    const respond = (requestId: number, result: unknown) => {
+      child.stdin.write(`${JSON.stringify({ id: requestId, result })}\n`);
     };
 
     const failAppServer = (error: Error) => {
@@ -175,6 +180,19 @@ export class CodexAppServerRunner implements AgentRunner {
             pending.delete(message.id);
             if (message.error) pendingRequest.reject(new Error(JSON.stringify(message.error)));
             else pendingRequest.resolve(message.result);
+          } else if (typeof message.id === "number" && isClientToolCallRequest(message)) {
+            const tool = clientToolCallFromMessage(message);
+            void handleClientToolCall({ config: input.config, name: tool.name, arguments: tool.arguments }).then((result) => {
+              respond(message.id, result);
+              input.onEvent({
+                type: "client_tool_result",
+                issueId: input.issue.id,
+                issueIdentifier: input.issue.identifier,
+                message: `${tool.name}: ${result.success ? "success" : result.error?.code ?? "failed"}`,
+                payload: { tool: tool.name, success: result.success, error: result.error },
+                timestamp: new Date().toISOString()
+              });
+            });
           } else {
             threadId = message.params?.threadId ?? message.params?.thread?.id ?? message.params?.thread_id ?? message.thread_id ?? threadId;
             turnId = message.params?.turnId ?? message.params?.turn?.id ?? message.params?.turn_id ?? message.turn_id ?? turnId;
@@ -272,7 +290,8 @@ export class CodexAppServerRunner implements AgentRunner {
           version: "0.1.0"
         },
         capabilities: {
-          experimentalApi: true
+          experimentalApi: true,
+          clientTools: linearGraphqlClientTools(input.config)
         }
       });
       notify("initialized");
@@ -501,6 +520,19 @@ function codexEventPolicyViolation(
     return "codex_user_input_request_denied";
   }
   return null;
+}
+
+function isClientToolCallRequest(message: Record<string, any>): boolean {
+  const method = String(message.method ?? "");
+  return method === "clientTool/call" || method === "tool/call" || method === "tools/call";
+}
+
+function clientToolCallFromMessage(message: Record<string, any>): { name: string; arguments: unknown } {
+  const params = message.params ?? {};
+  return {
+    name: String(params.name ?? params.toolName ?? params.tool ?? ""),
+    arguments: params.arguments ?? params.input ?? params.args ?? {}
+  };
 }
 
 function captureShell(command: string, timeoutMs: number): Promise<string> {

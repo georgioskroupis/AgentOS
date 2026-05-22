@@ -22,6 +22,16 @@ The orchestrator reads eligible Linear issues, creates deterministic workspaces,
 renders strict prompts from `WORKFLOW.md`, launches Codex App Server runs, and
 records JSONL events for status inspection.
 
+Tracker access is adapter-backed. `tracker.kind` selects a registered adapter;
+`linear` is the built-in production adapter, while tests can register fake
+adapters through the same factory. Every adapter must return the normalized
+Issue domain model: stable `id` and `identifier`, state name, integer-or-null
+priority, ISO-8601 timestamps or null, lowercased labels, parent/child refs,
+and blockers represented through inverse `blocks`/`blocked_by` relations. The
+required operations are candidate fetch by active state, issue fetch by ids, and
+issue state lookup by ids; comments, moves, terminal scans, and idempotent
+upserts are optional capabilities used only when the workflow path needs them.
+
 It keeps orchestration logic narrow:
 
 - Linear is the scheduler control plane.
@@ -104,6 +114,11 @@ It keeps orchestration logic narrow:
   transient tracker/network failures from issue run failures, surfaces daemon
   freshness after `main` advances, shows CI/review/merge/retry waits, and
   preserves local validation timing evidence alongside GitHub CI authority.
+- The optional loopback HTTP API is disabled by default and can be enabled with
+  `server.port` or `agent-os orchestrator run --port <number>`. It serves
+  durable runtime, issue, run, Codex token, and rate-limit summaries from
+  `GET /api/v1/state`, per-issue detail from `GET /api/v1/<issue>`, and a
+  coalesced `POST /api/v1/refresh` hook for operator dashboards.
 - Phase timing is a durable measurement surface stored in run summaries and
   events. Operator-facing timing reports and SLO diagnostics are a separate
   reporting layer, not part of the measurement-only timing recorder.

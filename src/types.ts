@@ -45,7 +45,7 @@ export interface ProjectConfig {
   workflow?: string;
   harnessProfile?: HarnessProfile;
   tracker?: {
-    kind: "linear";
+    kind: string;
     projectSlug: string;
   };
   maxConcurrency?: number;
@@ -102,7 +102,7 @@ export interface ServiceConfig {
     trustedDecisionActors: string[];
   };
   tracker: {
-    kind: "linear";
+    kind: string;
     endpoint: string;
     apiKey: string;
     projectSlug: string;
@@ -163,6 +163,7 @@ export interface ServiceConfig {
   daemon: {
     mainBranchRefreshIntervalTicks: number;
   };
+  server?: { port: number | null; host: string };
   review: {
     enabled: boolean;
     targetMode?: ReviewTargetMode;
@@ -637,7 +638,6 @@ export interface ReviewRunnerFailure {
   exhausted: boolean;
   recordedAt: string;
 }
-
 export interface ReviewFinding {
   reviewer: string;
   decision: "approved" | "changes_requested" | "human_required";
