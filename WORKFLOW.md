@@ -201,6 +201,13 @@ Lifecycle `--file` arguments must be relative paths inside the repository, and
 must point at GitHub pull requests in the current repository before it is stored
 or posted.
 
+Experimental `agent-owned` Linear workflows can also receive a Codex App Server
+client tool named `linear_graphql`. The tool is advertised only for
+`tracker.kind: linear` with configured Linear credentials, accepts a single
+GraphQL operation plus optional object variables, and returns structured
+success/failure results. `orchestrator-owned` and `hybrid` runs do not receive
+that direct GraphQL tool.
+
 Human supervisors may use the by-identifier operator helpers in
 `orchestrator-owned` mode instead of direct GraphQL or Linear UUID writes:
 

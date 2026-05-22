@@ -26,6 +26,7 @@ const longRawStdoutAndStderrFixtureCommand = `node ${JSON.stringify(fixture)} --
 const ongoingRawStdoutFixtureCommand = `node ${JSON.stringify(fixture)} --ongoing-raw-stdout`;
 const largeJsonEventSplitFixtureCommand = `node ${JSON.stringify(fixture)} --large-json-event-split`;
 const oversizedJsonLikeStdoutFixtureCommand = `node ${JSON.stringify(fixture)} --oversized-json-like-stdout`;
+const clientToolFixtureCommand = `node ${JSON.stringify(fixture)} --expect-linear-graphql-tool --client-tool-unsupported`;
 
 const issue: Issue = {
   id: "issue-1",
@@ -181,6 +182,29 @@ describe("CodexAppServerRunner", () => {
         onEvent() {}
       })
     ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+  });
+
+  it("advertises agent-owned linear_graphql and answers unsupported client tool calls", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-client-tool-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, clientToolFixtureCommand);
+    config.lifecycle.mode = "agent-owned";
+    const events: AgentEvent[] = [];
+
+    await expect(
+      new CodexAppServerRunner().run({
+        issue,
+        prompt: "Exercise client tools",
+        attempt: null,
+        workspace,
+        config,
+        onEvent(event) {
+          events.push(event);
+        }
+      })
+    ).resolves.toMatchObject({ status: "succeeded", threadId: "thread-1", turnId: "turn-1" });
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "client_tool_result", message: "unknown_tool: unsupported_tool" }));
   });
 
   it("bounds raw stdout without splitting large protocol events", async () => {
@@ -649,6 +673,17 @@ function restoreEnv(key: string, value: string | undefined): void {
 function runnerConfig(workspacePath: string, command: string): ServiceConfig {
   return {
     trustMode: "ci-locked",
+    automation: { profile: "conservative", repairPolicy: "conservative" },
+    lifecycle: {
+      mode: "orchestrator-owned",
+      allowedTrackerTools: [],
+      idempotencyMarkerFormat: null,
+      allowedStateTransitions: [],
+      duplicateCommentBehavior: null,
+      fallbackBehavior: null,
+      maturityAcknowledgement: null,
+      trustedDecisionActors: []
+    },
     tracker: {
       kind: "linear",
       endpoint: "https://api.linear.app/graphql",
@@ -667,6 +702,7 @@ function runnerConfig(workspacePath: string, command: string): ServiceConfig {
     agent: { maxConcurrentAgents: 1, maxTurns: 20, maxRetryAttempts: 3, maxRetryBackoffMs: 1000, maxConcurrentAgentsByState: new Map() },
     contextBudget: { enabled: true, maxPromptTokens: 200_000, maxCumulativeTokens: 1_000_000, largeSectionTokens: 8_000 },
     validationBudget: { enabled: true, fullValidationCommand: "npm run agent-check", maxFullValidationRunsPerHead: 1 },
+    modelRouting: { mode: "off", roles: {} },
     codex: {
       command,
       approvalPolicy: "never",

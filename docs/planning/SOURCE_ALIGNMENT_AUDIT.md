@@ -224,6 +224,15 @@ authoritative. Structured decisions in that path retain actor, source, and
 authority metadata; unapproved authors are preserved as context-only evidence
 and do not drive lifecycle continuation.
 
+VER-95 adds the first client-side tracker tool for the experimental
+`agent-owned` boundary. The Codex App Server runner advertises `linear_graphql`
+only when the workflow opts into `agent-owned`, the tracker adapter is Linear,
+and Linear credentials are configured. That closes the basic Symphony-aligned
+tool-extension gap without changing the safe default: `orchestrator-owned`
+continues to hide direct tracker tools, unsupported tool calls receive a
+structured failure, and durable recovery of fully agent-owned tracker writes
+remains experimental until later validation proves the boundary end to end.
+
 ## 6. Where AgentOS Is More PR-Centric Than Symphony
 
 AgentOS has corrected the most obvious PR-centric drift:

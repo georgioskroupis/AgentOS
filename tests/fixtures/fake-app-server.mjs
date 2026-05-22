@@ -16,7 +16,24 @@ function write(message) {
 
 rl.on("line", (line) => {
   const message = JSON.parse(line);
+  if (message.id === 99 && Object.prototype.hasOwnProperty.call(message, "result")) {
+    write({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" }
+      }
+    });
+    return;
+  }
   if (message.method === "initialize") {
+    if (process.argv.includes("--expect-linear-graphql-tool")) {
+      const tools = message.params?.capabilities?.clientTools ?? [];
+      if (!tools.some((tool) => tool?.name === "linear_graphql")) {
+        write({ id: message.id, error: { message: "missing linear_graphql client tool" } });
+        return;
+      }
+    }
     write({ id: message.id, result: { userAgent: "fake", codexHome: "/tmp", platformFamily: "unix", platformOs: "test" } });
   } else if (message.method === "thread/start") {
     if (strictSandbox && message.params?.sandbox !== "workspace-write") {
@@ -60,6 +77,17 @@ rl.on("line", (line) => {
           serverName: "github",
           mode: "form",
           type: "mcp_elicitation"
+        }
+      });
+      return;
+    }
+    if (process.argv.includes("--client-tool-unsupported")) {
+      write({
+        id: 99,
+        method: "clientTool/call",
+        params: {
+          name: "unknown_tool",
+          arguments: {}
         }
       });
       return;
