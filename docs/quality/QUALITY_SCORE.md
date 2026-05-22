@@ -5,7 +5,7 @@ Use this as a lightweight rubric for harnessed repositories.
 | Area | Target |
 | --- | --- |
 | Context | `AGENTS.md`, architecture, workflow, product docs, and targeted context packs give agents the smallest current source of truth |
-| Validation | One local command verifies common gates, validation evidence records command attempts, and unchanged-head reuse is explicit |
+| Validation | One local command verifies common gates, validation evidence records command attempts, unchanged-head reuse is explicit, and test-suite layers are documented |
 | Observability | `status`, `inspect`, run artifacts, sanitized logs, validation timing, CI state, and app proof point operators to the next safe action |
 | Lifecycle | Workflow states, lifecycle ownership, Linear comments, handoff outcomes, and tracker-write boundaries are documented and enforced |
 | Review loops | Required reviewers, reviewer artifacts, fixer iterations, review budgets, and human escalation paths are explicit |
@@ -26,6 +26,7 @@ Use this as a lightweight rubric for harnessed repositories.
 - `docs/quality/APP_LEGIBILITY.md`
 - `docs/quality/PROOF_OF_WORK.md`
 - `docs/quality/QUALITY_SCORE.md`
+- `docs/quality/TEST_SUITE.md`
 - `scripts/agent-check.sh`
 - `.agents/skills/fix-bug/SKILL.md`
 - `.agents/skills/implement-feature/SKILL.md`
