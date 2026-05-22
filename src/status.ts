@@ -12,6 +12,7 @@ import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from
 import { daemonCredentialDetails, daemonRuntimeDetails, getDaemonStatus } from "./status-daemon.js";
 import { branchUpdateDetails } from "./status-branch-update.js";
 import { contextBudgetDetails, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
+import { externalStateDriftDetails, externalStateDriftWarning } from "./status-state-drift.js";
 import { appendEvidenceStatus, validationDetails } from "./status-validation.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationState } from "./types.js";
@@ -127,6 +128,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     scopeReportDetails(state),
     ciRetryDetails(state),
     branchUpdateDetails(state),
+    externalStateDriftDetails(state),
     appProofDetails(state),
     operatorRecoveryDetails(state),
     shouldFormatRecoveryDiagnostics(state, recovery) ? formatRecoveryDiagnostics(recovery).join("\n") : null,
@@ -542,6 +544,12 @@ function issueStatusDiagnostics(issue: IssueState, recovery: WorkspaceRecoveryDi
     diagnostics.push({
       message: cleanupDrift,
       nextAction: "verify local and remote AgentOS branch cleanup manually or through the merge cleanup path; do not rerun implementation for cleanup drift"
+    });
+  }
+  if (!terminal && issue.externalStateDrift) {
+    diagnostics.push({
+      message: externalStateDriftWarning(issue),
+      nextAction: issue.externalStateDrift.nextAction
     });
   }
   return diagnostics;

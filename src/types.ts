@@ -344,6 +344,7 @@ export interface IssueState {
   contextBudget?: ContextBudgetState;
   ciRetry?: CiRetryState;
   branchUpdate?: BranchUpdateState;
+  externalStateDrift?: ExternalStateDriftState;
   validation?: ValidationState;
   updatedAt: string;
 }
@@ -409,18 +410,8 @@ export interface CiRetryAttemptState {
   error?: string;
 }
 
-export interface BranchUpdateState {
-  status: "updated" | "report_only" | "failed";
-  updatedAt: string;
-  prUrl: string;
-  reason: string;
-  operatorGuidance: string;
-  mergeStateStatus?: string | null;
-  beforeHeadSha?: string | null;
-  afterHeadSha?: string | null;
-  error?: string;
-}
-
+export interface BranchUpdateState { status: "updated" | "report_only" | "failed"; updatedAt: string; prUrl: string; reason: string; operatorGuidance: string; mergeStateStatus?: string | null; beforeHeadSha?: string | null; afterHeadSha?: string | null; error?: string; }
+export interface ExternalStateDriftState { status: "detected" | "reconciled" | "blocked"; expectedState: string; currentState: string; detectedAt: string; reason: string; nextAction: string; reconciledAt?: string; reconciliation?: "moved_to_expected_state" | "unsupported"; }
 export interface OperatorRecoveryState {
   recordedAt: string;
   runId?: string;
