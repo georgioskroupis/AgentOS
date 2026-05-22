@@ -413,6 +413,10 @@ follow-up steps: AgentOS removes the issue worktree before deleting a local
 `agent/*` branch, deletes the remote branch only for safe AgentOS-managed branch
 refs, tolerates already-absent remote branches, records cleanup warnings in
 issue state and Linear comments, and still moves or keeps the issue in `Done`.
+Startup reconstruction must also treat a recorded merged or already-merged PR
+as terminal: stale active runs, retry entries, workspace locks, and merge
+shepherd passes for that issue are cleared or skipped by issue identifier so a
+restart cannot merge or transition the same issue again.
 
 ## Agent Prompt
 

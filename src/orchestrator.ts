@@ -39,7 +39,7 @@ import { isRecoverablePartialWorkState, isSupervisorContinuationPaused, latestAu
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
-import { alreadyMergedIssuePatch, dependencyDispatchStopPatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
+import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, dependencyDispatchStopPatch, isRecordedMergeTerminal, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
 import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewSupervisorMergeDecision } from "./review-budget.js";
@@ -58,14 +58,12 @@ import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
-
 export interface OrchestratorRunSummary {
   dispatched: number;
   retryDispatched: number;
   candidateDispatched: number;
   candidates: number;
 }
-
 interface RunningEntry {
   issue: Issue;
   startedAt: number;
@@ -74,7 +72,6 @@ interface RunningEntry {
   abortController: AbortController;
   promise: Promise<void>;
 }
-
 export class Orchestrator {
   private workflow!: WorkflowDefinition;
   private config!: ServiceConfig;
@@ -104,7 +101,6 @@ export class Orchestrator {
     this.runArtifacts = new RunArtifactStore(resolve(options.repoRoot));
     this.runtimeState = new RuntimeStateStore(resolve(options.repoRoot));
   }
-
   async reload(): Promise<void> {
     const resolvedEnv = await resolveRepoEnv(resolve(this.options.repoRoot), this.options.env ?? process.env);
     this.repoEnv = resolvedEnv.repoEnv;
@@ -374,6 +370,7 @@ export class Orchestrator {
     let terminalIssues = 0;
     let locksReleased = 0;
     let freshnessWarnings = isDaemonFreshnessStale(runtime.daemon?.freshnessStatus) ? 1 : 0;
+    const terminalIdentifiers = new Set<string>();
 
     const lockRecoveries = await recoverWorkspaceLocks(this.config.workspace.root).catch(async (error: Error) => {
       await this.logger.write({ type: "startup_recovery_warning", message: `workspace lock recovery failed: ${error.message}` });
@@ -388,12 +385,14 @@ export class Orchestrator {
       const current = state.issueId ? states?.get(state.issueId) : undefined;
       if (current && isStateIn(current.state, this.config.tracker.terminalStates)) {
         await this.classifyTerminalIssue(current, `startup recovery: Linear state is ${current.state}`);
+        terminalIdentifiers.add(current.identifier);
         terminalIssues += 1;
         messages.push(`reconciled ${current.identifier} to terminal Linear state ${current.state}`);
         continue;
       }
       const issue = current ?? issueFromState(state);
       if (issue && (await this.classifyAlreadyMergedIssue(issue, state, "startup recovery: recorded pull request is already merged"))) {
+        terminalIdentifiers.add(issue.identifier);
         terminalIssues += 1;
         messages.push(`reconciled ${issue.identifier} to already-merged PR truth`);
       }
@@ -416,6 +415,10 @@ export class Orchestrator {
       });
     }
     for (const active of activeEntries) {
+      if (terminalIdentifiers.has(active.identifier)) {
+        if (active.runId) await this.runArtifacts.markRunCanceled(active.runId, "startup recovery: terminal issue already reconciled").catch(() => undefined);
+        continue;
+      }
       const current = states?.get(active.issueId);
       const issue = current ?? active.issue;
       const result = await this.classifyStaleActiveRun(active, runningSummaries.find((summary) => summary.runId === active.runId), issue);
@@ -427,6 +430,7 @@ export class Orchestrator {
 
     const runtimeAfterStale = await this.runtimeState.read();
     for (const retry of runtimeAfterStale.retryQueue) {
+      if (terminalIdentifiers.has(retry.identifier)) continue;
       const current = states?.get(retry.issueId);
       if (current === null) {
         await this.finishRetryBackoff(runtimeRetryToMemory(retry), retry.issue, "canceled", "issue no longer exists in tracker");
@@ -842,7 +846,7 @@ export class Orchestrator {
       ...patch,
       stopReason: patch.stopReason ?? message
     });
-    await this.runtimeState.clearIssue(issue.id);
+    await this.runtimeState.clearIssue(issue.id, issue.identifier);
     this.retries.delete(issue.id);
     await this.logger.write({
       type: "dispatch_skipped",
@@ -950,7 +954,7 @@ export class Orchestrator {
       stopReason: reason,
       ...(missingWorkspaceWarning ? { workspaceMissingAt: terminalAt } : { workspaceMissingAt: undefined })
     });
-    await this.runtimeState.clearIssue(issue.id);
+    await this.runtimeState.clearIssue(issue.id, issue.identifier);
     this.retries.delete(issue.id);
     this.completedMarkers.set(issue.id, completionMarker(issue));
     await this.logger.write({
@@ -978,7 +982,7 @@ export class Orchestrator {
       })
     );
     await this.recordIssueState(issue, alreadyMergedIssuePatch(state, pr, terminalAt, reason));
-    await this.runtimeState.clearIssue(issue.id);
+    await this.runtimeState.clearIssue(issue.id, issue.identifier);
     this.retries.delete(issue.id);
     this.completedMarkers.set(issue.id, completionMarker(issue));
     if (!isStateIn(issue.state, this.config.tracker.terminalStates)) {
@@ -1922,7 +1926,6 @@ export class Orchestrator {
         });
         return latestState;
       }
-
       await this.logger.write({
         type: "review_fix_started",
         issueId: issue.id,
@@ -2148,6 +2151,22 @@ export class Orchestrator {
         await this.markMergeFailed(issue, reason, { runId: state?.lastRunId });
         return;
       }
+      if (isRecordedMergeTerminal(state)) {
+        timingMetadata = await completeRecordedMergeTerminal({
+          issue,
+          state,
+          mergePr,
+          config: this.config,
+          repoRoot: resolve(this.options.repoRoot),
+          logger: this.logger,
+          runtimeState: this.runtimeState,
+          retries: this.retries,
+          recordIssueState: (target, patch) => this.recordIssueState(target, patch),
+          commentIssue: (body) => this.commentIssue(issue, body),
+          moveIssue: (targetState) => this.moveIssue(issue, targetState)
+        });
+        return;
+      }
 
       await this.logger.write({
         type: "merge_shepherd_started",
@@ -2179,7 +2198,7 @@ export class Orchestrator {
           const cleanupWarnings = await cleanupMergedPullRequest({ issue, github, pullRequest: pr, config: this.config, repoRoot: this.options.repoRoot, logger: this.logger });
           timingMetadata = { prUrl: mergePr, result: "already merged", cleanupWarnings };
           await this.recordIssueState(issue, alreadyMergedIssuePatch(state, pr, new Date().toISOString(), "merge shepherd: pull request is already merged", cleanupWarnings));
-          await this.runtimeState.clearIssue(issue.id);
+          await this.runtimeState.clearIssue(issue.id, issue.identifier);
           this.retries.delete(issue.id);
           await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged. Treating that as authoritative and completing the issue.\n\n- PR: ${mergePr}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
           await this.moveIssue(issue, this.config.github.doneState);
@@ -2292,7 +2311,7 @@ export class Orchestrator {
           retryAttempt: undefined,
           stopReason: undefined
         });
-        await this.runtimeState.clearIssue(issue.id);
+        await this.runtimeState.clearIssue(issue.id, issue.identifier);
         await this.commentIssue(issue, `### AgentOS merge complete\n\nMerged successfully.\n\n- PR: ${mergePr}\n- Method: ${this.config.github.mergeMethod}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
         await this.moveIssue(issue, this.config.github.doneState);
         await this.logger.write({

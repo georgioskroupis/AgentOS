@@ -687,7 +687,6 @@ describe("orchestrator", () => {
       }
     };
     const logger = new JsonlLogger(repo);
-
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
@@ -780,7 +779,6 @@ describe("orchestrator", () => {
         return { status: "succeeded" };
       }
     };
-
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
@@ -974,7 +972,6 @@ describe("orchestrator", () => {
         moves.push(`${issue} -> ${state}`);
       }
     };
-
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
@@ -5499,6 +5496,114 @@ describe("orchestrator", () => {
     expect(state?.retryAttempt).toBeUndefined();
     expect(state?.nextRetryAt).toBeUndefined();
     expect(state?.workspaceMissingAt).toBeUndefined();
+  });
+
+  it("does not run merge again when recorded merge state is already terminal", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-idempotent-terminal-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  delete_branch: false\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/1",
+          state: "MERGED",
+          isDraft: false,
+          mergeable: null,
+          mergedAt: "2026-05-05T08:00:00Z",
+          headRefOid: "merged-head-sha",
+          headRefName: "agent/AG-1",
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        issueId: "old-issue-id",
+        issueIdentifier: "AG-1",
+        phase: "completed",
+        lifecycleStatus: "merge_success",
+        mergedAt: "2026-05-05T08:01:00.000Z",
+        prs: [{ url: "https://github.com/o/r/pull/1", source: "handoff", role: "primary", discoveredAt: new Date().toISOString() }],
+        updatedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+    await new RuntimeStateStore(repo).upsertActiveRun({
+      issueId: "stale-runtime-id",
+      identifier: "AG-1",
+      issue: mergingIssue,
+      attempt: 1,
+      runId: "run_stale_merge_terminal",
+      startedAt: "2026-05-05T08:02:00.000Z",
+      lastEventAt: "2026-05-05T08:02:00.000Z",
+      phase: "merge-shepherding"
+    });
+    await new RuntimeStateStore(repo).upsertRetry({
+      issueId: "stale-retry-id",
+      identifier: "AG-1",
+      issue: mergingIssue,
+      attempt: 2,
+      dueAt: "2099-05-05T08:05:00.000Z",
+      error: "stale retry",
+      scheduledAt: "2026-05-05T08:03:00.000Z"
+    });
+    const moves: string[] = [];
+    const comments: string[] = [];
+    let currentLinearState = "Merging";
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") && currentLinearState === "Merging" ? [{ ...mergingIssue, state: currentLinearState }] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[mergingIssue.id, { ...mergingIssue, state: currentLinearState }]]);
+      },
+      async move(issue, state) {
+        currentLinearState = state;
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    const logger = new JsonlLogger(repo);
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for terminal merge state");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const ghStateAfter = JSON.parse(await readFile(ghState, "utf8"));
+    const runtime = await new RuntimeStateStore(repo).read();
+    const state = await new IssueStateStore(repo).read("AG-1");
+    const logs = await logger.tail(100);
+    expect(ghStateAfter.mergedWith).toBeUndefined();
+    expect(moves).toEqual(["AG-1 -> Done"]);
+    expect(comments.join("\n")).not.toContain("Starting squash merge");
+    expect(logs.some((entry) => entry.type === "issue_already_merged_reconciled")).toBe(true);
+    expect(runtime.activeRuns).toEqual([]);
+    expect(runtime.retryQueue).toEqual([]);
+    expect(state?.lifecycleStatus).toBe("already_merged_pr");
+    expect(state?.lastError).toBeUndefined();
+    expect(state?.nextRetryAt).toBeUndefined();
   });
 
   it("does not warn repeatedly when operator recovery records a run id without a summary artifact", async () => {
