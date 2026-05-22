@@ -370,6 +370,144 @@ describe("pre-dispatch scope report", () => {
     expect(preDispatchScopeReportMessage(report)).toContain("source=issue_active_sections");
   });
 
+  it("keeps undecomposed broad parent work in planning_required", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-undecomposed-parent-"));
+    const issue = fakeIssue({
+      identifier: "VER-200",
+      title: "Implement registry, dashboard, merge shepherd, CI repair, docs, and cleanup",
+      description: [
+        "Acceptance criteria:",
+        "- Update registry orchestration.",
+        "- Update dashboard status.",
+        "- Update merge shepherd cleanup.",
+        "- Update CI repair loops.",
+        "- Update docs.",
+        "- Update validation.",
+        "- Update workspace recovery."
+      ].join("\n")
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue });
+
+    expect(report.evidence.decomposition.present).toBe(false);
+    expect(report.scopeSize).toBe("large");
+    expect(report.dispatchAdvice).toMatchObject({
+      shouldBlock: true,
+      reason: "likely-large scope needs planning or decomposition before implementation dispatch"
+    });
+  });
+
+  it("scores a decomposed parent with active linked children as low and waits for child issues", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-decomposed-parent-active-"));
+    const issue = fakeIssue({
+      identifier: "VER-54",
+      title: "Add high-throughput CI and merge-shepherd behavior",
+      description: [
+        "Acceptance criteria:",
+        "- Read CI logs.",
+        "- Retry flaky checks.",
+        "- Rebase safe stale branches.",
+        "- Rerun validation.",
+        "- Respond to review comments.",
+        "- Close superseded PRs.",
+        "- Update docs and tests."
+      ].join("\n"),
+      children: [
+        issueRef("VER-83", "Done"),
+        issueRef("VER-84", "In Progress"),
+        issueRef("VER-85", "Todo")
+      ]
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue });
+
+    expect(report.evidence.decomposition).toMatchObject({
+      present: true,
+      issueIsParent: true,
+      childCount: 3,
+      terminalChildCount: 1,
+      activeChildCount: 2,
+      allChildrenTerminal: false
+    });
+    expect(report.scopeScoring.score).toBeLessThan(report.scopeScoring.mediumThreshold);
+    expect(report.scopeScoring.reasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ score: expect.any(Number), reason: expect.stringContaining("decomposition evidence caps scope score") })
+      ])
+    );
+    expect(report.scopeSize).toBe("small");
+    expect(report.dispatchAdvice).toMatchObject({
+      shouldBlock: true,
+      reason: "decomposed parent has active child issues",
+      nextSafeAction: expect.stringContaining("continue the linked child issues")
+    });
+    expect(preDispatchScopeReportMessage(report)).toContain("decomposition evidence caps scope score");
+  });
+
+  it("surfaces decomposed parent closeout guidance once all child issues are terminal", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-decomposed-parent-done-"));
+    const issue = fakeIssue({
+      identifier: "VER-54",
+      title: "Add high-throughput CI and merge-shepherd behavior",
+      description: [
+        "Acceptance criteria:",
+        "- Read CI logs.",
+        "- Retry flaky checks.",
+        "- Rebase safe stale branches.",
+        "- Rerun validation.",
+        "- Respond to review comments.",
+        "- Close superseded PRs.",
+        "- Update docs and tests."
+      ].join("\n"),
+      children: [issueRef("VER-83", "Done"), issueRef("VER-84", "Done"), issueRef("VER-85", "Canceled")]
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue });
+
+    expect(report.evidence.decomposition).toMatchObject({
+      present: true,
+      issueIsParent: true,
+      allChildrenTerminal: true
+    });
+    expect(report.scopeSize).toBe("small");
+    expect(report.dispatchAdvice).toMatchObject({
+      shouldBlock: true,
+      reason: "decomposed parent is ready for child closeout",
+      nextSafeAction: expect.stringContaining("close the parent issue")
+    });
+  });
+
+  it("treats VER-NN-letter grandchild titles as decomposed bounded slices despite broad inherited text", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-decomposed-grandchild-"));
+    const issue = fakeIssue({
+      identifier: "VER-94",
+      title: "VER-83AB: Certify registry daemon restart and multi-project behavior",
+      description: [
+        "Parent context:",
+        "- Registry daemon, scheduler, crash recovery, dashboard, merge shepherding, Linear lifecycle, GitHub checks, docs, validation, and workspace cleanup remain broad.",
+        "",
+        "Acceptance criteria:",
+        "- Add the bounded certification fixture.",
+        "- Cover restart recovery.",
+        "- Cover multi-project dispatch.",
+        "- Cover blocked issues.",
+        "- Cover concurrency.",
+        "- Update docs.",
+        "- Run validation."
+      ].join("\n")
+    });
+
+    const report = await buildPreDispatchScopeReport({ repoRoot: repo, issue });
+
+    expect(report.evidence.decomposition).toMatchObject({
+      present: true,
+      issueIsDecomposedChild: true
+    });
+    expect(report.scopeScoring.score).toBeLessThan(report.scopeScoring.mediumThreshold);
+    expect(report.scopeSize).toBe("small");
+    expect(report.dispatchAdvice.shouldBlock).toBe(false);
+  });
+
   it("keeps oversized trusted Active-Scope blocked when the stored decision body is truncated", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-scope-reentry-oversized-active-"));
     const issue = fakeIssue({
@@ -579,6 +717,16 @@ function fakeIssue(overrides: Partial<Issue> = {}): Issue {
     created_at: "2026-05-08T00:00:00.000Z",
     updated_at: "2026-05-08T00:00:00.000Z",
     ...overrides
+  };
+}
+
+function issueRef(identifier: string, state: string): Issue["blocked_by"][number] {
+  return {
+    id: `issue-${identifier}`,
+    identifier,
+    state,
+    created_at: "2026-05-08T00:00:00.000Z",
+    updated_at: "2026-05-08T00:00:00.000Z"
   };
 }
 

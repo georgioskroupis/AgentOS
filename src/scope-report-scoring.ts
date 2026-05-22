@@ -94,6 +94,18 @@ export function estimateScope(
   if (evidence.workspace.recoverable) {
     addScore(1, "recoverable partial workspace must be preserved");
   }
+  const decomposition = evidence.decomposition;
+  if (decomposition?.present) {
+    const cap = decomposition.issueIsParent || decomposition.issueIsDecomposedChild ? SCOPE_MEDIUM_THRESHOLD - 1 : score;
+    if (score > cap) {
+      const detail = decomposition.issueIsParent
+        ? decomposition.allChildrenTerminal
+          ? "decomposed parent has terminal child issues"
+          : "decomposed parent has linked child issues"
+        : "decomposed child issue is already a bounded slice";
+      addScore(cap - score, `${detail}; decomposition evidence caps scope score`);
+    }
+  }
 
   const reasons = scoreReasons.map((reason) => reason.reason);
   if (score >= SCOPE_LARGE_THRESHOLD) return { scopeSize: "large", reasons, score, scoreReasons };
@@ -106,7 +118,11 @@ export function acceptanceBulletCount(description: string | null): number {
 }
 
 export function formatScoreReasons(reasons: ScopeScoreReasonState[]): string {
-  return reasons.map((reason) => `+${reason.score} ${reason.reason}`).join("; ");
+  return reasons.map((reason) => `${formatScore(reason.score)} ${reason.reason}`).join("; ");
+}
+
+export function formatScore(score: number): string {
+  return score > 0 ? `+${score}` : String(score);
 }
 
 function issueText(issue: Issue): string {

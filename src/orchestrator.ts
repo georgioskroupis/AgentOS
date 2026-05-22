@@ -814,6 +814,7 @@ export class Orchestrator {
           stopReason: message,
           scopeReport: scopeReportStateFromReport(scopeReport)
         });
+        await this.moveIssue(issue, this.config.tracker.needsInputState);
       }
       await this.logger.write({
         type: "dispatch_skipped",
@@ -824,7 +825,6 @@ export class Orchestrator {
       });
       return true;
     }
-
     return false;
   }
 

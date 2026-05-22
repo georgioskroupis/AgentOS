@@ -4,12 +4,13 @@ import { pullRequestUrls } from "./issue-state.js";
 import { inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { buildDispatchAdvice } from "./scope-report-advice.js";
 import { buildHumanDecisionEvidence, buildLinearCommentEvidence } from "./scope-report-comments.js";
+import { buildDecompositionEvidence } from "./scope-report-decomposition.js";
 import { acceptanceBulletCount, estimateScope, estimateTouchedSubsystems, formatScoreReasons, SCOPE_LARGE_THRESHOLD, SCOPE_MEDIUM_THRESHOLD } from "./scope-report-scoring.js";
 import { selectScopeText, type ScopeTextSelection } from "./scope-report-scope-text.js";
 import { RunArtifactStore, type RunSummary } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry, type RuntimeState } from "./runtime-state.js";
 import { workspaceKey } from "./workspace.js";
-import type { AgentEvent, HumanDecisionState, Issue, IssueComment, IssueState, PullRequestRole, ScopePlanningReentryState, ScopeReportState, ScopeScoreReasonState, ScopeTextSource, ValidationState } from "./types.js";
+import type { AgentEvent, HumanDecisionState, Issue, IssueComment, IssueState, PullRequestRole, ScopeDecompositionState, ScopePlanningReentryState, ScopeReportState, ScopeScoreReasonState, ScopeTextSource, ValidationState } from "./types.js";
 
 export type ScopeImplementationStatus = "already_satisfied" | "partially_satisfied" | "missing" | "unclear";
 export type ScopeImpact = "none" | "low" | "medium" | "high" | "unclear";
@@ -59,6 +60,7 @@ export interface ScopeEvidence {
     ignoredSections: string[];
     labelCount: number;
   };
+  decomposition: ScopeDecompositionState;
   planningReentry: ScopePlanningReentryState;
   state: {
     present: boolean;
@@ -307,6 +309,7 @@ function buildEvidence(
       ignoredSections: scopeText.ignoredSections,
       labelCount: issue.labels.length
     },
+    decomposition: buildDecompositionEvidence(issue),
     planningReentry: scopeText.planningReentry,
     state: {
       present: Boolean(state),
@@ -385,6 +388,7 @@ export function scopeReportStateFromReport(report: PreDispatchScopeReport): Scop
     scoringReasons: report.scopeScoring.reasons,
     ignoredSections: report.scopeScoring.ignoredSections,
     planningReentry: report.evidence.planningReentry,
+    decomposition: report.evidence.decomposition,
     dispatchAdvice: {
       shouldBlock: report.dispatchAdvice.shouldBlock,
       reason: report.dispatchAdvice.reason,

@@ -1,4 +1,5 @@
 import type { PreDispatchScopeReport } from "./scope-report.js";
+import { formatScore } from "./scope-report-scoring.js";
 
 export function planningRecommendedCommentBody(report: PreDispatchScopeReport): string {
   return [
@@ -10,7 +11,7 @@ export function planningRecommendedCommentBody(report: PreDispatchScopeReport): 
     `- Scope score: ${report.scopeScoring.score == null ? "unclear" : `${report.scopeScoring.score}/${report.scopeScoring.largeThreshold}`}`,
     `- Scope scoring source: ${report.scopeScoring.textSource}`,
     report.scopeScoring.reasons.length ? "- Scope scoring reasons:" : "- Scope scoring reasons: none",
-    ...report.scopeScoring.reasons.map((reason) => `  - +${reason.score} ${reason.reason}`),
+    ...report.scopeScoring.reasons.map((reason) => `  - ${formatScore(reason.score)} ${reason.reason}`),
     report.scopeScoring.ignoredSections.length ? `- Ignored scope sections: ${report.scopeScoring.ignoredSections.join(", ")}` : null,
     `- Planning re-entry: ${report.evidence.planningReentry.status} - ${report.evidence.planningReentry.reason}`,
     `- Next safe action: ${report.dispatchAdvice.nextSafeAction}`

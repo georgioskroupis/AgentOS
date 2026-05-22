@@ -65,6 +65,8 @@ const issueNodeSelection = `
   state { name }
   labels { nodes { name } }
   relations { nodes { type relatedIssue { id identifier createdAt updatedAt state { name } } } }
+  parent { id identifier createdAt updatedAt state { name } }
+  children { nodes { id identifier createdAt updatedAt state { name } } }
 `;
 
 export interface LinearTeam {
@@ -528,14 +530,10 @@ function normalizeLinearIssue(node: unknown): Issue {
         .filter((relation: any) => isBlockedByRelation(relation.type))
         .map((relation: any) => relation.relatedIssue)
         .filter(Boolean)
-        .map((related: any) => ({
-          id: related.id ?? null,
-          identifier: related.identifier ?? null,
-          state: related.state?.name ?? null,
-          created_at: related.createdAt ?? null,
-          updated_at: related.updatedAt ?? null
-        }))
+        .map(issueRefFromLinearNode)
     : [];
+  const parent = raw.parent ? issueRefFromLinearNode(raw.parent) : null;
+  const children = Array.isArray(raw.children?.nodes) ? raw.children.nodes.map(issueRefFromLinearNode) : [];
   return {
     id: String(raw.id),
     identifier: String(raw.identifier),
@@ -550,8 +548,20 @@ function normalizeLinearIssue(node: unknown): Issue {
     assigneeEmail: raw.assignee?.email ?? null,
     labels,
     blocked_by: blockedBy,
+    parent,
+    children,
     created_at: raw.createdAt ?? null,
     updated_at: raw.updatedAt ?? null
+  };
+}
+
+function issueRefFromLinearNode(related: any): Issue["blocked_by"][number] {
+  return {
+    id: related.id ?? null,
+    identifier: related.identifier ?? null,
+    state: related.state?.name ?? null,
+    created_at: related.createdAt ?? null,
+    updated_at: related.updatedAt ?? null
   };
 }
 
