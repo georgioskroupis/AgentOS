@@ -1,8 +1,12 @@
 import { join } from "node:path";
-import type { PullRequestStatus } from "./github.js";
+import { GitHubClient, type PullRequestStatus } from "./github.js";
+import { assertPullRequestUrlMatchesRepo } from "./github-repository.js";
 import { exists } from "./fs-utils.js";
+import type { JsonlLogger } from "./logging.js";
+import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
+import type { RuntimeStateStore } from "./runtime-state.js";
 import type { RunTimingPhase } from "./runs.js";
-import type { Issue, IssueState } from "./types.js";
+import type { Issue, IssueState, LifecycleStatus, ServiceConfig } from "./types.js";
 
 const TERMINAL_WAIT_PHASES: RunTimingPhase[] = ["human-wait", "needs-input", "ci-wait"];
 
@@ -46,6 +50,65 @@ function isExternalSupervisorTimingRunId(state: IssueState | null, runId: string
   );
   if (!supervisorFixed) return false;
   return state.validation?.runId === runId || state.lastRunId === runId;
+}
+
+export function isRecordedMergeTerminal(state: IssueState | null): boolean {
+  return Boolean(state?.mergedAt || state?.lifecycleStatus === "merge_success" || state?.lifecycleStatus === "post_merge_cleanup_warning" || state?.lifecycleStatus === "already_merged_pr");
+}
+
+export function recordedMergeLifecycleStatus(state: IssueState | null, cleanupWarnings: string[]): LifecycleStatus {
+  if (cleanupWarnings.length > 0) return "post_merge_cleanup_warning";
+  return state?.lifecycleStatus === "already_merged_pr" ? "already_merged_pr" : "merge_success";
+}
+
+export async function completeRecordedMergeTerminal(input: {
+  issue: Issue;
+  state: IssueState;
+  mergePr: string;
+  config: ServiceConfig;
+  repoRoot: string;
+  logger: Pick<JsonlLogger, "write">;
+  runtimeState: RuntimeStateStore;
+  retries: Pick<Map<string, unknown>, "delete">;
+  recordIssueState: (issue: Issue, patch: Partial<IssueState>) => Promise<unknown>;
+  commentIssue: (body: string) => Promise<unknown>;
+  moveIssue: (state: string) => Promise<unknown>;
+}): Promise<Record<string, unknown>> {
+  const github = new GitHubClient(input.config.github.command);
+  await assertPullRequestUrlMatchesRepo(input.repoRoot, input.mergePr);
+  const pr = await github.getPullRequest(input.mergePr, input.repoRoot).catch(() => null);
+  const cleanupWarnings = pr?.merged ? await cleanupMergedPullRequest({ issue: input.issue, github, pullRequest: pr, config: input.config, repoRoot: input.repoRoot, logger: input.logger }) : (input.state.mergeCleanupWarnings ?? []);
+  const terminalAt = new Date().toISOString();
+  await input.recordIssueState(input.issue, {
+    phase: "completed",
+    lifecycleStatus: recordedMergeLifecycleStatus(input.state, cleanupWarnings),
+    mergeCleanupWarnings: cleanupWarnings.length ? cleanupWarnings : undefined,
+    lastError: undefined,
+    errorCategory: undefined,
+    activeRunId: undefined,
+    nextRetryAt: undefined,
+    retryAttempt: undefined,
+    stopReason: undefined,
+    ...terminalHeadPatch(input.state, pr, terminalAt),
+    updatedAt: terminalAt
+  });
+  await input.runtimeState.clearIssue(input.issue.id, input.issue.identifier);
+  input.retries.delete(input.issue.id);
+  await input.commentIssue(recordedMergeTerminalComment(input.mergePr, cleanupWarnings));
+  await input.moveIssue(input.config.github.doneState);
+  await input.logger.write({
+    type: "merge_shepherd_idempotent_complete",
+    issueId: input.issue.id,
+    issueIdentifier: input.issue.identifier,
+    message: input.mergePr,
+    payload: { prUrl: input.mergePr, cleanupWarnings }
+  });
+  return { prUrl: input.mergePr, result: "recorded merge terminal", cleanupWarnings };
+}
+
+function recordedMergeTerminalComment(mergePr: string, cleanupWarnings: string[]): string {
+  const warnings = cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : "";
+  return `### AgentOS merge shepherd\n\nRecorded merge completion is already terminal. Completing the issue without another merge attempt.\n\n- PR: ${mergePr}${warnings}`;
 }
 
 async function missingRunSummary(repoRoot: string, runId: string): Promise<boolean> {

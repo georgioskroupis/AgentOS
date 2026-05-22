@@ -82,3 +82,17 @@ is not an AgentOS-managed head branch, high-throughput landing is not enabled,
 GitHub reports merge conflicts, or the PR is blocked by protected branch or
 merge queue requirements. Branch freshness does not mark PRs ready, merge PRs,
 or perform post-merge cleanup.
+
+## Post-Merge Cleanup
+
+After a successful merge or already-merged reconciliation, AgentOS treats the
+selected merge PR as terminal truth. It clears stale active runs and retries by
+issue identifier, removes the issue workspace, deletes the local safe `agent/*`
+branch, and deletes the same-repository remote PR branch when
+`github.delete_branch: true`. Cleanup is idempotent: absent branches or
+workspaces are not failures.
+
+Cleanup warnings are operator-visible in issue state, Linear comments, and
+status output, but they do not schedule implementation retries or move a
+successfully merged issue out of `Done`. Resolve warnings as local maintenance
+unless the warning says the merge itself did not happen.

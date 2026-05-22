@@ -646,6 +646,53 @@ describe("GitHubClient", () => {
     expect(summary.length).toBeLessThan(1000);
   });
 
+  it("cleans local and remote same-repository AgentOS branches after merge", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-cleanup-same-repo-"));
+    const pushRemote = await mkdtemp(join(tmpdir(), "agent-os-gh-cleanup-same-repo-origin-"));
+    const statePath = join(dir, "state.json");
+    await run("git", ["init", "--bare"], pushRemote);
+    await run("git", ["init"], dir);
+    await run("git", ["remote", "add", "origin", "https://github.com/o/r.git"], dir);
+    await run("git", ["remote", "set-url", "--push", "origin", pushRemote], dir);
+    await writeFile(join(dir, "README.md"), "test\n", "utf8");
+    await run("git", ["add", "README.md"], dir);
+    await run("git", ["-c", "user.name=AgentOS", "-c", "user.email=agentos@example.com", "commit", "-m", "init"], dir);
+    await run("git", ["branch", "agent/AG-1"], dir);
+    await run("git", ["push", "origin", "agent/AG-1"], dir);
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        view: {
+          url: "https://github.com/o/r/pull/12",
+          state: "MERGED",
+          isDraft: false,
+          mergeable: null,
+          baseRefName: "main",
+          headRefName: "agent/AG-1",
+          headRepository: { name: "r", owner: { login: "o" } },
+          headRepositoryOwner: { login: "o" },
+          isCrossRepository: false,
+          headRefOid: "abc123",
+          mergedAt: "2026-05-05T08:00:00Z",
+          statusCheckRollup: []
+        }
+      }),
+      "utf8"
+    );
+
+    const client = new GitHubClient(`GH_FAKE_STATE=${JSON.stringify(statePath)} node ${JSON.stringify(fixture)}`);
+    const status = await client.getPullRequest("https://github.com/o/r/pull/12", dir);
+    const cleanup = await client.cleanupMergedPullRequest(
+      status,
+      { command: "gh", mergeMode: "shepherd", mergeMethod: "squash", requireChecks: true, deleteBranch: true, doneState: "Done", allowHumanMergeOverride: false, baseBranch: "main" },
+      dir
+    );
+
+    expect(cleanup.warnings).toEqual([]);
+    await expect(run("git", ["show-ref", "--verify", "refs/heads/agent/AG-1"], dir)).rejects.toThrow();
+    await expect(run("git", ["--git-dir", pushRemote, "show-ref", "--verify", "refs/heads/agent/AG-1"], dir)).rejects.toThrow();
+  });
+
   it("skips branch cleanup when the PR head repository is a fork with the same branch name", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-os-gh-cleanup-fork-"));
     const statePath = join(dir, "state.json");
