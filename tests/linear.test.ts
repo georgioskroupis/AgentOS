@@ -52,6 +52,32 @@ describe("LinearClient", () => {
     ]);
   });
 
+  it("normalizes parent and child issue relationships for scope reporting", async () => {
+    const requests: Array<Record<string, any>> = [];
+    const parent = issueNode("issue-parent", "VER-54", 1, [], "Todo");
+    const child = {
+      ...issueNode("issue-child", "VER-83", 2, [], "Done"),
+      parent,
+      children: { nodes: [issueNode("issue-grandchild", "VER-88", 3, [], "Done")] }
+    };
+    const fetchImpl = fakeFetch(requests, [
+      {
+        data: {
+          issues: {
+            nodes: [child],
+            pageInfo: { hasNextPage: false, endCursor: null }
+          }
+        }
+      }
+    ]);
+
+    const client = new LinearClient(trackerConfig, fetchImpl);
+    const issues = await client.fetchCandidates(["Done"]);
+
+    expect(issues[0].parent).toEqual(expect.objectContaining({ identifier: "VER-54", state: "Todo" }));
+    expect(issues[0].children).toEqual([expect.objectContaining({ identifier: "VER-88", state: "Done" })]);
+  });
+
   it("comments on issues by Linear identifier", async () => {
     const requests: Array<Record<string, any>> = [];
     const fetchImpl = fakeFetch(requests, [
@@ -415,7 +441,8 @@ function issueNode(
     updatedAt: `2026-01-0${priority}T00:00:00.000Z`,
     state: { name: state },
     labels: { nodes: [] },
-    relations: { nodes: relations }
+    relations: { nodes: relations },
+    children: { nodes: [] }
   };
 }
 

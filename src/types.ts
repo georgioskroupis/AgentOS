@@ -67,6 +67,8 @@ export interface Issue {
   assigneeEmail?: string | null;
   labels: string[];
   blocked_by: IssueRef[];
+  parent?: IssueRef | null;
+  children?: IssueRef[];
   created_at: string | null;
   updated_at: string | null;
 }
@@ -257,6 +259,19 @@ export interface ScopePlanningReentryState {
   decompositionEvidencePresent: boolean;
 }
 
+export interface ScopeDecompositionState {
+  present: boolean;
+  issueIsParent: boolean;
+  issueIsDecomposedChild: boolean;
+  childCount: number;
+  terminalChildCount: number;
+  activeChildCount: number;
+  allChildrenTerminal: boolean;
+  parentIdentifier: string | null;
+  childIdentifiers: string[];
+  reasons: string[];
+}
+
 export interface ScopeReportState {
   recordedAt: string;
   scopeSize: "small" | "medium" | "large" | "unclear";
@@ -268,6 +283,7 @@ export interface ScopeReportState {
   scoringReasons: ScopeScoreReasonState[];
   ignoredSections: string[];
   planningReentry: ScopePlanningReentryState;
+  decomposition: ScopeDecompositionState;
   dispatchAdvice: {
     shouldBlock: boolean;
     reason: string | null;

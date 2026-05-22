@@ -22,6 +22,23 @@ export function buildDispatchAdvice(
       notes
     };
   }
+  const decomposition = evidence.decomposition;
+  if (decomposition?.issueIsParent && decomposition.childCount > 0) {
+    if (decomposition.allChildrenTerminal) {
+      return {
+        shouldBlock: true,
+        reason: "decomposed parent is ready for child closeout",
+        nextSafeAction: "record child closeout evidence and close the parent issue; do not redispatch implementation for the decomposed parent",
+        notes
+      };
+    }
+    return {
+      shouldBlock: true,
+      reason: "decomposed parent has active child issues",
+      nextSafeAction: "continue the linked child issues and return to the parent only for closeout after children are terminal",
+      notes
+    };
+  }
   if (evidence.planningReentry.status === "missing") {
     return {
       shouldBlock: true,
@@ -54,6 +71,7 @@ function dispatchNotes(implementationStatus: ScopeImplementationStatus, scopeSiz
   if (implementationStatus === "partially_satisfied") notes.push("preserve existing partial-work evidence before starting a fresh implementation path");
   if (evidence.planningReentry.status === "satisfied") notes.push(evidence.planningReentry.reason);
   if (evidence.planningReentry.status === "missing") notes.push(evidence.planningReentry.reason);
+  if (evidence.decomposition?.present) notes.push(`decomposition evidence: ${evidence.decomposition.reasons.join("; ")}`);
   if (evidence.workspace.dirty && evidence.workspace.upstreamMissing) notes.push("dirty workspace with no upstream is recoverable partial work, not fresh missing work");
   if (evidence.lastRun.quietValidationStop) notes.push("last run appears to have stopped during a quiet validation command");
   return notes;

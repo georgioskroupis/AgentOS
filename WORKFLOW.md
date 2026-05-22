@@ -221,6 +221,12 @@ siblings and the parent. The helper may write parent, `blocked_by`, and
 `unblocks` relationships requested by the plan, but it does not change
 scheduler behavior.
 
+Pre-dispatch scope reports read Linear parent/child relationships and
+letter-suffixed child-slice titles such as `VER-83A` as decomposition evidence.
+Decomposed parent issues stay out of fresh implementation while linked children
+are active, and status output points operators toward child completion or parent
+closeout instead of another planning loop.
+
 ## Human Decision Re-Entry
 
 When a Human Review issue is returned to `Todo` or `In Progress`, recent Linear

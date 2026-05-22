@@ -155,6 +155,10 @@ decomposition artifact, or split the work into follow-up issues, before
 returning the issue to implementation. The orchestrator owns the pause and
 Linear bookkeeping; it does not create child issues directly.
 
+If the output reports a decomposed parent with active child issues, continue the
+linked child issues first. If all children are terminal, add a compact parent
+closeout note and close the parent rather than returning it to implementation.
+
 ## Human Review Re-Entry
 
 Use trusted Linear comments when a supervisor needs to continue a Human Review

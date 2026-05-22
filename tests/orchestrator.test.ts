@@ -647,6 +647,83 @@ describe("orchestrator", () => {
     });
   });
 
+  it("moves decomposed parent scope guardrails to needs-input without writing planning_required", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-decomposed-parent-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  review_state: Human Review\n  needs_input_state: Human Review\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue: Issue = {
+      ...readyIssue,
+      state: "Todo",
+      identifier: "VER-54",
+      id: "issue-VER-54",
+      title: "Add high-throughput CI and merge-shepherd behavior",
+      description: [
+        "Acceptance criteria:",
+        "- Read CI logs.",
+        "- Retry flaky checks.",
+        "- Rebase safe stale branches.",
+        "- Rerun validation.",
+        "- Respond to review comments.",
+        "- Close superseded PRs.",
+        "- Update docs and tests."
+      ].join("\n"),
+      children: [
+        { id: "issue-VER-83", identifier: "VER-83", state: "Done" },
+        { id: "issue-VER-84", identifier: "VER-84", state: "In Progress" }
+      ]
+    };
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["VER-54 -> Human Review"]);
+    expect(comments.join("\n")).not.toContain("planning recommended");
+    const state = await new IssueStateStore(repo).read(issue.identifier);
+    expect(state).toMatchObject({
+      phase: "needs-input",
+      stopReason: "decomposed parent has active child issues",
+      scopeReport: {
+        decomposition: { present: true, issueIsParent: true, childCount: 2 },
+        dispatchAdvice: { shouldBlock: true, reason: "decomposed parent has active child issues" }
+      }
+    });
+    expect(state?.lifecycleStatus).toBeUndefined();
+  });
+
   it("includes fetched Linear comments and trusted human decisions in the pre-dispatch scope report", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-scope-comments-"));
     const workflowPath = join(repo, "WORKFLOW.md");

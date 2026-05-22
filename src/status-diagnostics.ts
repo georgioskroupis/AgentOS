@@ -1,3 +1,4 @@
+import { formatScore } from "./scope-report-scoring.js";
 import type { AgentEvent, ContextBudgetState, IssueState, ScopeReportState } from "./types.js";
 
 export function scopeReportDetails(state: IssueState | null): string {
@@ -16,6 +17,7 @@ export function scopeReportDetails(state: IssueState | null): string {
     `Scope score: ${report.score == null ? "unclear" : `${report.score}/${report.largeThreshold}`} (medium threshold ${report.mediumThreshold}, large threshold ${report.largeThreshold})`,
     `Scope scoring source: ${report.scoringTextSource}`,
     report.scoringReasons.length ? `Scope scoring reasons:\n${formatScopeScoreReasons(report.scoringReasons)}` : "Scope scoring reasons: none",
+    report.decomposition?.present ? `Scope decomposition: ${formatScopeDecomposition(report.decomposition)}` : null,
     report.ignoredSections.length ? `Ignored scope sections: ${report.ignoredSections.join(", ")}` : null,
     `Planning re-entry: ${report.planningReentry.status} - ${report.planningReentry.reason}`,
     `Scope dispatch advice: ${report.dispatchAdvice.shouldBlock ? "blocked" : "allowed"}${report.dispatchAdvice.reason ? ` - ${report.dispatchAdvice.reason}` : ""}`,
@@ -27,7 +29,7 @@ export function scopeReportDetails(state: IssueState | null): string {
 export function scopeReportStatusSuffix(report: ScopeReportState | null | undefined): string {
   if (!report) return "";
   const score = report.score == null ? "unclear" : `${report.score}/${report.largeThreshold}`;
-  const reasons = report.scoringReasons.length ? `; reasons ${report.scoringReasons.map((reason) => `+${reason.score} ${reason.reason}`).join("; ")}` : "";
+  const reasons = report.scoringReasons.length ? `; reasons ${report.scoringReasons.map((reason) => `${formatScore(reason.score)} ${reason.reason}`).join("; ")}` : "";
   return `; scope score ${score}; source ${report.scoringTextSource}${reasons}`;
 }
 
@@ -73,7 +75,15 @@ function scopeReportIsHistorical(state: IssueState | null, report: ScopeReportSt
 }
 
 function formatScopeScoreReasons(reasons: ScopeReportState["scoringReasons"]): string {
-  return reasons.map((reason) => `- +${reason.score} ${reason.reason}`).join("\n");
+  return reasons.map((reason) => `- ${formatScore(reason.score)} ${reason.reason}`).join("\n");
+}
+
+function formatScopeDecomposition(decomposition: ScopeReportState["decomposition"]): string {
+  const parts = [];
+  if (decomposition.issueIsParent) parts.push(`${decomposition.childCount} child issue(s), ${decomposition.terminalChildCount} terminal`);
+  if (decomposition.issueIsDecomposedChild) parts.push(`child slice${decomposition.parentIdentifier ? ` of ${decomposition.parentIdentifier}` : ""}`);
+  if (decomposition.reasons.length) parts.push(decomposition.reasons.join("; "));
+  return parts.join("; ");
 }
 
 function formatContextSection(section: ContextBudgetState["sections"][number]): string {

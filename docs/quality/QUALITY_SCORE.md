@@ -49,6 +49,9 @@ Use this as a lightweight rubric for harnessed repositories.
   human-decision, and repo-root/workspace/run handoff evidence, and applies
   guardrails that stop duplicate/recoverable partial work and pause likely-large
   missing work for planning/decomposition without creating child issues directly.
+  Scope reports also recognize Linear parent/child decomposition evidence so
+  decomposed parents route to child completion or parent closeout instead of
+  repeated implementation dispatch.
 - `scripts/agent-linear-comment.sh`, `scripts/agent-linear-move.sh`,
   `scripts/agent-linear-pr.sh`, and `scripts/agent-linear-handoff.sh` provide
   deterministic agent-owned tracker writes for configured `hybrid` or
