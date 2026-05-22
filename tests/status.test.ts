@@ -274,6 +274,24 @@ describe("issue inspection", () => {
       runId: "run_current",
       headSha: "current-head-sha",
       iteration: 2,
+      modelTelemetry: [
+        {
+          role: "self-review",
+          mode: "report-only",
+          applied: false,
+          configured: true,
+          model: "inherited",
+          reasoningEffort: null,
+          proposedModel: "gpt-5.4-mini",
+          proposedReasoningEffort: "low",
+          costBucket: "low",
+          escalationReason: null,
+          refusedReason: null,
+          recordedAt: "2026-05-05T00:09:00.000Z",
+          elapsedMs: 42,
+          tokenUsage: { total: 123 }
+        }
+      ],
       findings: []
     });
     await writeReviewArtifact(reviewArtifactPath(repo, "AG-1", 1, "tests"), {
@@ -303,7 +321,7 @@ describe("issue inspection", () => {
     expect(inspectOutput).toContain("Selected PR head: current-head (current)");
     expect(inspectOutput).toContain("Validation repoHead: current-head (current)");
     expect(inspectOutput).toContain("CI/check head: old-ci-head (stale; expected current-head)");
-    expect(inspectOutput).toContain("iteration-2/self.json [current: iteration 2 current; run run_current current; head current-head current]");
+    expect(inspectOutput).toContain("iteration-2/self.json [current: iteration 2 current; run run_current current; head current-head current; model self-review=inherited proposed gpt-5.4-mini 42ms tokens 123]");
     expect(inspectOutput).toContain("iteration-1/tests.json [stale, non-authoritative: iteration 1 stale; expected 2; run run_previous stale; expected run_current; head old-head-sha stale; expected current-head]");
     expect(inspectOutput).toContain("iteration-2/architecture.json [stale, non-authoritative: run missing; expected run_current; head missing; expected current-head]");
   });

@@ -14,14 +14,20 @@ export type MergeTargetMode = "primary";
 export type HumanDecisionType = "approve_as_is" | "fix_findings" | "accept_risk" | "split_follow_up" | "proceed_to_merge_after_supervisor_fix";
 export type HumanDecisionFindingsState = "resolved" | "accepted" | "open" | "unknown";
 export type ContextBudgetTurnKind = "implementation" | "reviewer" | "fixer";
-
+export type ModelRoutingRole = "implementation" | "fixer" | "ci-repair" | "self-review" | "correctness-review" | "tests-review" | "architecture-review" | "security-review" | "planning" | "summarization-status";
+export type ModelRoutingMode = "off" | "report-only" | "apply";
+export type ModelCostBucket = "inherited" | "low" | "standard" | "high" | "unknown";
+export interface ModelRolePolicy { model?: string; reasoningEffort?: string; costBucket?: ModelCostBucket; promoteToModel?: string; promoteReasoningEffort?: string; allowWriteCapableDowngrade?: boolean; }
+export interface ModelRoutingConfig { mode: ModelRoutingMode; roles: Partial<Record<ModelRoutingRole, ModelRolePolicy>>; }
+export interface ModelRoutingInput { role: ModelRoutingRole; attempt?: number | null; reviewer?: string | null; artifactFailure?: string | null; risk?: string[]; }
+export interface ModelRouteDecision { role: ModelRoutingRole; mode: ModelRoutingMode; applied: boolean; configured: boolean; model: string; reasoningEffort: string | null; proposedModel: string | null; proposedReasoningEffort: string | null; costBucket: ModelCostBucket; escalationReason: string | null; refusedReason: string | null; }
+export interface ModelTelemetryEntry extends ModelRouteDecision { recordedAt: string; elapsedMs: number; tokenUsage: { input?: number; output?: number; total?: number; }; }
 export interface HarnessChange {
   action: "add" | "overwrite" | "exists" | "missing" | "invalid";
   path: string;
   source?: string;
   message?: string;
 }
-
 export interface ProjectRegistry {
   version: 1;
   defaults?: {
@@ -129,6 +135,7 @@ export interface ServiceConfig {
   };
   contextBudget: ContextBudgetConfig;
   validationBudget: ValidationBudgetConfig;
+  modelRouting?: ModelRoutingConfig;
   codex: {
     command: string;
     approvalPolicy?: unknown;
@@ -208,6 +215,7 @@ export interface AgentRunResult {
   outputTokens?: number;
   totalTokens?: number;
   rateLimits?: Array<Record<string, unknown>>;
+  modelTelemetry?: ModelTelemetryEntry;
   error?: string;
 }
 
@@ -218,6 +226,7 @@ export interface AgentRunner {
     attempt: number | null;
     workspace: Workspace;
     config: ServiceConfig;
+    modelRouting?: ModelRoutingInput;
     onEvent: (event: AgentEvent) => void;
     signal?: AbortSignal;
   }): Promise<AgentRunResult>;

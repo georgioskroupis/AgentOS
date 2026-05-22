@@ -43,6 +43,17 @@ validation_budget:
   enabled: true
   full_validation_command: npm run agent-check
   max_full_validation_runs_per_head: 1
+model_routing:
+  mode: report-only
+  roles:
+    tests-review:
+      model: gpt-5.4-mini
+      reasoning_effort: low
+      cost_bucket: low
+    summarization-status:
+      model: gpt-5.4-mini
+      reasoning_effort: low
+      cost_bucket: low
 codex:
   command: npx -y @openai/codex@0.125.0 app-server
   approval_policy: never
@@ -244,7 +255,11 @@ records `external_state_drift`, refuses implementation dispatch, and, where the
 configured lifecycle policy allows it, comments and moves the issue back to
 `tracker.review_state`. `agent-os status` and `agent-os inspect` show the
 expected state, observed state, and next operator action. Merging remains an
-explicit human action and is not treated as Human Review drift.
+explicit human action and is not treated as Human Review drift. This also
+applies when a linked GitHub pull request is marked ready and an external
+Linear/GitHub integration moves an approved Human Review issue into the running
+state; AgentOS treats that as drift unless the issue is explicitly moved to
+`tracker.merge_state` or resumed with a trusted structured decision.
 
 If a `Merging` issue reaches the merge shepherd before automated review is
 approved and no authoritative supervisor merge decision is recorded, AgentOS
@@ -332,6 +347,19 @@ Context and validation budgets are enforced before expensive repeat work:
 - Codex usage-limit errors with explicit reset times are classified as
   `capacity-wait`; AgentOS schedules the next attempt at the reset time without
   consuming the normal retry budget.
+
+Model routing is report-only by default. `model_routing.roles` may propose
+lower-cost models and reasoning effort for bounded low-risk roles such as
+`tests-review` or `summarization-status`, but AgentOS keeps the inherited Codex
+App Server model unless `model_routing.mode: apply` is explicitly configured.
+Implementation, fixer, CI repair, architecture, security, planning, recovery,
+merge, lifecycle, and other write-capable or sensitive scopes stay on the
+inherited high-capability path unless trusted local config deliberately opts in.
+Malformed artifacts, ambiguous findings, sensitive scope signals, and repeated
+iterations promote or refuse downgrades instead of spending another cheap turn.
+Run inspect output and review artifacts record the role, configured/proposed
+model, reasoning effort, tokens, elapsed time, cost bucket, and escalation or
+refusal reason so operators can prove a split is safe before applying it.
 
 ## Target Repository Lifecycle
 

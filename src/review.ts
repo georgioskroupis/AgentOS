@@ -15,6 +15,7 @@ export interface ReviewerArtifact {
   iteration?: number;
   findings: ReviewFinding[];
   summary?: string;
+  modelTelemetry?: import("./types.js").ModelTelemetryEntry[];
 }
 
 export type ReviewArtifactFailureKind = "missing_artifact" | "malformed_artifact" | "stale_artifact" | "incomplete_artifact";

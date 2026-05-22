@@ -1,8 +1,9 @@
 import { readOnlyReviewConfig } from "./orchestrator-review-helpers.js";
 import { detectCapacityWait } from "./capacity-wait.js";
+import { reviewerRole } from "./model-routing.js";
 import { readReviewArtifactResult, reviewArtifactSnapshot, reviewRunnerFailureArtifact, writeReviewArtifact } from "./review.js";
 import { isHumanInputStop } from "./run-errors.js";
-import type { AgentRunResult, AgentRunner, Issue, ReviewRunnerFailure, ServiceConfig, Workspace } from "./types.js";
+import type { AgentRunResult, AgentRunner, Issue, ModelTelemetryEntry, ReviewRunnerFailure, ServiceConfig, Workspace } from "./types.js";
 import type { JsonlLogger } from "./logging.js";
 import type { ReviewArtifactFailure, ReviewerArtifact } from "./review.js";
 
@@ -36,6 +37,7 @@ export async function runReviewerWithArtifactRetry(input: {
   const failures: ReviewRunnerFailure[] = [];
   const maxAttempts = input.config.agent.maxRetryAttempts + 1;
   let tokenTotal = 0;
+  const modelTelemetryEntries: ModelTelemetryEntry[] = [];
   for (let reviewerAttempt = 1; reviewerAttempt <= maxAttempts; reviewerAttempt += 1) {
     const artifactBeforeAttempt = await reviewArtifactSnapshot(input.workspaceArtifactPath);
     const result = await input.runner.run({
@@ -44,6 +46,12 @@ export async function runReviewerWithArtifactRetry(input: {
       attempt: input.attempt,
       workspace: input.workspace,
       config: readOnlyReviewConfig(input.config, input.workspaceReviewDir),
+      modelRouting: {
+        role: reviewerRole(input.reviewer),
+        reviewer: input.reviewer,
+        attempt: reviewerAttempt,
+        artifactFailure: failures[failures.length - 1]?.reason ?? null
+      },
       signal: input.signal,
       onEvent: (event) => {
         input.onActivity(input.issue.id, event.timestamp);
@@ -52,6 +60,7 @@ export async function runReviewerWithArtifactRetry(input: {
     });
     const terminalRunnerFailure = nonMechanicalRunnerFailure(input, result, reviewerAttempt, maxAttempts);
     tokenTotal += result.totalTokens ?? 0;
+    if (result.modelTelemetry) modelTelemetryEntries.push(result.modelTelemetry);
     if (terminalRunnerFailure) {
       failures.push(terminalRunnerFailure);
       await input.logger.write({
@@ -72,7 +81,7 @@ export async function runReviewerWithArtifactRetry(input: {
       expectedIteration: input.iteration
     });
     if (artifactResult.ok) {
-      await writeReviewArtifact(input.canonicalArtifactPath, artifactResult.artifact);
+      await writeReviewArtifact(input.canonicalArtifactPath, { ...artifactResult.artifact, modelTelemetry: modelTelemetryEntries });
       if (result.status !== "succeeded") await logRunnerFailedWithArtifact(input, result, reviewerAttempt);
       return { artifact: artifactResult.artifact, canonicalArtifactPath: input.canonicalArtifactPath, failures, terminalFailure: null, tokenTotal };
     }

@@ -47,7 +47,23 @@ describe("run artifacts", () => {
       inputTokens: 10,
       outputTokens: 5,
       totalTokens: 15,
-      rateLimits: [{ limitId: "codex" }]
+      rateLimits: [{ limitId: "codex" }],
+      modelTelemetry: {
+        role: "tests-review",
+        mode: "report-only",
+        applied: false,
+        configured: true,
+        model: "inherited",
+        reasoningEffort: null,
+        proposedModel: "gpt-5.4-mini",
+        proposedReasoningEffort: "low",
+        costBucket: "low",
+        escalationReason: null,
+        refusedReason: null,
+        recordedAt: "2026-05-01T00:00:02.000Z",
+        elapsedMs: 2000,
+        tokenUsage: { input: 10, output: 5, total: 15 }
+      }
     });
 
     expect(completed).toMatchObject({
@@ -63,6 +79,7 @@ describe("run artifacts", () => {
     expect(Object.keys(completed.artifactHashes).sort()).toEqual(["events.jsonl", "handoff.md", "prompt.md"]);
     const inspected = formatRunInspect(await store.inspect(summary.runId));
     expect(inspected).toContain("Rate limits: 1 snapshot recorded");
+    expect(inspected).toContain("Model routing: tests-review=report-only:gpt-5.4-mini");
     expect(inspected).toContain("Warnings: none");
 
     await appendFile(join(repo, ".agent-os", "runs", summary.runId, "prompt.md"), "\ntampered", "utf8");

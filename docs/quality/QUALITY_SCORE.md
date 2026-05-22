@@ -7,6 +7,7 @@ Use this as a lightweight rubric for harnessed repositories.
 | Context | `AGENTS.md`, architecture, workflow, product docs, and targeted context packs give agents the smallest current source of truth |
 | Validation | One local command verifies common gates, validation evidence records command attempts, unchanged-head reuse is explicit, and test-suite layers are documented |
 | Observability | `status`, `inspect`, run artifacts, sanitized logs, validation timing, CI state, and app proof point operators to the next safe action |
+| Model routing | Per-role model policy is report-only until proven safe; telemetry records role, model, reasoning effort, elapsed time, tokens, cost bucket, and promotion/refusal reasons |
 | Lifecycle | Workflow states, lifecycle ownership, Linear comments, handoff outcomes, and tracker-write boundaries are documented and enforced |
 | Review loops | Required reviewers, reviewer artifacts, fixer iterations, review budgets, and human escalation paths are explicit |
 | Restart recovery | Dead/stalled runs, durable retries, startup reconstruction, stale locks, and capacity waits recover without duplicate work |
@@ -94,6 +95,13 @@ Use this as a lightweight rubric for harnessed repositories.
   `npm run agent-check` work without new information. Reuse is valid only when
   the selected head, validation head, workflow/config hash, trust mode,
   automation profile, repair policy, and validation risk profile still match.
+- Model routing starts as observability. Low-risk read-only roles may propose a
+  cheaper/faster model in `report-only` mode, while implementation, fixer, CI
+  repair, security, architecture, lifecycle, recovery, merge, and other
+  write-capable or sensitive scopes retain the inherited high-capability model
+  unless trusted workflow config explicitly applies a route. Malformed
+  artifacts, ambiguous findings, and repeated iterations promote or refuse the
+  downgrade and are visible in run/review artifacts.
 - GitHub CI exists and the merge shepherd requires at least one successful check
   before merging the selected primary target and moving `Merging` issues to
   `Done`; post-merge cleanup failures are operator-visible warnings, not

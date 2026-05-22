@@ -100,6 +100,7 @@ function externalStateDriftComment(drift: ExternalHumanReviewStateDrift): string
 function humanReviewHeldReason(config: ServiceConfig, issue: Issue, state: IssueState): string | null {
   if (state.lifecycleStatus === "supervisor_continuation" || state.lifecycleStatus === "externally_fixed") return null;
   if (state.reviewStatus === "human_required" || state.phase === "human-required") return "local AgentOS state still requires Human Review";
+  if (state.phase === "completed" && state.reviewStatus === "approved") return "local AgentOS state records an approved pull request awaiting an explicit Human Review or Merging decision";
   if (state.phase === "completed" && state.reviewStatus !== "approved") return "local AgentOS handoff is completed and awaiting Human Review";
   return null;
 }

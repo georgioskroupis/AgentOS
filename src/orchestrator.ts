@@ -1311,7 +1311,7 @@ export class Orchestrator {
           prompt,
           attempt,
           workspace,
-          config: this.config,
+          config: this.config, modelRouting: { role: "implementation", attempt: turnNumber },
           signal,
           onEvent: (event) => {
             this.markRunningActivity(issue.id, event.timestamp);
@@ -1979,7 +1979,7 @@ export class Orchestrator {
           prompt: fixerPrompt,
           attempt,
           workspace,
-          config: this.config,
+          config: this.config, modelRouting: { role: fixContextKind === "ci-repair" ? "ci-repair" : "fixer", attempt: iteration, risk: blocking.map((finding) => finding.reviewer) },
           signal,
           onEvent: (event) => {
             this.markRunningActivity(issue.id, event.timestamp);

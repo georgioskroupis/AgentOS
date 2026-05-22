@@ -68,6 +68,19 @@ export function recentEventMessage(entry: AgentEvent): string {
   return entry.message ?? "";
 }
 
+export function modelTelemetryStatusSuffix(parsed: Record<string, unknown>): string | null {
+  const entries = Array.isArray(parsed.modelTelemetry) ? parsed.modelTelemetry.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry)) : [];
+  if (entries.length === 0) return null;
+  const latest = entries[entries.length - 1];
+  const role = typeof latest.role === "string" ? latest.role : "unknown-role";
+  const model = typeof latest.model === "string" ? latest.model : "unknown";
+  const proposed = typeof latest.proposedModel === "string" ? ` proposed ${latest.proposedModel}` : "";
+  const elapsed = typeof latest.elapsedMs === "number" ? ` ${latest.elapsedMs}ms` : "";
+  const tokenUsage = latest.tokenUsage && typeof latest.tokenUsage === "object" && !Array.isArray(latest.tokenUsage) ? (latest.tokenUsage as Record<string, unknown>) : {};
+  const tokens = typeof tokenUsage.total === "number" ? ` tokens ${tokenUsage.total}` : "";
+  return `model ${role}=${model}${proposed}${elapsed}${tokens}`;
+}
+
 function scopeReportIsHistorical(state: IssueState | null, report: ScopeReportState): boolean {
   if (!state || !report.dispatchAdvice.shouldBlock) return false;
   if (state.lifecycleStatus === "planning_required" || state.phase === "needs-input") return false;

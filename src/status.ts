@@ -11,7 +11,7 @@ import { formatReviewBudgetState, formatSplitRecommendation, isRecommendOnlySpli
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRetryEntry } from "./runtime-state.js";
 import { daemonCredentialDetails, daemonRuntimeDetails, getDaemonStatus } from "./status-daemon.js";
 import { branchUpdateDetails } from "./status-branch-update.js";
-import { contextBudgetDetails, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
+import { contextBudgetDetails, modelTelemetryStatusSuffix, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
 import { externalStateDriftDetails, externalStateDriftWarning } from "./status-state-drift.js";
 import { appendEvidenceStatus, validationDetails } from "./status-validation.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
@@ -209,6 +209,7 @@ async function reviewArtifactFreshness(path: string, state: IssueState | null): 
   }
   if (stale.length) return ` [stale, non-authoritative: ${[...stale, ...unknown].join("; ")}]`;
   if (unknown.length) return ` [unknown, non-authoritative: ${[...labels, ...unknown].join("; ")}]`;
+  if (modelTelemetryStatusSuffix(parsed)) labels.push(modelTelemetryStatusSuffix(parsed)!);
   return ` [current: ${labels.join("; ")}]`;
 }
 
