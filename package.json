@@ -18,6 +18,7 @@
     "lint": "node scripts/check-lint.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "certification:e2e": "bash scripts/certification-e2e.sh",
     "agent-check": "bash scripts/agent-check.sh"
   },
   "dependencies": {

@@ -4,6 +4,8 @@ Certification issue: VER-55
 
 Status: certified.
 
+Traceability matrix: `docs/releases/CERTIFICATION_TRACEABILITY.md`
+
 This checkpoint certifies the AgentOS MVP against the source-faithful roadmap
 derived from OpenAI Harness Engineering and Symphony. The MVP bar is not "all
 future automation is complete"; it is that AgentOS now has a coherent

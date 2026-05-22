@@ -86,6 +86,21 @@ describe("architecture and docs checks", () => {
       expect(script).toContain("failed in");
     }
   });
+
+  it("keeps live E2E certification gated and discoverable", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
+    const script = await readFile("scripts/certification-e2e.sh", "utf8");
+
+    expect(packageJson.scripts["certification:e2e"]).toBe("bash scripts/certification-e2e.sh");
+    expect(script).toContain("AGENT_OS_CERTIFICATION_LIVE");
+    expect(script).toContain("AGENT_OS_CERTIFICATION_ACK");
+    expect(script).toContain("linear doctor");
+    expect(script).toContain("orchestrator once");
+
+    await expect(execShell("bash", ["scripts/certification-e2e.sh"], process.cwd())).resolves.toMatchObject({
+      stdout: expect.stringContaining("AgentOS live E2E certification skipped.")
+    });
+  });
 });
 
 async function writeArchitectureFixture(repo: string): Promise<void> {
@@ -134,7 +149,9 @@ async function writeDocsFixture(repo: string): Promise<void> {
   const requiredDocs = [
     "docs/architecture/README.md",
     "docs/architecture/AGENT_OS.md",
+    "docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md",
     "docs/decisions/README.md",
+    "docs/decisions/0002-optional-extension-boundaries.md",
     "docs/product/README.md",
     "docs/quality/APP_LEGIBILITY.md",
     "docs/quality/PROOF_OF_WORK.md",
@@ -147,6 +164,7 @@ async function writeDocsFixture(repo: string): Promise<void> {
     "docs/runbooks/MIGRATIONS.md",
     "docs/runbooks/DOGFOODING.md",
     "docs/planning/SOURCE_ALIGNMENT_AUDIT.md",
+    "docs/releases/CERTIFICATION_TRACEABILITY.md",
     "docs/security/SECURITY.md",
     "docs/security/ORCHESTRATOR_TRUST_MODEL.md"
   ];
@@ -160,7 +178,7 @@ async function writeDocsFixture(repo: string): Promise<void> {
     await mkdir(join(repo, path, ".."), { recursive: true });
     let text = `${path}\n`;
     if (path.endsWith("SOURCE_ALIGNMENT_AUDIT.md")) {
-      text = "pre-dispatch reconciliation\nrecoverable partial work\ndaemon liveness\nExisting Implementation Audit\ncheck:architecture\ncheck:docs\n";
+      text = "pre-dispatch reconciliation\nrecoverable partial work\ndaemon liveness\nExisting Implementation Audit\ncheck:architecture\ncheck:docs\ndocs/releases/CERTIFICATION_TRACEABILITY.md\ndocs/decisions/0002-optional-extension-boundaries.md\n";
     } else if (path.endsWith("QUALITY_SCORE.md")) {
       text = qualityScoreFixture();
     } else if (path.endsWith("TEST_SUITE.md")) {
@@ -258,8 +276,12 @@ function qualityScoreFixture(): string {
 }
 
 function execNode(script: string, cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
+  return execShell(process.execPath, [script], cwd);
+}
+
+function execShell(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolvePromise, reject) => {
-    execFile(process.execPath, [script], { cwd }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd }, (error, stdout, stderr) => {
       if (error) {
         reject(Object.assign(error, { stdout, stderr, code: error.code }));
         return;

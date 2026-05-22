@@ -10,6 +10,12 @@ At the same time, source alignment does not mean blind mimicry of OpenAI's
 internal trust posture. Public-safe defaults may remain stricter when the
 deviation is explicit, bounded, justified, and configurable.
 
+Certification traceability is tracked in
+`docs/releases/CERTIFICATION_TRACEABILITY.md`. Optional extension boundaries are
+tracked in `docs/decisions/0002-optional-extension-boundaries.md` so dashboard,
+registry, model routing, tracker-adapter, `linear_graphql`, and merge shepherd
+work stays visibly separate from the core Symphony scheduler contract.
+
 ## 1. Current Alignment Summary
 
 AgentOS is source-aligned in its broad shape:
