@@ -315,25 +315,22 @@ artifact only.
 
 Linear is the control plane: issues in configured active states are dispatched
 and blocked issues wait for their blockers. Lifecycle ownership is explicit in
-`WORKFLOW.md`. The current safe default is `lifecycle.mode:
-orchestrator-owned`, where the orchestrator moves/comments on the ticket for
-start, retry, failure, and review handoff. Codex focuses on the repo work and
-writes `.agent-os/handoff-<issue>.md` for the final Linear comment. Each handoff
-includes an `AgentOS-Outcome` line so already-satisfied issues can become no-op
-review handoffs instead of duplicate implementations. AgentOS-owned lifecycle
-comments include hidden `agentos:event` markers so retries and restarts update
-those comments in place when Linear supports it. `hybrid` and
-`agent-owned` modes are available as a source-alignment path. In those modes,
-repo-local `scripts/agent-linear-*` tools can own substantive comments, PR
-metadata, and handoff posting while workflow validation gates `agent-owned`
-until tracker tools, run/attempt idempotency, transitions, duplicate behavior,
-fallback requirements, and post-run lifecycle evidence are declared and
-verified. Agent-owned runs persist `agent-owned-lifecycle-evidence.json` in the
-run artifacts and issue state; missing tracker evidence becomes local
-`human_required` state rather than scheduler-authored replacement writes. Raw
-`linear_graphql` remains a separate extension opt-in through
-`lifecycle.client_tracker_tools`; it is not enabled by `agent-owned` alone and
-is not default certification proof.
+`WORKFLOW.md`. The default is now `lifecycle.mode: agent-owned`: Codex changes
+the repo and uses repo-local `scripts/agent-linear-*` tools for run-start,
+substantive comments, PR metadata, handoff posting, and the final `Human Review`
+transition. Each handoff includes an `AgentOS-Outcome` line so
+already-satisfied issues can become no-op review handoffs instead of duplicate
+implementations. Agent-owned lifecycle comments include hidden
+run/attempt-correlated `agentos:event` markers so retries and restarts update or
+verify the correct comments. Strict validation requires tracker tools,
+run/attempt idempotency, transitions, duplicate behavior, fallback requirements,
+and post-run lifecycle evidence. Agent-owned runs persist
+`agent-owned-lifecycle-evidence.json` in the run artifacts and issue state;
+missing tracker evidence becomes local `human_required` state rather than
+scheduler-authored replacement writes. Scheduler-owned tracker writes are
+reserved for enumerated no-agent-can-act safety reasons. Raw `linear_graphql`
+remains a separate extension opt-in through `lifecycle.client_tracker_tools`; it
+is not enabled by `agent-owned` alone and is not default certification proof.
 If external Linear/GitHub automations move a human-held issue out of
 `Human Review`, AgentOS records external state drift, refuses implementation
 dispatch, and moves it back to the configured review state when lifecycle

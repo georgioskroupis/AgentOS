@@ -90,11 +90,11 @@ ignored runtime artifacts under `.agent-os/`, `coverage/`, `dist/`, and
    the current operator surfaces.
 4. Protected-branch and merge-queue behavior remains report-only unless a
    trusted workflow explicitly opts into supported merge shepherd behavior.
-5. `hybrid` and strict-gated `agent-owned` lifecycle modes exist, but
-   orchestrator-owned remains the safe default until broader dogfood evidence
-   and the agent-owned default flip prove the full path. Post-run evidence
-   verification now records local `human_required` state instead of duplicating
-   missing normal lifecycle writes.
+5. `agent-owned` is now the default source-faithful lifecycle posture for root
+   and base template workflows. Post-run evidence verification records local
+   `human_required` state instead of duplicating missing normal lifecycle
+   writes, and scheduler-owned tracker writes are reserved for enumerated
+   no-agent-can-act safety reasons.
 
 ## Non-MVP Future Work
 

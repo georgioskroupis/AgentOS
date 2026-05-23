@@ -9,17 +9,19 @@ bin/agent-os doctor ../my-project --profile typescript
 bin/agent-os check ../my-project
 ```
 
-Check `lifecycle.mode` in `WORKFLOW.md` before rollout. The safe default is
-`orchestrator-owned`: the orchestrator owns Linear moves and comments, while
-Codex changes the repo, runs the harness check, opens or updates a PR when
-needed, and writes `.agent-os/handoff-<issue>.md`.
+Check `lifecycle.mode` in `WORKFLOW.md` before rollout. The default is
+`agent-owned`: Codex changes the repo, runs the harness check, opens or updates
+a PR when needed, writes `.agent-os/handoff-<issue>.md`, and uses repo-local
+`scripts/agent-linear-*` tools for normal Linear moves, comments, PR metadata,
+handoff posting, and `Human Review`.
 
 `hybrid` keeps orchestrator-owned safety/bookkeeping moves and lifecycle markers
 but expects substantive handoff/update content to be owned by agent artifacts or
 tracker tools. `agent-owned` is strict-validation gated; strict workflow
 validation rejects it unless tracker tools, issue/run/attempt idempotency
 markers, allowed transitions, duplicate-comment behavior, and fallback behavior
-are declared.
+are declared. Scheduler-owned tracker writes are reserved for enumerated
+no-agent-can-act safety reasons.
 
 For PR-producing work, Codex should create or find the pull request through
 the repo-local non-interactive harness script:

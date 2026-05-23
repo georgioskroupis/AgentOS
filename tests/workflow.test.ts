@@ -636,6 +636,39 @@ describe("workflow", () => {
     expect(rawGraphqlInAllowlist.errors).toContain("linear_graphql must be configured through lifecycle.client_tracker_tools, not lifecycle.allowed_tracker_tools");
   });
 
+  it("keeps root and base template workflows as strict agent-owned defaults", async () => {
+    for (const path of ["WORKFLOW.md", "templates/base-harness/WORKFLOW.md"]) {
+      const workflow = await loadWorkflow(resolve(path));
+      const validation = validateWorkflowDefinition(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true);
+      const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+
+      expect(validation.errors).toEqual([]);
+      expect(config.lifecycle.mode).toBe("agent-owned");
+      expect(config.lifecycle.allowedTrackerTools).toEqual(
+        expect.arrayContaining([
+          "scripts/agent-linear-comment.sh",
+          "scripts/agent-linear-move.sh",
+          "scripts/agent-linear-pr.sh",
+          "scripts/agent-linear-handoff.sh"
+        ])
+      );
+      expect(config.lifecycle.idempotencyMarkerFormat).toContain("{event}");
+      expect(config.lifecycle.idempotencyMarkerFormat).toContain("{issue}");
+      expect(config.lifecycle.idempotencyMarkerFormat).toContain("{run}");
+      expect(config.lifecycle.idempotencyMarkerFormat).toContain("{attempt}");
+      expect(config.lifecycle.allowedStateTransitions).toEqual(expect.arrayContaining(["Todo -> In Progress", "Todo -> Human Review", "In Progress -> Human Review"]));
+      expect(config.lifecycle.duplicateCommentBehavior).toBe("upsert");
+      expect(config.lifecycle.fallbackBehavior).toContain("handoff");
+      expect(config.lifecycle.fallbackBehavior).toContain("human_required");
+      expect(config.lifecycle.clientTrackerTools).not.toContain("linear_graphql");
+      expect(workflow.prompt_template).toContain("scripts/agent-linear-comment.sh");
+      expect(workflow.prompt_template).toContain("scripts/agent-linear-move.sh");
+      expect(workflow.prompt_template).toContain("scripts/agent-linear-pr.sh");
+      expect(workflow.prompt_template).toContain("scripts/agent-linear-handoff.sh");
+      expect(workflow.prompt_template).toContain("Do not use raw `linear_graphql` unless `lifecycle.client_tracker_tools`");
+    }
+  });
+
   it("rejects invalid lifecycle configs", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-lifecycle-invalid-"));
     const workflowPath = join(repo, "WORKFLOW.md");

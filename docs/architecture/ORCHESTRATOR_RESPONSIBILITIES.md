@@ -8,7 +8,7 @@ is a planning artifact, not a request to move code immediately.
 | Workflow loading and strict config validation | `src/workflow.ts` | Core config boundary; orchestration consumes resolved config |
 | Tracker polling and eligibility | `src/orchestrator.ts`, `src/orchestrator-tracker-guard.ts` | Core scheduler reads tracker state before dispatch |
 | Dependency and active-state guardrails | `src/orchestrator-tracker-guard.ts` | Core scheduler; no runner side effects before guardrails pass |
-| Claiming and lifecycle comments | `src/orchestrator.ts`, `src/lifecycle-controller.ts`, `src/orchestrator-lifecycle-comments.ts`, `src/lifecycle-events.ts` | Core scheduler emits lifecycle events; the thin lifecycle controller routes existing compatibility tracker writes until agent-owned tooling becomes the default |
+| Claiming and lifecycle comments | `src/orchestrator.ts`, `src/lifecycle-controller.ts`, `src/orchestrator-lifecycle-comments.ts`, `src/lifecycle-events.ts` | Default lifecycle progress is agent-owned through repo-local tools; the thin lifecycle controller rejects normal scheduler writes in `agent-owned` and only allows enumerated `scheduler_safety` writes when no agent can act |
 | Workspace creation and bootstrap failure handling | `src/workspace.ts`, `src/orchestrator-workspace-bootstrap.ts` | Core workspace lifecycle; hooks run from created workspaces |
 | Runner invocation and event capture | `src/orchestrator.ts`, `src/runner/app-server.ts` | Runner protocol stays below orchestration policy |
 | Agent-owned lifecycle evidence verification | `src/agent-owned-lifecycle-evidence.ts`, `src/orchestrator.ts`, `src/runs.ts`, `src/issue-state.ts` | Core verification for agent-owned mode; missing tracker evidence becomes local `human_required` state and does not trigger scheduler duplication of normal lifecycle writes |
@@ -19,7 +19,7 @@ is a planning artifact, not a request to move code immediately.
 | Scope scoring and planning guardrails | `src/scope-report.ts`, `src/scope-report-scoring.ts` | Planning aid; should pause broad work rather than expand implementation |
 | Dashboard/API state | `src/http-server.ts`, `dashboard/` | Optional observability extension; not a scheduler control plane |
 | Registry-wide scheduling | `src/registry-orchestrator.ts`, `src/registry.ts` | Optional extension over project-local orchestration |
-| Linear writes and tracker tools | `src/linear.ts`, `src/lifecycle-controller.ts`, `src/agent-lifecycle.ts`, `src/cli-linear-helpers.ts`, `src/tracker-boundaries.ts` | Tracker read/write capabilities are split at the type boundary; the lifecycle controller only routes event-backed compatibility writes, and normal lifecycle writes are productionized behind repo-local agent-owned tools before the default flip |
+| Linear writes and tracker tools | `src/linear.ts`, `src/lifecycle-controller.ts`, `src/agent-lifecycle.ts`, `src/cli-linear-helpers.ts`, `src/tracker-boundaries.ts` | Tracker read/write capabilities are split at the type boundary; normal lifecycle writes are productionized behind repo-local agent-owned tools, while raw GraphQL remains optional extension behavior |
 
 ## Refactor Guardrails
 

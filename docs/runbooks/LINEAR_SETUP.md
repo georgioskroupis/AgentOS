@@ -5,8 +5,9 @@
 AgentOS uses Linear in Symphony style: Linear owns work selection and
 monitoring, while the local orchestrator owns polling, workspace creation,
 Codex App Server runs, and retry timing. Tracker write ownership is configured
-through `lifecycle.mode`; the safe default is `orchestrator-owned`, where the
-orchestrator also owns state moves and lifecycle comments.
+through `lifecycle.mode`; the default is `agent-owned`, where the coding agent
+uses repo-local lifecycle tools for normal state moves and comments while the
+scheduler keeps only enumerated no-agent-can-act safety writes.
 
 Put an issue in a configured active state and run the local orchestrator:
 
@@ -104,13 +105,13 @@ for the same state.
 
 ## Linear Lifecycle
 
-In the default `orchestrator-owned` lifecycle mode, the orchestrator performs the
-Linear lifecycle:
+In the default `agent-owned` lifecycle mode, repo-local lifecycle tools perform
+normal Linear progress:
 
 - active states, `Todo` and `In Progress`, are the queue/continuation lane
-- running state, for example `In Progress`, means AgentOS picked it up
-- retry comments show automatic retry timing and error text
-- `Human Review` means Codex completed the run or the retry budget needs human attention
+- running state, for example `In Progress`, is recorded by the agent at run start
+- retry/failure safety comments are scheduler-owned only for enumerated no-agent-can-act reasons
+- `Human Review` means Codex posted a verified handoff or the run needs human attention
 - `Merging` is the human approval signal for AgentOS to check GitHub, squash-merge, delete the branch, and move the issue to `Done`
 
 Codex writes `.agent-os/handoff-<issue>.md`; AgentOS posts that file as the
@@ -163,8 +164,9 @@ scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md --run-
 
 Configure the matching `lifecycle.allowed_tracker_tools`, marker format,
 allowed transitions, duplicate-comment behavior, and fallback behavior before
-enabling those modes. `orchestrator-owned` remains the default and does not
-allow agent tracker writes through these lifecycle wrappers.
+enabling lifecycle wrappers in custom workflows. `orchestrator-owned` remains a
+legacy compatibility mode and does not allow agent tracker writes through these
+lifecycle wrappers.
 Lifecycle file inputs must stay inside the repository, and handoff posting reads
 the resolved issue's `.agent-os/handoff-<issue>.md` artifact. The wrappers use a
 trusted AgentOS CLI from `AGENT_OS_SOURCE_REPO` or `PATH`, keep `WORKFLOW.md` as

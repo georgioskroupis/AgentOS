@@ -153,6 +153,78 @@ describe("TrackerLifecycleController", () => {
 
     expect(writes).toEqual([]);
   });
+
+  it("allows enumerated scheduler safety writes in agent-owned mode and logs the safety reason", async () => {
+    const writes: string[] = [];
+    const fixture = controllerFixture({
+      config: fakeServiceConfig({ lifecycle: { ...fakeServiceConfig().lifecycle, mode: "agent-owned" } }),
+      tracker: {
+        async move(issue, state) {
+          writes.push(`${issue} -> ${state}`);
+        },
+        async upsertComment(issue, body, key) {
+          writes.push(`${issue} ${key} ${body}`);
+          return "created";
+        }
+      }
+    });
+
+    await expect(
+      fixture.controller.record(event({
+        actor: "scheduler_safety",
+        type: "state_transition_requested",
+        requestedState: "Human Review",
+        safetyReason: "pre_dispatch_safety_block"
+      }))
+    ).resolves.toMatchObject({ trackerUpdateResult: "applied" });
+    await expect(
+      fixture.controller.record(event({
+        actor: "scheduler_safety",
+        type: "progress_comment",
+        commentBody: "Safety bookkeeping.",
+        commentKey: "planning_recommended",
+        safetyReason: "pre_dispatch_safety_block"
+      }))
+    ).resolves.toMatchObject({ trackerUpdateResult: "applied" });
+
+    expect(writes).toHaveLength(2);
+    expect(fixture.logEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "scheduler_safety", message: "pre_dispatch_safety_block:move:applied" }),
+        expect.objectContaining({ type: "scheduler_safety", message: "pre_dispatch_safety_block:comment:applied" })
+      ])
+    );
+  });
+
+  it("rejects scheduler safety writes without an allowed reason or with substantive content", async () => {
+    const writes: string[] = [];
+    const fixture = controllerFixture({
+      config: fakeServiceConfig({ lifecycle: { ...fakeServiceConfig().lifecycle, mode: "agent-owned" } }),
+      tracker: {
+        async move() {
+          writes.push("move");
+        },
+        async comment() {
+          writes.push("comment");
+        }
+      }
+    });
+
+    await expect(fixture.controller.record(event({ actor: "scheduler_safety", type: "state_transition_requested", requestedState: "Human Review" }))).resolves.toMatchObject({
+      trackerUpdateResult: "unsupported"
+    });
+    await expect(
+      fixture.controller.record(event({
+        actor: "scheduler_safety",
+        type: "progress_comment",
+        commentBody: "Substantive content should stay agent-owned.",
+        commentKind: "substantive",
+        safetyReason: "pre_dispatch_safety_block"
+      }))
+    ).resolves.toMatchObject({ trackerUpdateResult: "unsupported" });
+
+    expect(writes).toEqual([]);
+  });
 });
 
 function controllerFixture(input: { config?: ServiceConfig; issueState?: string; tracker?: Partial<TrackerCapabilities> } = {}): {

@@ -4,7 +4,19 @@ automation:
   profile: high-throughput
   repair_policy: mechanical-first
 lifecycle:
-  mode: orchestrator-owned
+  mode: agent-owned
+  allowed_tracker_tools:
+    - scripts/agent-linear-comment.sh
+    - scripts/agent-linear-move.sh
+    - scripts/agent-linear-pr.sh
+    - scripts/agent-linear-handoff.sh
+  idempotency_marker_format: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"
+  allowed_state_transitions:
+    - Todo -> In Progress
+    - Todo -> Human Review
+    - In Progress -> Human Review
+  duplicate_comment_behavior: upsert
+  fallback_behavior: write handoff and stop human_required
 tracker:
   kind: linear
   endpoint: https://api.linear.app/graphql
@@ -171,14 +183,13 @@ directories require explicit recovery instead of silent reuse.
 
 ## Lifecycle Ownership
 
-`lifecycle.mode: orchestrator-owned` is the current safe AgentOS default and an
-intentional bounded deviation from Symphony's usual tracker-write boundary. In
-this mode the orchestrator owns idempotent Linear lifecycle comments and state
-moves while Codex changes the repo, opens or updates PRs only when the issue
-needs one, and writes handoff/validation artifacts.
+`lifecycle.mode: agent-owned` is the AgentOS default and source-faithful
+certification target. In this mode the scheduler starts and observes isolated
+runs, while the coding agent uses repo-local lifecycle tools for normal Linear
+progress: run-start/running, substantive progress comments, PR metadata,
+handoff posting, and the final `Human Review` transition.
 
-Future source-aligned modes are separate from `trust_mode` and automation repair
-policy:
+Lifecycle ownership is separate from `trust_mode` and automation repair policy:
 
 - `hybrid`: the orchestrator keeps safety/bookkeeping state moves and lifecycle
   markers, while substantive handoff/update content is expected to be owned by
@@ -207,14 +218,20 @@ file or tool identity. In `hybrid` and `agent-owned`, configure
 and `lifecycle.fallback_behavior` to let agents own substantive comments, PR
 metadata, and handoff posting. In strict `agent-owned`, the marker format must
 include `{event}`, `{issue}`, `{run}`, and `{attempt}`; lifecycle tools require
-`--run-id` and `--attempt` and emit JSON result output. Keep
-`orchestrator-owned` as the default unless a project explicitly opts into that
-source-aligned boundary.
+`--run-id` and `--attempt` and emit JSON result output.
 Lifecycle `--file` arguments must be relative paths inside the repository, and
 `record-handoff` reads only `.agent-os/handoff-<resolved issue>.md`. PR metadata
 must point at GitHub pull requests in the current repository, and the handoff's
 `Validation-JSON` evidence must verify, before local issue state is stored or
 Linear is updated.
+
+Scheduler-owned tracker writes are reserved for no-agent-can-act safety paths
+and must be recorded as `scheduler_safety` with one of these reasons:
+`bootstrap_failed_before_agent_start`, `pre_dispatch_safety_block`,
+`retry_budget_exhausted`, `stale_run_recovery_required`,
+`terminal_cleanup_reconciliation`, or
+`agent_owned_lifecycle_missing_evidence`. Normal lifecycle progress through the
+scheduler is unsupported in `agent-owned` mode.
 
 `agent-owned` Linear workflows can also opt into a Codex App Server client tool
 named `linear_graphql` by declaring it in `lifecycle.client_tracker_tools`. The
@@ -601,6 +618,13 @@ Responsibilities:
    tools.
 8. Write machine-readable validation evidence to `.agent-os/validation/{{ issue.identifier }}.json` with `schemaVersion: 1`, `issueIdentifier`, `runId` from the AgentOS run context, `repoHead` from `git rev-parse HEAD`, the AgentOS run context `reuseProfile`, final authoritative `status`, and command entries for every `npm run agent-check` attempt including `name`, `exitCode`, `startedAt`, and `finishedAt`. Historical failed attempts may be recorded when a later required validation attempt passed.
 9. Write a Linear-ready handoff note to `.agent-os/handoff-{{ issue.identifier }}.md` with `AgentOS-Outcome: implemented`, `AgentOS-Outcome: partially-satisfied`, or `AgentOS-Outcome: already-satisfied`, `Validation-JSON: .agent-os/validation/{{ issue.identifier }}.json`, plus summary, validation, app proof, risks, and every PR link when PRs exist so AgentOS records them in `prs[]`. Use `App-Proof:` or `Proof-Artifact:` lines for proof files or URLs that should be visible in `agent-os inspect`.
-10. Follow `lifecycle.mode`: in the current `orchestrator-owned` mode, do not
-   move or comment on the Linear issue directly; the AgentOS orchestrator owns
-   Linear lifecycle updates.
+10. Follow `lifecycle.mode: agent-owned`: read the `Run ID` from the AgentOS
+   Run Context and use `{{ attempt | default: 0 }}` as the lifecycle attempt.
+   Use repo-local lifecycle tools instead of direct Linear writes:
+   - At run start, move to `In Progress` with `scripts/agent-linear-move.sh {{ issue.identifier }} "In Progress" --run-id <run-id> --attempt {{ attempt | default: 0 }}` and post a run-start marker with `scripts/agent-linear-comment.sh {{ issue.identifier }} --event run_started --run-id <run-id> --attempt {{ attempt | default: 0 }} --file <repo-local-start-note>`.
+   - For substantive progress comments, write a repo-local note file and run `scripts/agent-linear-comment.sh {{ issue.identifier }} --event progress_comment --run-id <run-id> --attempt {{ attempt | default: 0 }} --file <repo-local-note>`.
+   - After opening or updating a PR, record it with `scripts/agent-linear-pr.sh {{ issue.identifier }} <pull-request-url> --run-id <run-id> --attempt {{ attempt | default: 0 }}`.
+   - After validation evidence and handoff are written, run `scripts/agent-linear-handoff.sh {{ issue.identifier }} --file .agent-os/handoff-{{ issue.identifier }}.md --run-id <run-id> --attempt {{ attempt | default: 0 }}`.
+   - Finally move to `Human Review` with `scripts/agent-linear-move.sh {{ issue.identifier }} "Human Review" --run-id <run-id> --attempt {{ attempt | default: 0 }}`.
+   Do not use raw `linear_graphql` unless `lifecycle.client_tracker_tools`
+   explicitly advertises it.
