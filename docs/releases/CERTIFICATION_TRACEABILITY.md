@@ -12,6 +12,7 @@ tests, and proof commands. Linear status alone is not certification evidence.
 | VER-111 | Test-suite audit and validation gate clarity | `docs/quality/TEST_SUITE.md`, `scripts/agent-check.sh` | `tests/check-scripts.test.ts` | `npm test -- tests/check-scripts.test.ts --reporter verbose && npm run agent-check` | Covered; validation-cost work remains separate |
 | VER-113 | Hook/bootstrap failure becomes structured recovery, not daemon crash | `src/orchestrator-workspace-bootstrap.ts`, `src/workspace.ts` | `tests/orchestrator.test.ts`, `tests/workspace.test.ts` | `npm test -- tests/workspace.test.ts tests/orchestrator.test.ts -t "workspace|bootstrap" --reporter verbose` | Covered, strengthened by PR #100 |
 | VER-126 | Post-review workspace hook cwd/create/partial-bootstrap correction | `src/workspace.ts`, `scripts/agent-bootstrap-worktree.sh` | `tests/workspace.test.ts`, `tests/workflow.test.ts` | `npm test -- tests/workspace.test.ts tests/workflow.test.ts --reporter verbose` | Complete |
+| VER-128 | Lifecycle event and tracker boundary interfaces for the A+ refactor | `src/lifecycle-events.ts`, `src/tracker-boundaries.ts`, `scripts/check-architecture.mjs` | `tests/check-scripts.test.ts`, `docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md` | `npm test -- tests/check-scripts.test.ts --reporter verbose && npm run check:architecture` | Active in boundary-interface PR |
 
 ## Certification Rules
 
