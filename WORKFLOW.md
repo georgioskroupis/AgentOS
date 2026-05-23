@@ -212,8 +212,9 @@ include `{event}`, `{issue}`, `{run}`, and `{attempt}`; lifecycle tools require
 source-aligned boundary.
 Lifecycle `--file` arguments must be relative paths inside the repository, and
 `record-handoff` reads only `.agent-os/handoff-<resolved issue>.md`. PR metadata
-must point at GitHub pull requests in the current repository before it is stored
-or posted.
+must point at GitHub pull requests in the current repository, and the handoff's
+`Validation-JSON` evidence must verify, before local issue state is stored or
+Linear is updated.
 
 `agent-owned` Linear workflows can also opt into a Codex App Server client tool
 named `linear_graphql` by declaring it in `lifecycle.client_tracker_tools`. The

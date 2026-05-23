@@ -7,6 +7,8 @@ import { isLinearIdentifier } from "./linear.js";
 import type { LinearCommentWriteResult, LinearIssueReference } from "./linear.js";
 import { redactText } from "./redaction.js";
 import type { HumanDecisionFindingsState, HumanDecisionType, Issue, LifecycleDuplicateCommentBehavior, PullRequestRef, ServiceConfig } from "./types.js";
+import { verifyValidationEvidence } from "./validation.js";
+import { validationReuseProfileForConfig } from "./validation-profile.js";
 import { workspaceKey } from "./workspace.js";
 
 export const DEFAULT_AGENT_TRACKER_MARKER_FORMAT = "<!-- agentos:event={event} issue={issue} -->";
@@ -126,12 +128,13 @@ export async function moveWithAgentLifecycleTool(
   } else {
     assertAllowedTransition(context.config, issue.state, input.state);
   }
+  const marker = input.supervisor ? undefined : agentTrackerMarker(context.config, input.event ?? "state_transition", issue.identifier, input);
   if (sameState(issue.state, input.state)) {
-    return withLifecycleCorrelation({ status: "skipped", issueIdentifier: issue.identifier }, input);
+    return withLifecycleCorrelation({ status: "skipped", issueIdentifier: issue.identifier, ...(marker ? { marker } : {}) }, input);
   }
   return runLifecycleOperation(context, issue.identifier, input, "move", async () => {
     await context.tracker.move(issue.identifier, input.state);
-    return withLifecycleCorrelation({ status: "moved", issueIdentifier: issue.identifier }, input);
+    return withLifecycleCorrelation({ status: "moved", issueIdentifier: issue.identifier, ...(marker ? { marker } : {}) }, input);
   });
 }
 
@@ -175,6 +178,7 @@ export async function recordHandoffWithAgentLifecycleTool(
   assertExpectedHandoffPath(context.repoRoot, input.handoffPath, issue.identifier);
   const handoff = redactText(await readText(input.handoffPath));
   await assertHandoffPullRequestsMatchRepo(context.repoRoot, handoff);
+  await assertHandoffValidationEvidence(context, toIssue(issue), handoff, input);
   const issueState = issueStateFromHandoff(toIssue(issue), handoff);
   if (issueState) {
     await new IssueStateStore(context.repoRoot).merge(issue.identifier, issueState);
@@ -323,6 +327,27 @@ function assertLifecycleTrackerWriteAllowed(config: ServiceConfig, input: AgentL
     if (!Number.isInteger(input.attempt) || input.attempt < 0) {
       throw new Error("lifecycle.mode=agent-owned requires --attempt to be a non-negative integer");
     }
+  }
+}
+
+async function assertHandoffValidationEvidence(
+  context: AgentLifecycleContext,
+  issue: Issue,
+  handoff: string,
+  input: AgentLifecycleToolOptions
+): Promise<void> {
+  const check = await verifyValidationEvidence({
+    issue,
+    handoff,
+    workspacePath: context.repoRoot,
+    runId: input.runId,
+    expectedCommands: [context.config.validationBudget.fullValidationCommand],
+    validationBudget: context.config.validationBudget,
+    reuseProfile: validationReuseProfileForConfig(context.config)
+  });
+  if (check.state.status !== "passed") {
+    const details = check.state.errors?.join("; ") || `validation evidence status ${check.state.status}`;
+    throw new Error(`handoff_validation_evidence_failed: ${details}`);
   }
 }
 

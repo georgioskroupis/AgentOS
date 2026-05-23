@@ -1,9 +1,12 @@
-import { chmod, copyFile, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { writeValidationEvidence } from "../src/validation.js";
+import { validationReuseProfileForConfig } from "../src/validation-profile.js";
+import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
 
 const cliScript = resolve("src/cli.ts");
 const sourceScripts = resolve("scripts");
@@ -375,6 +378,152 @@ describe("agent lifecycle CLI", () => {
     }
   });
 
+  it("emits a marker-correlated JSON result for agent-owned moves", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-move-json-cli-"));
+    let movedInput: Record<string, unknown> | undefined;
+    const server = createServer((request, response) => {
+      let raw = "";
+      request.on("data", (chunk) => {
+        raw += String(chunk);
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(raw) as { query: string; variables?: Record<string, any> };
+        response.writeHead(200, { "content-type": "application/json" });
+        if (payload.query.includes("AgentOSFindIssue")) {
+          response.end(JSON.stringify({ data: { issues: { nodes: [linearIssueNode("AG-1", "In Progress")] } } }));
+          return;
+        }
+        if (payload.query.includes("AgentOSStates")) {
+          response.end(JSON.stringify({ data: { workflowStates: { nodes: [{ id: "state-review", name: "Human Review" }] } } }));
+          return;
+        }
+        if (payload.query.includes("AgentOSIssueMove")) {
+          movedInput = payload.variables?.input;
+          response.end(JSON.stringify({ data: { issueUpdate: { success: true } } }));
+          return;
+        }
+        response.end(JSON.stringify({ data: {} }));
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const port = (server.address() as { port: number }).port;
+    await writeAgentOwnedWorkflow(repo, `http://127.0.0.1:${port}/graphql`);
+
+    try {
+      const result = await execOk(process.execPath, [
+        "--import",
+        "tsx",
+        cliScript,
+        "linear",
+        "lifecycle",
+        "move",
+        "AG-1",
+        "Human Review",
+        "--run-id",
+        "run-123",
+        "--attempt",
+        "0",
+        "--repo",
+        repo,
+        "--workflow",
+        "WORKFLOW.md",
+        "--tool",
+        "scripts/agent-linear-move.sh"
+      ]);
+      const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+
+      expect(parsed).toEqual({
+        schemaVersion: 1,
+        status: "moved",
+        issueIdentifier: "AG-1",
+        marker: "<!-- agentos:event=state_transition issue=AG-1 run=run-123 attempt=0 -->",
+        runId: "run-123",
+        attempt: 0
+      });
+      expect(movedInput).toEqual({ stateId: "state-review" });
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it("verifies handoff validation evidence before posting agent-owned handoff JSON", async () => {
+    const repo = await realpath(await mkdtemp(join(tmpdir(), "agent-os-lifecycle-handoff-json-cli-")));
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
+    await writeFile(
+      handoffPath,
+      "AgentOS-Outcome: implemented\n\nValidation-JSON: .agent-os/validation/AG-1.json\n",
+      "utf8"
+    );
+    let createdBody = "";
+    const server = createServer((request, response) => {
+      let raw = "";
+      request.on("data", (chunk) => {
+        raw += String(chunk);
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(raw) as { query: string; variables?: Record<string, any> };
+        response.writeHead(200, { "content-type": "application/json" });
+        if (payload.query.includes("AgentOSFindIssue")) {
+          response.end(JSON.stringify({ data: { issues: { nodes: [linearIssueNode("AG-1")] } } }));
+          return;
+        }
+        if (payload.query.includes("AgentOSIssueComments")) {
+          response.end(JSON.stringify({ data: { issue: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }));
+          return;
+        }
+        if (payload.query.includes("AgentOSComment")) {
+          createdBody = String(payload.variables?.input?.body ?? "");
+          response.end(JSON.stringify({ data: { commentCreate: { success: true } } }));
+          return;
+        }
+        response.end(JSON.stringify({ data: {} }));
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const port = (server.address() as { port: number }).port;
+    await writeAgentOwnedWorkflow(repo, `http://127.0.0.1:${port}/graphql`);
+    await writeCliValidationEvidence(repo, "AG-1", "run-123");
+
+    try {
+      const result = await execOk(process.execPath, [
+        "--import",
+        "tsx",
+        cliScript,
+        "linear",
+        "lifecycle",
+        "record-handoff",
+        "AG-1",
+        "--file",
+        ".agent-os/handoff-AG-1.md",
+        "--run-id",
+        "run-123",
+        "--attempt",
+        "0",
+        "--repo",
+        repo,
+        "--workflow",
+        "WORKFLOW.md",
+        "--tool",
+        "scripts/agent-linear-handoff.sh"
+      ]);
+      const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+
+      expect(parsed).toEqual({
+        schemaVersion: 1,
+        status: "created",
+        issueIdentifier: "AG-1",
+        marker: "<!-- agentos:event=run_handoff issue=AG-1 run=run-123 attempt=0 -->",
+        runId: "run-123",
+        attempt: 0
+      });
+      expect(createdBody).toContain("<!-- agentos:event=run_handoff issue=AG-1 run=run-123 attempt=0 -->");
+      expect(createdBody).toContain("Validation-JSON: .agent-os/validation/AG-1.json");
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
   it("rejects agent-owned lifecycle CLI writes without run correlation before tracker writes", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-correlation-cli-"));
     await writeAgentOwnedWorkflow(repo, "http://127.0.0.1:9/graphql");
@@ -562,6 +711,27 @@ async function writeFakeAgentOs(fakeBin: string, capture: string): Promise<void>
   await chmod(path, 0o755);
 }
 
+async function writeCliValidationEvidence(repo: string, issueIdentifier: string, runId: string): Promise<void> {
+  const workflow = await loadWorkflow(join(repo, "WORKFLOW.md"));
+  const config = resolveServiceConfig(workflow, { ...process.env, LINEAR_API_KEY: "lin_test" });
+  const now = new Date().toISOString();
+  await writeValidationEvidence(join(repo, ".agent-os", "validation", `${issueIdentifier}.json`), {
+    schemaVersion: 1,
+    issueIdentifier,
+    runId,
+    status: "passed",
+    commands: [
+      {
+        name: config.validationBudget.fullValidationCommand,
+        exitCode: 0,
+        startedAt: now,
+        finishedAt: now
+      }
+    ],
+    reuseProfile: validationReuseProfileForConfig(config)
+  });
+}
+
 async function writeWorkflow(repo: string, allowedTrackerTools = ["scripts/agent-linear-comment.sh"]): Promise<void> {
   await writeFile(
     join(repo, "WORKFLOW.md"),
@@ -644,13 +814,13 @@ async function writeSupervisorWorkflow(repo: string, endpoint: string): Promise<
   );
 }
 
-function linearIssueNode(identifier: string): Record<string, unknown> {
+function linearIssueNode(identifier: string, state = "Human Review"): Record<string, unknown> {
   return {
     id: "issue-1",
     identifier,
     title: "Issue",
     url: `https://linear.test/${identifier}`,
-    state: { name: "Human Review" },
+    state: { name: state },
     team: { id: "team-1", key: "AG", name: "AgentOS" },
     assignee: null,
     project: { id: "project-1", name: "AgentOS", slugId: "AgentOS" }

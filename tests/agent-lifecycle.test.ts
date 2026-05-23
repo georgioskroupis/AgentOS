@@ -15,6 +15,9 @@ import {
 import type { AgentLifecycleTracker } from "../src/agent-lifecycle.js";
 import type { LinearCommentWriteResult, LinearIssueReference } from "../src/linear.js";
 import type { ServiceConfig } from "../src/types.js";
+import { writeValidationEvidence } from "../src/validation.js";
+import type { ValidationEvidence } from "../src/validation.js";
+import { validationReuseProfileForConfig } from "../src/validation-profile.js";
 
 describe("agent lifecycle tools", () => {
   it("allows configured agent tracker comments with stable markers and redaction", async () => {
@@ -120,7 +123,13 @@ describe("agent lifecycle tools", () => {
       { issue: "AG-1", state: "Human Review", tool: "scripts/agent-linear-move.sh", runId: "run-123", attempt: 1 }
     );
 
-    expect(result).toEqual({ status: "moved", issueIdentifier: "AG-1", runId: "run-123", attempt: 1 });
+    expect(result).toEqual({
+      status: "moved",
+      issueIdentifier: "AG-1",
+      marker: "<!-- agentos:event=state_transition issue=AG-1 run=run-123 attempt=1 -->",
+      runId: "run-123",
+      attempt: 1
+    });
     expect(tracker.moves).toEqual([{ issue: "AG-1", state: "Human Review" }]);
   });
 
@@ -562,12 +571,17 @@ describe("agent lifecycle tools", () => {
     await initGitRemote(repo);
     await mkdir(join(repo, ".agent-os"), { recursive: true });
     const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
-    await writeFile(handoffPath, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/12\n", "utf8");
     const tracker = new MemoryTracker();
     const config = lifecycleConfig({
       mode: "agent-owned",
       idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"
     });
+    await writeLifecycleValidationEvidence(repo, config, "AG-1", { runId: "run-123" });
+    await writeFile(
+      handoffPath,
+      "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/12\n\nValidation-JSON: .agent-os/validation/AG-1.json\n",
+      "utf8"
+    );
 
     const pr = await attachPrWithAgentLifecycleTool(
       { repoRoot: repo, config, tracker },
@@ -598,6 +612,94 @@ describe("agent lifecycle tools", () => {
       "<!-- agentos:event=pr_metadata issue=AG-1 run=run-123 attempt=1 -->",
       "<!-- agentos:event=run_handoff issue=AG-1 run=run-123 attempt=1 -->"
     ]);
+  });
+
+  it("rejects handoffs with invalid validation evidence before tracker writes or issue-state persistence", async () => {
+    const cases: Array<{
+      name: string;
+      handoff: string;
+      expectedError: string;
+      config?: ServiceConfig;
+      input?: Partial<Parameters<typeof recordHandoffWithAgentLifecycleTool>[1]>;
+      prepare?: (repo: string, config: ServiceConfig) => Promise<void>;
+    }> = [
+      {
+        name: "missing-marker",
+        handoff: "AgentOS-Outcome: implemented\n",
+        expectedError: "handoff missing Validation-JSON marker"
+      },
+      {
+        name: "missing-file",
+        handoff: "AgentOS-Outcome: implemented\n\nValidation-JSON: .agent-os/validation/AG-1.json\n",
+        expectedError: "validation evidence file does not exist"
+      },
+      {
+        name: "invalid-json",
+        handoff: "AgentOS-Outcome: implemented\n\nValidation-JSON: .agent-os/validation/AG-1.json\n",
+        expectedError: "validation evidence is not valid JSON",
+        prepare: async (repo) => {
+          await mkdir(join(repo, ".agent-os", "validation"), { recursive: true });
+          await writeFile(join(repo, ".agent-os", "validation", "AG-1.json"), "{not json", "utf8");
+        }
+      },
+      {
+        name: "issue-mismatch",
+        handoff: "AgentOS-Outcome: implemented\n\nValidation-JSON: .agent-os/validation/AG-1.json\n",
+        expectedError: "issueIdentifier mismatch: expected AG-1",
+        prepare: async (repo, config) => {
+          await writeLifecycleValidationEvidence(repo, config, "AG-1", { issueIdentifier: "AG-2" });
+        }
+      },
+      {
+        name: "failed-status",
+        handoff: "AgentOS-Outcome: implemented\n\nValidation-JSON: .agent-os/validation/AG-1.json\n",
+        expectedError: "final validation status is not passed",
+        prepare: async (repo, config) => {
+          await writeLifecycleValidationEvidence(repo, config, "AG-1", { status: "failed" });
+        }
+      },
+      {
+        name: "run-mismatch",
+        handoff: "AgentOS-Outcome: implemented\n\nValidation-JSON: .agent-os/validation/AG-1.json\n",
+        expectedError: "runId mismatch: expected run-123",
+        config: lifecycleConfig({
+          mode: "agent-owned",
+          idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"
+        }),
+        input: { runId: "run-123", attempt: 0 },
+        prepare: async (repo, config) => {
+          await writeLifecycleValidationEvidence(repo, config, "AG-1", { runId: "other-run" });
+        }
+      },
+      {
+        name: "missing-required-command",
+        handoff: "AgentOS-Outcome: implemented\n\nValidation-JSON: .agent-os/validation/AG-1.json\n",
+        expectedError: "missing passing command evidence: npm run agent-check",
+        prepare: async (repo, config) => {
+          await writeLifecycleValidationEvidence(repo, config, "AG-1", { commands: [validationCommand("npm test")] });
+        }
+      }
+    ];
+
+    for (const item of cases) {
+      const repo = await mkdtemp(join(tmpdir(), `agent-os-agent-lifecycle-handoff-evidence-${item.name}-`));
+      const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
+      await mkdir(join(repo, ".agent-os"), { recursive: true });
+      await writeFile(handoffPath, item.handoff, "utf8");
+      const tracker = new MemoryTracker();
+      const config = item.config ?? lifecycleConfig();
+      await item.prepare?.(repo, config);
+
+      await expect(
+        recordHandoffWithAgentLifecycleTool(
+          { repoRoot: repo, config, tracker },
+          { issue: "AG-1", handoffPath, tool: "scripts/agent-linear-handoff.sh", ...item.input }
+        )
+      ).rejects.toThrow(item.expectedError);
+
+      expect(tracker.comments).toEqual([]);
+      await expect(readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8")).rejects.toThrow();
+    }
   });
 
   it("rejects malformed or off-repository PR metadata before writing local issue state", async () => {
@@ -668,6 +770,8 @@ describe("agent lifecycle tools", () => {
     const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
     await mkdir(join(repo, ".agent-os"), { recursive: true });
     const token = linearToken();
+    const config = lifecycleConfig();
+    await writeLifecycleValidationEvidence(repo, config, "AG-1");
     await writeFile(
       handoffPath,
       [
@@ -675,14 +779,16 @@ describe("agent lifecycle tools", () => {
         "",
         `Summary with token ${token}`,
         "",
-        "PR: https://github.com/o/r/pull/13"
+        "PR: https://github.com/o/r/pull/13",
+        "",
+        "Validation-JSON: .agent-os/validation/AG-1.json"
       ].join("\n"),
       "utf8"
     );
     const tracker = new MemoryTracker();
 
     await recordHandoffWithAgentLifecycleTool(
-      { repoRoot: repo, config: lifecycleConfig(), tracker },
+      { repoRoot: repo, config, tracker },
       { issue: "AG-1", handoffPath, tool: "scripts/agent-linear-handoff.sh" }
     );
 
@@ -859,6 +965,28 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
       }
     }
   };
+}
+
+function validationCommand(name = "npm run agent-check"): ValidationEvidence["commands"][number] {
+  const now = new Date().toISOString();
+  return { name, exitCode: 0, startedAt: now, finishedAt: now };
+}
+
+async function writeLifecycleValidationEvidence(
+  repo: string,
+  config: ServiceConfig,
+  issueIdentifier: string,
+  overrides: Partial<ValidationEvidence> = {}
+): Promise<void> {
+  await writeValidationEvidence(join(repo, ".agent-os", "validation", `${issueIdentifier}.json`), {
+    schemaVersion: 1,
+    issueIdentifier,
+    runId: "run-123",
+    status: "passed",
+    commands: [validationCommand(config.validationBudget.fullValidationCommand)],
+    reuseProfile: validationReuseProfileForConfig(config),
+    ...overrides
+  });
 }
 
 function linearToken(): string {

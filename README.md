@@ -305,8 +305,9 @@ scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md --run-
 These tools use marker-backed comment upserts, configured duplicate behavior,
 configured allowed state transitions, run/attempt correlation, JSON result
 output, redaction, local PR metadata persistence, project-scoped issue lookup,
-repo-local `--file` reads, and fallback handoff writing only after lifecycle
-policy checks pass and a tracker write fails.
+repo-local `--file` reads, handoff `Validation-JSON` verification before local
+issue-state persistence or Linear writes, and fallback handoff writing only after
+lifecycle policy checks pass and a tracker write fails.
 `record-handoff` reads the resolved issue's `.agent-os/handoff-<issue>.md`
 artifact only.
 
