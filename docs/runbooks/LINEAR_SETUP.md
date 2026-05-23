@@ -151,14 +151,14 @@ terminal or already-merged issues, and logs a startup recovery summary. If the
 long-running daemon sees `main` advance after it started, it logs a freshness
 warning so the operator can restart onto the self-modifying AgentOS code.
 
-For `hybrid` and experimental `agent-owned` projects, agents can use the
+For `hybrid` and `agent-owned` projects, agents can use the
 repo-local Linear lifecycle wrappers instead of MCP tracker writes:
 
 ```bash
-scripts/agent-linear-comment.sh VER-46 --event status_update --file .agent-os/status.md
-scripts/agent-linear-move.sh VER-46 "Human Review"
-scripts/agent-linear-pr.sh VER-46 https://github.com/org/repo/pull/46
-scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md
+scripts/agent-linear-comment.sh VER-46 --event status_update --run-id <run> --attempt 0 --file .agent-os/status.md
+scripts/agent-linear-move.sh VER-46 "Human Review" --run-id <run> --attempt 0
+scripts/agent-linear-pr.sh VER-46 https://github.com/org/repo/pull/46 --run-id <run> --attempt 0
+scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md --run-id <run> --attempt 0
 ```
 
 Configure the matching `lifecycle.allowed_tracker_tools`, marker format,
@@ -168,5 +168,6 @@ allow agent tracker writes through these lifecycle wrappers.
 Lifecycle file inputs must stay inside the repository, and handoff posting reads
 the resolved issue's `.agent-os/handoff-<issue>.md` artifact. The wrappers use a
 trusted AgentOS CLI from `AGENT_OS_SOURCE_REPO` or `PATH`, keep `WORKFLOW.md` as
-the repo-local policy source, and accept only current-repository GitHub PR URLs
-for lifecycle PR metadata.
+the repo-local policy source, emit JSON results, include run/attempt correlation
+for agent-owned writes, and accept only current-repository GitHub PR URLs for
+lifecycle PR metadata.

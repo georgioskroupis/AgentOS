@@ -44,6 +44,8 @@ export interface AgentLifecycleToolOptions {
   issue: string;
   tool: string;
   event?: string;
+  runId?: string;
+  attempt?: number | null;
   supervisor?: boolean;
 }
 
@@ -68,6 +70,8 @@ export interface AgentLifecycleResult {
   issueIdentifier: string;
   marker?: string;
   fallbackPath?: string;
+  runId?: string;
+  attempt?: number | null;
 }
 
 export interface SupervisorDecisionBodyInput {
@@ -97,7 +101,7 @@ export async function commentWithAgentLifecycleTool(
   if (input.supervisor) {
     validateSupervisorCommentBody(input.body, issue.identifier);
   }
-  const marker = agentTrackerMarker(context.config, input.event ?? "agent_comment", issue.identifier);
+  const marker = agentTrackerMarker(context.config, input.event ?? "agent_comment", issue.identifier, input);
   const body = redactText(input.body);
   return runLifecycleOperation(context, issue.identifier, input, "comment", async () => {
     const status = await context.tracker.upsertCommentWithMarker(
@@ -106,7 +110,7 @@ export async function commentWithAgentLifecycleTool(
       marker,
       duplicateCommentBehavior(context.config)
     );
-    return { status, issueIdentifier: issue.identifier, marker };
+    return withLifecycleCorrelation({ status, issueIdentifier: issue.identifier, marker }, input);
   });
 }
 
@@ -123,11 +127,11 @@ export async function moveWithAgentLifecycleTool(
     assertAllowedTransition(context.config, issue.state, input.state);
   }
   if (sameState(issue.state, input.state)) {
-    return { status: "skipped", issueIdentifier: issue.identifier };
+    return withLifecycleCorrelation({ status: "skipped", issueIdentifier: issue.identifier }, input);
   }
   return runLifecycleOperation(context, issue.identifier, input, "move", async () => {
     await context.tracker.move(issue.identifier, input.state);
-    return { status: "moved", issueIdentifier: issue.identifier };
+    return withLifecycleCorrelation({ status: "moved", issueIdentifier: issue.identifier }, input);
   });
 }
 
@@ -138,7 +142,7 @@ export async function attachPrWithAgentLifecycleTool(
   assertLifecycleTrackerWriteAllowed(context.config, input);
   if (input.supervisor) assertSupervisorIssueIdentifier(input.issue);
   const issue = await context.tracker.findIssueReference(input.issue);
-  const marker = agentTrackerMarker(context.config, input.event ?? "pr_metadata", issue.identifier);
+  const marker = agentTrackerMarker(context.config, input.event ?? "pr_metadata", issue.identifier, input);
   await assertPullRequestUrlMatchesRepo(context.repoRoot, input.prUrl);
   const now = new Date().toISOString();
   const pr: PullRequestRef = { url: input.prUrl, discoveredAt: now, source: "manual" };
@@ -156,7 +160,7 @@ export async function attachPrWithAgentLifecycleTool(
       marker,
       duplicateCommentBehavior(context.config)
     );
-    return { status, issueIdentifier: issue.identifier, marker };
+    return withLifecycleCorrelation({ status, issueIdentifier: issue.identifier, marker }, input);
   });
 }
 
@@ -167,7 +171,7 @@ export async function recordHandoffWithAgentLifecycleTool(
   assertLifecycleTrackerWriteAllowed(context.config, input);
   if (input.supervisor) assertSupervisorIssueIdentifier(input.issue);
   const issue = await context.tracker.findIssueReference(input.issue);
-  const marker = agentTrackerMarker(context.config, input.event ?? "run_handoff", issue.identifier);
+  const marker = agentTrackerMarker(context.config, input.event ?? "run_handoff", issue.identifier, input);
   assertExpectedHandoffPath(context.repoRoot, input.handoffPath, issue.identifier);
   const handoff = redactText(await readText(input.handoffPath));
   await assertHandoffPullRequestsMatchRepo(context.repoRoot, handoff);
@@ -182,22 +186,26 @@ export async function recordHandoffWithAgentLifecycleTool(
       marker,
       duplicateCommentBehavior(context.config)
     );
-    return { status, issueIdentifier: issue.identifier, marker };
+    return withLifecycleCorrelation({ status, issueIdentifier: issue.identifier, marker }, input);
   });
 }
 
-export function agentTrackerMarker(config: ServiceConfig, event: string, issueIdentifier: string): string {
+export function agentTrackerMarker(config: ServiceConfig, event: string, issueIdentifier: string, correlation: { runId?: string; attempt?: number | null } = {}): string {
   const format = config.lifecycle.idempotencyMarkerFormat ?? DEFAULT_AGENT_TRACKER_MARKER_FORMAT;
   return format
     .split("{event}")
     .join(stableMarkerToken(event, "event"))
     .split("{issue}")
-    .join(stableMarkerToken(issueIdentifier, "issue"));
+    .join(stableMarkerToken(issueIdentifier, "issue"))
+    .split("{run}")
+    .join(stableMarkerToken(correlation.runId ?? "manual", "run"))
+    .split("{attempt}")
+    .join(stableMarkerToken(correlation.attempt == null ? "manual" : String(correlation.attempt), "attempt"));
 }
 
 export function assertAgentTrackerWriteAllowed(config: ServiceConfig, tool: string): void {
   if (config.lifecycle.mode === "orchestrator-owned") {
-    throw new Error("lifecycle.mode=orchestrator-owned rejects agent tracker writes; use hybrid or experimental agent-owned mode");
+    throw new Error("lifecycle.mode=orchestrator-owned rejects agent tracker writes; use hybrid or agent-owned mode");
   }
   if (config.lifecycle.mode === "agent-owned") {
     const validation = validateLifecycleConfig(config.lifecycle, true);
@@ -304,6 +312,18 @@ export function parseAllowedStateTransition(value: string): { from: string; to: 
 function assertLifecycleTrackerWriteAllowed(config: ServiceConfig, input: AgentLifecycleToolOptions): void {
   if (input.supervisor) return;
   assertAgentTrackerWriteAllowed(config, input.tool);
+  if (config.lifecycle.mode === "agent-owned") {
+    if (!input.runId?.trim()) {
+      throw new Error("lifecycle.mode=agent-owned requires --run-id for agent tracker writes");
+    }
+    stableMarkerToken(input.runId, "run");
+    if (input.attempt == null) {
+      throw new Error("lifecycle.mode=agent-owned requires --attempt for agent tracker writes");
+    }
+    if (!Number.isInteger(input.attempt) || input.attempt < 0) {
+      throw new Error("lifecycle.mode=agent-owned requires --attempt to be a non-negative integer");
+    }
+  }
 }
 
 export function assertSupervisorIssueIdentifier(value: string): void {
@@ -409,6 +429,14 @@ function runLifecycleOperation(
   fn: () => Promise<AgentLifecycleResult>
 ): Promise<AgentLifecycleResult> {
   return input.supervisor ? fn() : runWithFallback(context, issueIdentifier, input.tool, operation, fn);
+}
+
+function withLifecycleCorrelation(result: AgentLifecycleResult, input: AgentLifecycleToolOptions): AgentLifecycleResult {
+  return {
+    ...result,
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.attempt != null ? { attempt: input.attempt } : {})
+  };
 }
 
 async function runWithFallback(

@@ -44,7 +44,9 @@ It keeps orchestration logic narrow:
   handoff posting for that boundary. Human supervisors have a separate
   by-identifier `agent-os supervisor` path for state moves and structured
   decisions, so operators do not need direct GraphQL or raw Linear UUIDs.
-  `agent-owned` is experimental and strict-validation gated.
+  `agent-owned` is strict-validation gated and now requires repo-local tools,
+  issue/run/attempt marker correlation, duplicate-comment policy, transition
+  policy, and fallback behavior before certification can use it.
 - The agent, guided by `WORKFLOW.md`, changes the repo, validates the work,
   opens or updates pull requests only when the issue produced repo changes and
   the workflow expects a PR, and writes a handoff file for the orchestrator to

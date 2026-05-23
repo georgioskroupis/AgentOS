@@ -47,6 +47,83 @@ describe("agent lifecycle tools", () => {
     ]);
   });
 
+  it("correlates agent-owned lifecycle comments with issue, run, and attempt markers", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-correlation-"));
+    const tracker = new MemoryTracker();
+
+    const result = await commentWithAgentLifecycleTool(
+      {
+        repoRoot: repo,
+        config: lifecycleConfig({
+          mode: "agent-owned",
+          idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"
+        }),
+        tracker
+      },
+      {
+        issue: "AG-1",
+        event: "status_update",
+        tool: "scripts/agent-linear-comment.sh",
+        body: "Done",
+        runId: "run-123",
+        attempt: 2
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "created",
+      issueIdentifier: "AG-1",
+      runId: "run-123",
+      attempt: 2,
+      marker: "<!-- agentos:event=status_update issue=AG-1 run=run-123 attempt=2 -->"
+    });
+    expect(tracker.comments[0]).toMatchObject({
+      marker: "<!-- agentos:event=status_update issue=AG-1 run=run-123 attempt=2 -->"
+    });
+  });
+
+  it("requires agent-owned run and attempt correlation before lookup or writes", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-correlation-required-"));
+    const tracker = new MemoryTracker();
+
+    await expect(
+      commentWithAgentLifecycleTool(
+        {
+          repoRoot: repo,
+          config: lifecycleConfig({
+            mode: "agent-owned",
+            idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"
+          }),
+          tracker
+        },
+        { issue: "AG-1", event: "status_update", tool: "scripts/agent-linear-comment.sh", body: "handoff" }
+      )
+    ).rejects.toThrow("lifecycle.mode=agent-owned requires --run-id");
+
+    expect(tracker.lookups).toEqual([]);
+    expect(tracker.comments).toEqual([]);
+  });
+
+  it("returns run and attempt correlation for agent-owned moves", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-move-correlation-"));
+    const tracker = new MemoryTracker({ state: "In Progress" });
+
+    const result = await moveWithAgentLifecycleTool(
+      {
+        repoRoot: repo,
+        config: lifecycleConfig({
+          mode: "agent-owned",
+          idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"
+        }),
+        tracker
+      },
+      { issue: "AG-1", state: "Human Review", tool: "scripts/agent-linear-move.sh", runId: "run-123", attempt: 1 }
+    );
+
+    expect(result).toEqual({ status: "moved", issueIdentifier: "AG-1", runId: "run-123", attempt: 1 });
+    expect(tracker.moves).toEqual([{ issue: "AG-1", state: "Human Review" }]);
+  });
+
   it("rejects disallowed tracker state transitions before moving the issue", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-transition-"));
     const tracker = new MemoryTracker({ state: "In Progress" });
@@ -392,7 +469,7 @@ describe("agent lifecycle tools", () => {
     await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
   });
 
-  it("strictly gates experimental agent-owned lifecycle writes before lookup or fallback", async () => {
+  it("strictly gates incomplete agent-owned lifecycle writes before lookup or fallback", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-agent-owned-"));
     const tracker = new MemoryTracker();
 
@@ -478,6 +555,49 @@ describe("agent lifecycle tools", () => {
     expect(tracker.comments[0]).toMatchObject({
       marker: "<!-- agentos:event=pr_metadata issue=AG-1 -->"
     });
+  });
+
+  it("correlates agent-owned PR metadata and handoff comments with run and attempt", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-pr-handoff-correlation-"));
+    await initGitRemote(repo);
+    await mkdir(join(repo, ".agent-os"), { recursive: true });
+    const handoffPath = join(repo, ".agent-os", "handoff-AG-1.md");
+    await writeFile(handoffPath, "AgentOS-Outcome: implemented\n\nPR: https://github.com/o/r/pull/12\n", "utf8");
+    const tracker = new MemoryTracker();
+    const config = lifecycleConfig({
+      mode: "agent-owned",
+      idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"
+    });
+
+    const pr = await attachPrWithAgentLifecycleTool(
+      { repoRoot: repo, config, tracker },
+      {
+        issue: "AG-1",
+        prUrl: "https://github.com/o/r/pull/12",
+        tool: "scripts/agent-linear-pr.sh",
+        runId: "run-123",
+        attempt: 1
+      }
+    );
+    const handoff = await recordHandoffWithAgentLifecycleTool(
+      { repoRoot: repo, config, tracker },
+      { issue: "AG-1", handoffPath, tool: "scripts/agent-linear-handoff.sh", runId: "run-123", attempt: 1 }
+    );
+
+    expect(pr).toMatchObject({
+      marker: "<!-- agentos:event=pr_metadata issue=AG-1 run=run-123 attempt=1 -->",
+      runId: "run-123",
+      attempt: 1
+    });
+    expect(handoff).toMatchObject({
+      marker: "<!-- agentos:event=run_handoff issue=AG-1 run=run-123 attempt=1 -->",
+      runId: "run-123",
+      attempt: 1
+    });
+    expect(tracker.comments.map((comment) => comment.marker)).toEqual([
+      "<!-- agentos:event=pr_metadata issue=AG-1 run=run-123 attempt=1 -->",
+      "<!-- agentos:event=run_handoff issue=AG-1 run=run-123 attempt=1 -->"
+    ]);
   });
 
   it("rejects malformed or off-repository PR metadata before writing local issue state", async () => {
@@ -659,6 +779,7 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
         "scripts/agent-linear-pr.sh",
         "scripts/agent-linear-handoff.sh"
       ],
+      clientTrackerTools: [],
       idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} -->",
       allowedStateTransitions: ["Todo -> In Progress", "In Progress -> Human Review"],
       duplicateCommentBehavior: "upsert",

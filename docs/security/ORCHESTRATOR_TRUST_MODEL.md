@@ -99,7 +99,7 @@ fails the run instead of waiting for interactive input.
 | --- | --- | --- | --- |
 | `orchestrator-owned` | on | bookkeeping and substantive handoff | Current safe default and intentional AgentOS deviation from Symphony's usual tracker-write boundary. |
 | `hybrid` | on | bookkeeping only | Agent artifacts/tools own substantive handoff/update content and PR metadata through configured repo-local lifecycle tools. |
-| `agent-owned` | off | off | Experimental. Strict validation requires tracker tools, idempotency marker format, allowed transitions, duplicate-comment behavior, fallback behavior, and an acknowledgement that agent-owned durable recovery remains experimental. |
+| `agent-owned` | off | off | Source-aligned lifecycle writes through repo-local tools. Strict validation requires tracker tools, issue/run/attempt idempotency marker format, allowed transitions, duplicate-comment behavior, and fallback behavior. |
 
 The repo-local `scripts/agent-linear-*` tools are still governed by lifecycle
 configuration. They reject `orchestrator-owned`, enforce
@@ -110,16 +110,20 @@ text, and write a fallback handoff only after policy checks pass and the tracker
 write fails. The wrappers call a trusted AgentOS CLI from `AGENT_OS_SOURCE_REPO`
 or `PATH`, append fixed policy options after user arguments, require lifecycle
 workflow files to stay inside the repo, and reject PR metadata that does not
-belong to the current GitHub repository.
+belong to the current GitHub repository. Agent-owned tool calls also require
+`--run-id` and `--attempt`, include that correlation in markers/results, and
+emit machine-readable JSON.
 
 When `lifecycle.mode` is `agent-owned`, the Codex App Server runner may
-advertise a `linear_graphql` client tool to the agent. The tool is intentionally
-hidden from `orchestrator-owned` and `hybrid` runs, requires `tracker.kind:
-linear`, and reuses the configured Linear endpoint and API key without exposing
-the key in the tool schema or prompt. It accepts exactly one GraphQL operation
-with a JSON-object variables payload and returns structured success or failure
-objects so unsupported tools, missing credentials, invalid input, GraphQL
-errors, or transport failures fail closed instead of stalling a turn.
+advertise a `linear_graphql` client tool only when the workflow separately opts
+in through `lifecycle.client_tracker_tools`. The tool is intentionally hidden
+from `orchestrator-owned`, `hybrid`, and non-opted-in agent-owned runs, requires
+`tracker.kind: linear`, and reuses the configured Linear endpoint and API key
+without exposing the key in the tool schema or prompt. It accepts exactly one
+GraphQL operation with a JSON-object variables payload and returns structured
+success or failure objects so unsupported tools, missing credentials, invalid
+input, GraphQL errors, or transport failures fail closed instead of stalling a
+turn.
 
 ## Automation And Repair Behavior
 

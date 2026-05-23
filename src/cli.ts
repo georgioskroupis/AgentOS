@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 import { Command, InvalidArgumentError } from "commander";
-import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "./defaults.js";
 import { appendDaemonLaunchMarker, appendDaemonStopMarker, daemonLogRuntimeFromEnv, installDaemonCrashCapture } from "./daemon-log.js";
-import { resolveRepoEnv } from "./env.js";
 import { acquireProjectRunnerLock, addProject, loadRegistry, releaseProjectRunnerLock, removeProject } from "./registry.js";
 import { readText } from "./fs-utils.js";
 import {
@@ -21,7 +19,19 @@ import { applyHarness, assertHarnessProfile, doctorHarness, runHarnessCheck } fr
 import { daemonLaunchCommand, getDaemonStatus, getRegistryStatus, getStatus, inspectIssue } from "./status.js";
 import { formatDaemonLifecycleResult, restartDaemon, startDaemon, stopDaemon } from "./daemon-lifecycle.js";
 import { LinearClient } from "./linear.js";
-import { formatAgentLifecycleResult, lifecycleToolForAction, linearClientFromWorkflow, runMaintenanceSeedCommand, workflowConfigFromRepoEnv } from "./cli-linear-helpers.js";
+import {
+  agentLifecycleContextFromOptions,
+  bodyFromArgsOrFile,
+  formatAgentLifecycleJsonResult,
+  formatAgentLifecycleResult,
+  lifecycleToolForAction,
+  linearClientFromWorkflow,
+  resolveRepoLocalInputPath,
+  resolveRepoLocalInputPathInfo,
+  resolveRepoLocalWorkflowPath,
+  runMaintenanceSeedCommand,
+  workflowConfigFromRepoEnv
+} from "./cli-linear-helpers.js";
 import {
   formatLinearPlanError,
   formatLinearPlannedIssuesResult,
@@ -44,6 +54,14 @@ const parsePositiveIntegerOption = (label: string) => (value: string): number =>
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed <= 0 || String(parsed) !== value.trim()) {
     throw new InvalidArgumentError(`${label} must be a positive integer`);
+  }
+  return parsed;
+};
+
+const parseNonNegativeIntegerOption = (label: string) => (value: string): number => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== value.trim()) {
+    throw new InvalidArgumentError(`${label} must be a non-negative integer`);
   }
   return parsed;
 };
@@ -573,14 +591,24 @@ linearLifecycle
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .option("--repo <path>", "repository root", process.cwd())
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle comment")
+  .option("--run-id <id>", "AgentOS run id for lifecycle marker correlation")
+  .option("--attempt <number>", "AgentOS run attempt for lifecycle marker correlation", parseNonNegativeIntegerOption("attempt"))
   .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write under orchestrator-owned lifecycle mode")
   .action(async (issue, body, options) => {
     const tool = lifecycleToolForAction("comment", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
     const text = await bodyFromArgsOrFile(body, options.file, context.repoRoot, "comment body");
     console.log(
-      formatAgentLifecycleResult(
-        await commentWithAgentLifecycleTool(context, { issue, body: text, event: options.event, tool, supervisor: Boolean(options.supervisor) })
+      formatAgentLifecycleJsonResult(
+        await commentWithAgentLifecycleTool(context, {
+          issue,
+          body: text,
+          event: options.event,
+          tool,
+          runId: options.runId,
+          attempt: options.attempt,
+          supervisor: Boolean(options.supervisor)
+        })
       )
     );
   });
@@ -592,11 +620,24 @@ linearLifecycle
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .option("--repo <path>", "repository root", process.cwd())
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle move")
+  .option("--run-id <id>", "AgentOS run id for lifecycle result correlation")
+  .option("--attempt <number>", "AgentOS run attempt for lifecycle result correlation", parseNonNegativeIntegerOption("attempt"))
   .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write under orchestrator-owned lifecycle mode")
   .action(async (issue, state, options) => {
     const tool = lifecycleToolForAction("move", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
-    console.log(formatAgentLifecycleResult(await moveWithAgentLifecycleTool(context, { issue, state, tool, supervisor: Boolean(options.supervisor) })));
+    console.log(
+      formatAgentLifecycleJsonResult(
+        await moveWithAgentLifecycleTool(context, {
+          issue,
+          state,
+          tool,
+          runId: options.runId,
+          attempt: options.attempt,
+          supervisor: Boolean(options.supervisor)
+        })
+      )
+    );
   });
 
 linearLifecycle
@@ -607,13 +648,23 @@ linearLifecycle
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .option("--repo <path>", "repository root", process.cwd())
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle attach-pr")
+  .option("--run-id <id>", "AgentOS run id for lifecycle marker correlation")
+  .option("--attempt <number>", "AgentOS run attempt for lifecycle marker correlation", parseNonNegativeIntegerOption("attempt"))
   .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write under orchestrator-owned lifecycle mode")
   .action(async (issue, url, options) => {
     const tool = lifecycleToolForAction("attach-pr", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
     console.log(
-      formatAgentLifecycleResult(
-        await attachPrWithAgentLifecycleTool(context, { issue, prUrl: url, event: options.event, tool, supervisor: Boolean(options.supervisor) })
+      formatAgentLifecycleJsonResult(
+        await attachPrWithAgentLifecycleTool(context, {
+          issue,
+          prUrl: url,
+          event: options.event,
+          tool,
+          runId: options.runId,
+          attempt: options.attempt,
+          supervisor: Boolean(options.supervisor)
+        })
       )
     );
   });
@@ -626,18 +677,22 @@ linearLifecycle
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .option("--repo <path>", "repository root", process.cwd())
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle record-handoff")
+  .option("--run-id <id>", "AgentOS run id for lifecycle marker correlation")
+  .option("--attempt <number>", "AgentOS run attempt for lifecycle marker correlation", parseNonNegativeIntegerOption("attempt"))
   .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write under orchestrator-owned lifecycle mode")
   .action(async (issue, options) => {
     const tool = lifecycleToolForAction("record-handoff", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
     const handoffPath = await resolveRepoLocalInputPath(context.repoRoot, options.file, "handoff file");
     console.log(
-      formatAgentLifecycleResult(
+      formatAgentLifecycleJsonResult(
         await recordHandoffWithAgentLifecycleTool(context, {
           issue,
           handoffPath,
           event: options.event,
           tool,
+          runId: options.runId,
+          attempt: options.attempt,
           supervisor: Boolean(options.supervisor)
         })
       )
@@ -787,59 +842,6 @@ async function withDaemonProcessLogging(action: (signal: AbortSignal) => Promise
     process.off("SIGTERM", requestStop);
     removeCrashCapture?.();
   }
-}
-
-async function agentLifecycleContextFromOptions(options: { repo: string; workflow: string }): Promise<{
-  repoRoot: string;
-  config: ReturnType<typeof resolveServiceConfig>;
-  tracker: LinearClient;
-}> {
-  const repoRoot = resolve(options.repo);
-  const workflowPath = await resolveRepoLocalWorkflowPath(repoRoot, options.workflow);
-  const resolvedEnv = await resolveRepoEnv(repoRoot, process.env);
-  const workflow = await loadWorkflow(workflowPath);
-  const config = resolveServiceConfig(workflow, resolvedEnv.env);
-  return { repoRoot, config, tracker: new LinearClient(config.tracker) };
-}
-
-async function bodyFromArgsOrFile(body: string[] | undefined, file: string | undefined, repoRoot: string, label: string): Promise<string> {
-  const text = file ? await readText(await resolveRepoLocalInputPath(repoRoot, file, `${label} file`)) : (body ?? []).join(" ");
-  if (!text.trim()) throw new Error(`${label} is required; pass text or --file <path>`);
-  return text;
-}
-
-async function resolveRepoLocalInputPath(repoRoot: string, path: string, label: string): Promise<string> {
-  return (await resolveRepoLocalInputPathInfo(repoRoot, path, label)).absolutePath;
-}
-
-async function resolveRepoLocalInputPathInfo(
-  repoRoot: string,
-  path: string,
-  label: string
-): Promise<{ absolutePath: string; relativePath: string }> {
-  if (isAbsolute(path)) {
-    throw new Error(`${label} must be relative to the repository root`);
-  }
-  const root = resolve(repoRoot);
-  const resolvedPath = resolve(root, path);
-  const relativePath = relative(root, resolvedPath);
-  if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
-    throw new Error(`${label} must stay within the repository root`);
-  }
-  const realRoot = await realpath(root);
-  const realResolvedPath = await realpath(resolvedPath);
-  const realRelativePath = relative(realRoot, realResolvedPath);
-  if (realRelativePath.startsWith("..") || isAbsolute(realRelativePath)) {
-    throw new Error(`${label} must stay within the repository root`);
-  }
-  return { absolutePath: realResolvedPath, relativePath: realRelativePath.replace(/\\/g, "/") };
-}
-
-async function resolveRepoLocalWorkflowPath(repoRoot: string, path: string): Promise<string> {
-  if (isAbsolute(path)) {
-    throw new Error("workflow path must be relative to the repository root");
-  }
-  return resolveRepoLocalInputPath(repoRoot, path, "workflow path");
 }
 
 const roadmapTitles = [

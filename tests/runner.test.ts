@@ -189,6 +189,7 @@ describe("CodexAppServerRunner", () => {
     const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
     const config = runnerConfig(workspacePath, clientToolFixtureCommand);
     config.lifecycle.mode = "agent-owned";
+    config.lifecycle.clientTrackerTools = ["linear_graphql"];
     const events: AgentEvent[] = [];
 
     await expect(
@@ -677,6 +678,7 @@ function runnerConfig(workspacePath: string, command: string): ServiceConfig {
     lifecycle: {
       mode: "orchestrator-owned",
       allowedTrackerTools: [],
+      clientTrackerTools: [],
       idempotencyMarkerFormat: null,
       allowedStateTransitions: [],
       duplicateCommentBehavior: null,

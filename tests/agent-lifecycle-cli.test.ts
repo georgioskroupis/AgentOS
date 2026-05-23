@@ -300,6 +300,104 @@ describe("agent lifecycle CLI", () => {
     expect(result.stderr).toContain("lifecycle.allowed_tracker_tools is required for agent tracker writes");
   });
 
+  it("emits machine-readable JSON with lifecycle correlation and redacted tracker bodies", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-json-cli-"));
+    let createdBody = "";
+    const server = createServer((request, response) => {
+      let raw = "";
+      request.on("data", (chunk) => {
+        raw += String(chunk);
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(raw) as { query: string; variables?: Record<string, any> };
+        response.writeHead(200, { "content-type": "application/json" });
+        if (payload.query.includes("AgentOSFindIssue")) {
+          response.end(JSON.stringify({ data: { issues: { nodes: [linearIssueNode("AG-1")] } } }));
+          return;
+        }
+        if (payload.query.includes("AgentOSIssueComments")) {
+          response.end(JSON.stringify({ data: { issue: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }));
+          return;
+        }
+        if (payload.query.includes("AgentOSComment")) {
+          createdBody = String(payload.variables?.input?.body ?? "");
+          response.end(JSON.stringify({ data: { commentCreate: { success: true } } }));
+          return;
+        }
+        response.end(JSON.stringify({ data: {} }));
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const port = (server.address() as { port: number }).port;
+    await writeAgentOwnedWorkflow(repo, `http://127.0.0.1:${port}/graphql`);
+
+    try {
+      const token = `lin_${"a".repeat(26)}`;
+      const result = await execOk(process.execPath, [
+        "--import",
+        "tsx",
+        cliScript,
+        "linear",
+        "lifecycle",
+        "comment",
+        "AG-1",
+        "--event",
+        "status_update",
+        "--run-id",
+        "run-123",
+        "--attempt",
+        "0",
+        "--repo",
+        repo,
+        "--workflow",
+        "WORKFLOW.md",
+        "--tool",
+        "scripts/agent-linear-comment.sh",
+        `done ${token}`
+      ]);
+      const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+
+      expect(parsed).toEqual({
+        schemaVersion: 1,
+        status: "created",
+        issueIdentifier: "AG-1",
+        marker: "<!-- agentos:event=status_update issue=AG-1 run=run-123 attempt=0 -->",
+        runId: "run-123",
+        attempt: 0
+      });
+      expect(result.stdout).not.toContain(token);
+      expect(result.stderr).not.toContain(token);
+      expect(createdBody).toContain("<!-- agentos:event=status_update issue=AG-1 run=run-123 attempt=0 -->");
+      expect(createdBody).toContain("done [REDACTED]");
+      expect(createdBody).not.toContain(token);
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it("rejects agent-owned lifecycle CLI writes without run correlation before tracker writes", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-correlation-cli-"));
+    await writeAgentOwnedWorkflow(repo, "http://127.0.0.1:9/graphql");
+
+    const result = await execCliFail([
+      "linear",
+      "lifecycle",
+      "comment",
+      "AG-1",
+      "--event",
+      "status_update",
+      "--repo",
+      repo,
+      "--workflow",
+      "WORKFLOW.md",
+      "--tool",
+      "scripts/agent-linear-comment.sh",
+      "hello"
+    ]);
+
+    expect(result.stderr).toContain("lifecycle.mode=agent-owned requires --run-id");
+  });
+
   it("rejects lifecycle workflow paths that are absolute or escape the repo", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-workflow-"));
     const outside = join(await mkdtemp(join(tmpdir(), "agent-os-lifecycle-outside-")), "WORKFLOW.md");
@@ -474,6 +572,36 @@ async function writeWorkflow(repo: string, allowedTrackerTools = ["scripts/agent
       ...(allowedTrackerTools.length > 0 ? ["  allowed_tracker_tools:", ...allowedTrackerTools.map((tool) => `    - ${tool}`)] : []),
       "tracker:",
       "  kind: linear",
+      "  api_key: lin_test",
+      "  project_slug: AgentOS",
+      "---",
+      "Do work"
+    ].join("\n"),
+    "utf8"
+  );
+}
+
+async function writeAgentOwnedWorkflow(repo: string, endpoint: string): Promise<void> {
+  await writeFile(
+    join(repo, "WORKFLOW.md"),
+    [
+      "---",
+      "lifecycle:",
+      "  mode: agent-owned",
+      "  allowed_tracker_tools:",
+      "    - scripts/agent-linear-comment.sh",
+      "    - scripts/agent-linear-move.sh",
+      "    - scripts/agent-linear-pr.sh",
+      "    - scripts/agent-linear-handoff.sh",
+      "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+      "  allowed_state_transitions:",
+      "    - Todo -> In Progress",
+      "    - In Progress -> Human Review",
+      "  duplicate_comment_behavior: upsert",
+      "  fallback_behavior: write handoff and stop human_required",
+      "tracker:",
+      "  kind: linear",
+      `  endpoint: ${endpoint}`,
       "  api_key: lin_test",
       "  project_slug: AgentOS",
       "---",
