@@ -57,10 +57,11 @@ AgentOS migrations should be lazy, reversible, and safe for local runtime state.
   `automation.profile: high-throughput`, and `github.merge_mode: shepherd` or
   `auto`. Missing gates should be treated as blocked landing instead of falling
   back to implicit auto-ready or auto-merge behavior.
-- Workflows should declare `lifecycle.mode`. Missing values resolve to
-  `orchestrator-owned` for backward compatibility. `agent-owned` is
-  strict-validation-gated until tracker tools, issue/run/attempt idempotency,
-  transitions, duplicate behavior, and fallback behavior are explicit.
+- Workflows should declare `lifecycle.mode: agent-owned`. Legacy
+  scheduler-owned lifecycle modes are rejected from public workflow
+  configuration; agent-owned remains strict-validation-gated until tracker
+  tools, issue/run/attempt idempotency, transitions, duplicate behavior, and
+  fallback behavior are explicit.
 - Codex App Server commands should be pinned. Replace
   `@openai/codex@latest app-server` with the current pinned command from
   `src/defaults.ts`.

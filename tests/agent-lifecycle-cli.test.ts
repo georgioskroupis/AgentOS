@@ -216,7 +216,7 @@ describe("agent lifecycle CLI", () => {
       ]);
 
       expect(result.stdout).toContain("created: AG-1");
-      expect(createdBody).toContain("<!-- agentos:event=supervisor-decision:fix-findings:abc1234 issue=AG-1 -->");
+      expect(createdBody).toContain("<!-- agentos:event=supervisor-decision:fix-findings:abc1234 issue=AG-1 run=manual attempt=manual -->");
       expect(createdBody).toContain(
         [
           "AgentOS-Human-Decision: fix-findings",
@@ -300,7 +300,7 @@ describe("agent lifecycle CLI", () => {
       "hello"
     ]);
 
-    expect(result.stderr).toContain("lifecycle.allowed_tracker_tools is required for agent tracker writes");
+    expect(result.stderr).toContain("lifecycle.mode=agent-owned requires lifecycle.allowed_tracker_tools in strict mode");
   });
 
   it("emits machine-readable JSON with lifecycle correlation and redacted tracker bodies", async () => {
@@ -551,7 +551,7 @@ describe("agent lifecycle CLI", () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-lifecycle-workflow-"));
     const outside = join(await mkdtemp(join(tmpdir(), "agent-os-lifecycle-outside-")), "WORKFLOW.md");
     await writeWorkflow(repo);
-    await writeFile(outside, "---\nlifecycle:\n  mode: hybrid\ntracker:\n  kind: linear\n  api_key: lin_test\n  project_slug: AgentOS\n---\nDo work", "utf8");
+    await writeFile(outside, "---\nlifecycle:\n  mode: agent-owned\ntracker:\n  kind: linear\n  api_key: lin_test\n  project_slug: AgentOS\n---\nDo work", "utf8");
 
     const absolute = await execCliFail([
       "linear",
@@ -738,8 +738,14 @@ async function writeWorkflow(repo: string, allowedTrackerTools = ["scripts/agent
     [
       "---",
       "lifecycle:",
-      "  mode: hybrid",
+      "  mode: agent-owned",
       ...(allowedTrackerTools.length > 0 ? ["  allowed_tracker_tools:", ...allowedTrackerTools.map((tool) => `    - ${tool}`)] : []),
+      "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+      "  allowed_state_transitions:",
+      "    - Todo -> In Progress",
+      "    - In Progress -> Human Review",
+      "  duplicate_comment_behavior: upsert",
+      "  fallback_behavior: write handoff and stop human_required",
       "tracker:",
       "  kind: linear",
       "  api_key: lin_test",
@@ -787,7 +793,19 @@ async function writeSupervisorWorkflow(repo: string, endpoint: string): Promise<
     [
       "---",
       "lifecycle:",
-      "  mode: orchestrator-owned",
+      "  mode: agent-owned",
+      "  allowed_tracker_tools:",
+      "    - scripts/agent-linear-comment.sh",
+      "    - scripts/agent-linear-move.sh",
+      "    - scripts/agent-linear-pr.sh",
+      "    - scripts/agent-linear-handoff.sh",
+      "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+      "  allowed_state_transitions:",
+      "    - Todo -> In Progress",
+      "    - In Progress -> Human Review",
+      "    - Human Review -> Merging",
+      "  duplicate_comment_behavior: upsert",
+      "  fallback_behavior: write handoff and stop human_required",
       "tracker:",
       "  kind: linear",
       `  endpoint: ${endpoint}`,

@@ -152,8 +152,8 @@ terminal or already-merged issues, and logs a startup recovery summary. If the
 long-running daemon sees `main` advance after it started, it logs a freshness
 warning so the operator can restart onto the self-modifying AgentOS code.
 
-For `hybrid` and `agent-owned` projects, agents can use the
-repo-local Linear lifecycle wrappers instead of MCP tracker writes:
+For `agent-owned` projects, agents use the repo-local Linear lifecycle wrappers
+instead of MCP tracker writes:
 
 ```bash
 scripts/agent-linear-comment.sh VER-46 --event status_update --run-id <run> --attempt 0 --file .agent-os/status.md
@@ -164,9 +164,9 @@ scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md --run-
 
 Configure the matching `lifecycle.allowed_tracker_tools`, marker format,
 allowed transitions, duplicate-comment behavior, and fallback behavior before
-enabling lifecycle wrappers in custom workflows. `orchestrator-owned` remains a
-legacy compatibility mode and does not allow agent tracker writes through these
-lifecycle wrappers.
+enabling lifecycle wrappers in custom workflows. Legacy scheduler-owned
+lifecycle modes are disabled from public workflow configuration and excluded
+from source-faithful certification.
 Lifecycle file inputs must stay inside the repository, and handoff posting reads
 the resolved issue's `.agent-os/handoff-<issue>.md` artifact. The wrappers use a
 trusted AgentOS CLI from `AGENT_OS_SOURCE_REPO` or `PATH`, keep `WORKFLOW.md` as

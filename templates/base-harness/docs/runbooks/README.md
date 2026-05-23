@@ -62,4 +62,4 @@ bin/agent-os supervisor decide <identifier> fix-findings \
   --repo .
 ```
 
-Agent turns must not use the supervisor bypass in `orchestrator-owned` mode.
+Agent turns must not use the supervisor bypass.

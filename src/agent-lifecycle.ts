@@ -209,7 +209,7 @@ export function agentTrackerMarker(config: ServiceConfig, event: string, issueId
 
 export function assertAgentTrackerWriteAllowed(config: ServiceConfig, tool: string): void {
   if (config.lifecycle.mode === "orchestrator-owned") {
-    throw new Error("lifecycle.mode=orchestrator-owned rejects agent tracker writes; use hybrid or agent-owned mode");
+    throw new Error("lifecycle.mode=orchestrator-owned rejects agent tracker writes; use agent-owned mode");
   }
   if (config.lifecycle.mode === "agent-owned") {
     const validation = validateLifecycleConfig(config.lifecycle, true);

@@ -160,7 +160,7 @@
   "knownRemainingDeviations": [
     "High-throughput landing is opt-in for trusted dogfood/internal workflows; public templates remain conservative and manual by default.",
     "Protected branch and merge queue requirements are report-only until a future issue implements provider-specific merge-queue support.",
-    "The orchestrator still owns merge shepherd tracker transitions in orchestrator-owned mode; hybrid and agent-owned tracker writes remain separately gated."
+    "High-trust merge shepherd tracker transitions remain extension behavior and do not count as core agent-owned lifecycle certification proof."
   ],
   "nonMvpFutureWork": [
     "Registry-wide final MVP certification across multiple projects.",

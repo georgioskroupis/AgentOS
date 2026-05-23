@@ -593,7 +593,7 @@ linearLifecycle
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle comment")
   .option("--run-id <id>", "AgentOS run id for lifecycle marker correlation")
   .option("--attempt <number>", "AgentOS run attempt for lifecycle marker correlation", parseNonNegativeIntegerOption("attempt"))
-  .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write under orchestrator-owned lifecycle mode")
+  .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write")
   .action(async (issue, body, options) => {
     const tool = lifecycleToolForAction("comment", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
@@ -622,7 +622,7 @@ linearLifecycle
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle move")
   .option("--run-id <id>", "AgentOS run id for lifecycle result correlation")
   .option("--attempt <number>", "AgentOS run attempt for lifecycle result correlation", parseNonNegativeIntegerOption("attempt"))
-  .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write under orchestrator-owned lifecycle mode")
+  .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write")
   .action(async (issue, state, options) => {
     const tool = lifecycleToolForAction("move", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
@@ -650,7 +650,7 @@ linearLifecycle
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle attach-pr")
   .option("--run-id <id>", "AgentOS run id for lifecycle marker correlation")
   .option("--attempt <number>", "AgentOS run attempt for lifecycle marker correlation", parseNonNegativeIntegerOption("attempt"))
-  .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write under orchestrator-owned lifecycle mode")
+  .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write")
   .action(async (issue, url, options) => {
     const tool = lifecycleToolForAction("attach-pr", options.tool);
     const context = await agentLifecycleContextFromOptions(options);
@@ -679,7 +679,7 @@ linearLifecycle
   .option("--tool <path>", "repo-local tool path for lifecycle.allowed_tracker_tools", "agent-os linear lifecycle record-handoff")
   .option("--run-id <id>", "AgentOS run id for lifecycle marker correlation")
   .option("--attempt <number>", "AgentOS run attempt for lifecycle marker correlation", parseNonNegativeIntegerOption("attempt"))
-  .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write under orchestrator-owned lifecycle mode")
+  .option("--supervisor", "allow an explicit human supervisor by-identifier tracker write")
   .action(async (issue, options) => {
     const tool = lifecycleToolForAction("record-handoff", options.tool);
     const context = await agentLifecycleContextFromOptions(options);

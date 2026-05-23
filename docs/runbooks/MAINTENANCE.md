@@ -44,9 +44,9 @@ operator bypass, for example:
 scripts/agent-linear-move.sh --supervisor VER-93 Merging
 ```
 
-Agents must not use the supervisor bypass. In `lifecycle.mode: orchestrator-owned`,
-agent calls without `--supervisor` remain policy-denied and
-must complete through validation evidence plus handoff artifacts.
+Agents must not use the supervisor bypass. Agent calls without `--supervisor`
+remain governed by the agent-owned lifecycle policy and must complete through
+validation evidence plus handoff artifacts.
 
 ## Generic Health-Check Prompt
 

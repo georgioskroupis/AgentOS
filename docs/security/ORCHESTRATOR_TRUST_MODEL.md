@@ -97,33 +97,31 @@ fails the run instead of waiting for interactive input.
 
 | Mode | Orchestrator state moves | Orchestrator comments | Notes |
 | --- | --- | --- | --- |
-| `orchestrator-owned` | on | bookkeeping and substantive handoff | Legacy compatibility mode retained until VER-133 removes or quarantines it from public certification paths. |
-| `hybrid` | on | bookkeeping only | Agent artifacts/tools own substantive handoff/update content and PR metadata through configured repo-local lifecycle tools. |
 | `agent-owned` | off for normal lifecycle progress; scheduler safety writes only for enumerated no-agent-can-act reasons | off for normal lifecycle progress; scheduler safety comments only for enumerated no-agent-can-act reasons | Default source-aligned lifecycle writes through repo-local tools. Strict validation requires tracker tools, issue/run/attempt idempotency marker format, allowed transitions, duplicate-comment behavior, and fallback behavior. |
 
 The repo-local `scripts/agent-linear-*` tools are still governed by lifecycle
-configuration. They reject `orchestrator-owned`, enforce
-an explicit `allowed_tracker_tools` allowlist, reject disallowed state transitions,
-reject mismatched action/tool identities, confine file reads to repo-local
-paths, scope issue lookups to the configured Linear project, redact tracker
-text, and write a fallback handoff only after policy checks pass and the tracker
-write fails. The wrappers call a trusted AgentOS CLI from `AGENT_OS_SOURCE_REPO`
-or `PATH`, append fixed policy options after user arguments, require lifecycle
-workflow files to stay inside the repo, and reject PR metadata that does not
-belong to the current GitHub repository. Agent-owned tool calls also require
-`--run-id` and `--attempt`, include that correlation in markers/results, and
-emit machine-readable JSON.
+configuration. They enforce an explicit `allowed_tracker_tools` allowlist,
+reject disallowed state transitions, reject mismatched action/tool identities,
+confine file reads to repo-local paths, scope issue lookups to the configured
+Linear project, redact tracker text, and write a fallback handoff only after
+policy checks pass and the tracker write fails. The wrappers call a trusted
+AgentOS CLI from `AGENT_OS_SOURCE_REPO` or `PATH`, append fixed policy options
+after user arguments, require lifecycle workflow files to stay inside the repo,
+and reject PR metadata that does not belong to the current GitHub repository.
+Agent-owned tool calls also require `--run-id` and `--attempt`, include that
+correlation in markers/results, and emit machine-readable JSON. Legacy
+scheduler-owned lifecycle modes are disabled from public workflow
+configuration and excluded from source-faithful certification.
 
 When `lifecycle.mode` is `agent-owned`, the Codex App Server runner may
 advertise a `linear_graphql` client tool only when the workflow separately opts
 in through `lifecycle.client_tracker_tools`. The tool is intentionally hidden
-from `orchestrator-owned`, `hybrid`, and non-opted-in agent-owned runs, requires
-`tracker.kind: linear`, and reuses the configured Linear endpoint and API key
-without exposing the key in the tool schema or prompt. It accepts exactly one
-GraphQL operation with a JSON-object variables payload and returns structured
-success or failure objects so unsupported tools, missing credentials, invalid
-input, GraphQL errors, or transport failures fail closed instead of stalling a
-turn.
+from non-opted-in agent-owned runs, requires `tracker.kind: linear`, and reuses
+the configured Linear endpoint and API key without exposing the key in the tool
+schema or prompt. It accepts exactly one GraphQL operation with a JSON-object
+variables payload and returns structured success or failure objects so
+unsupported tools, missing credentials, invalid input, GraphQL errors, or
+transport failures fail closed instead of stalling a turn.
 
 ## Automation And Repair Behavior
 
