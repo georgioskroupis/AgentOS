@@ -317,13 +317,14 @@ describe("agent-owned lifecycle evidence", () => {
     const workflowPath = await writeAgentOwnedWorkflow(repo);
     const tracker = new AgentOwnedMemoryTracker(readyIssue);
     const runner = agentOwnedRunner({ tracker, includeStartMarker: false });
+    const logger = new JsonlLogger(repo);
 
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
       tracker,
       runner,
-      logger: new JsonlLogger(repo),
+      logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
 
@@ -339,6 +340,7 @@ describe("agent-owned lifecycle evidence", () => {
     expect(summary.error).toContain("agent_owned_lifecycle_missing_evidence");
     expect(tracker.schedulerComments).toEqual([]);
     expect(tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual([]);
   });
 
   it("keeps start-only partial evidence human-required and stable after restart", async () => {
