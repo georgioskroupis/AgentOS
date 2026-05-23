@@ -44,6 +44,7 @@ describe("workflow", () => {
     expect(config.lifecycle).toMatchObject({
       mode: "orchestrator-owned",
       allowedTrackerTools: [],
+      clientTrackerTools: [],
       idempotencyMarkerFormat: null,
       allowedStateTransitions: [],
       duplicateCommentBehavior: null,
@@ -508,7 +509,7 @@ describe("workflow", () => {
     );
   });
 
-  it("strictly gates experimental agent-owned lifecycle mode", async () => {
+  it("strictly gates production agent-owned lifecycle mode", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-lifecycle-"));
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
@@ -537,7 +538,6 @@ describe("workflow", () => {
     expect(missing.errors).toContain("lifecycle.mode=agent-owned requires lifecycle.allowed_state_transitions in strict mode");
     expect(missing.errors).toContain("lifecycle.mode=agent-owned requires lifecycle.duplicate_comment_behavior in strict mode");
     expect(missing.errors).toContain("lifecycle.mode=agent-owned requires lifecycle.fallback_behavior in strict mode");
-    expect(missing.errors.some((error) => error.includes("maturity_acknowledgement"))).toBe(true);
 
     await writeFile(
       workflowPath,
@@ -547,13 +547,15 @@ describe("workflow", () => {
         "  mode: agent-owned",
         "  allowed_tracker_tools:",
         "    - scripts/agent-linear-comment.sh",
-        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} -->\"",
+        "    - scripts/agent-linear-move.sh",
+        "    - scripts/agent-linear-pr.sh",
+        "    - scripts/agent-linear-handoff.sh",
+        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
         "  allowed_state_transitions:",
         "    - Todo -> In Progress",
         "    - In Progress -> Human Review",
         "  duplicate_comment_behavior: upsert",
         "  fallback_behavior: write handoff and stop human_required",
-        "  maturity_acknowledgement: agent-owned durable recovery remains experimental",
         "tracker:",
         "  api_key: $LINEAR_API_KEY",
         "  project_slug: AgentOS",
@@ -569,6 +571,69 @@ describe("workflow", () => {
     );
     const configured = validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true);
     expect(configured.errors).toEqual([]);
+
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "lifecycle:",
+        "  mode: agent-owned",
+        "  allowed_tracker_tools:",
+        "    - scripts/agent-linear-comment.sh",
+        "    - scripts/agent-linear-move.sh",
+        "    - scripts/agent-linear-pr.sh",
+        "    - scripts/agent-linear-handoff.sh",
+        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} -->\"",
+        "  allowed_state_transitions:",
+        "    - Todo -> Human Review",
+        "  duplicate_comment_behavior: upsert",
+        "  fallback_behavior: write handoff and stop human_required",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "codex:",
+        "  command: npx -y @openai/codex@0.125.0 app-server",
+        "github:",
+        "  merge_mode: manual",
+        "  allow_human_merge_override: false",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const missingCorrelation = validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true);
+    expect(missingCorrelation.errors).toContain("lifecycle.idempotency_marker_format must include {run} in strict mode");
+    expect(missingCorrelation.errors).toContain("lifecycle.idempotency_marker_format must include {attempt} in strict mode");
+
+    await writeFile(
+      workflowPath,
+      [
+        "---",
+        "lifecycle:",
+        "  mode: agent-owned",
+        "  allowed_tracker_tools:",
+        "    - scripts/agent-linear-comment.sh",
+        "    - linear_graphql",
+        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+        "  allowed_state_transitions:",
+        "    - Todo -> Human Review",
+        "  duplicate_comment_behavior: upsert",
+        "  fallback_behavior: write handoff and stop human_required",
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "codex:",
+        "  command: npx -y @openai/codex@0.125.0 app-server",
+        "github:",
+        "  merge_mode: manual",
+        "  allow_human_merge_override: false",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const rawGraphqlInAllowlist = validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true);
+    expect(rawGraphqlInAllowlist.errors).toContain("linear_graphql must be configured through lifecycle.client_tracker_tools, not lifecycle.allowed_tracker_tools");
   });
 
   it("rejects invalid lifecycle configs", async () => {

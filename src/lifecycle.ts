@@ -2,6 +2,13 @@ import type { LifecycleDuplicateCommentBehavior, LifecycleMode, ServiceConfig } 
 
 export const lifecycleModes = ["orchestrator-owned", "hybrid", "agent-owned"] as const;
 export const lifecycleDuplicateCommentBehaviors = ["upsert", "skip", "error"] as const;
+export const requiredAgentLifecycleTools = [
+  "scripts/agent-linear-comment.sh",
+  "scripts/agent-linear-move.sh",
+  "scripts/agent-linear-pr.sh",
+  "scripts/agent-linear-handoff.sh"
+] as const;
+export const lifecycleClientTrackerTools = ["linear_graphql"] as const;
 
 export interface LifecycleValidationResult {
   errors: string[];
@@ -10,14 +17,12 @@ export interface LifecycleValidationResult {
 
 export type LifecycleCommentKind = "bookkeeping" | "substantive";
 
-const durableRecoveryAcknowledgement = "agent-owned durable recovery remains experimental";
-const legacyDurableRetryAcknowledgement = "durable retry/startup reconstruction is not yet complete";
-
 export function parseLifecycleConfig(value: unknown): ServiceConfig["lifecycle"] {
   const config = objectRecord(value);
   return {
     mode: parseLifecycleMode(config.mode),
     allowedTrackerTools: stringList(config.allowed_tracker_tools),
+    clientTrackerTools: stringList(config.client_tracker_tools),
     idempotencyMarkerFormat: nullableString(config.idempotency_marker_format),
     allowedStateTransitions: stringList(config.allowed_state_transitions),
     duplicateCommentBehavior: parseDuplicateCommentBehavior(config.duplicate_comment_behavior),
@@ -47,33 +52,54 @@ export function validateLifecycleConfig(lifecycle: ServiceConfig["lifecycle"], s
 
   if (lifecycle.mode !== "agent-owned") return { errors, warnings };
 
-  warnings.push("lifecycle.mode=agent-owned is experimental and depends on repo-local tracker tooling");
+  warnings.push("lifecycle.mode=agent-owned depends on repo-local tracker tooling and post-run evidence verification");
   if (!strict) return { errors, warnings };
 
   if (lifecycle.allowedTrackerTools.length === 0) {
     errors.push("lifecycle.mode=agent-owned requires lifecycle.allowed_tracker_tools in strict mode");
+  } else {
+    for (const tool of requiredAgentLifecycleTools) {
+      if (!lifecycle.allowedTrackerTools.map(normalizeToolName).includes(normalizeToolName(tool))) {
+        errors.push(`lifecycle.allowed_tracker_tools must include ${tool} in strict mode`);
+      }
+    }
+    if (lifecycle.allowedTrackerTools.map(normalizeToolName).includes("linear_graphql")) {
+      errors.push("linear_graphql must be configured through lifecycle.client_tracker_tools, not lifecycle.allowed_tracker_tools");
+    }
   }
   if (!lifecycle.idempotencyMarkerFormat) {
     errors.push("lifecycle.mode=agent-owned requires lifecycle.idempotency_marker_format in strict mode");
   } else {
-    if (!lifecycle.idempotencyMarkerFormat.includes("{event}")) {
-      errors.push("lifecycle.idempotency_marker_format must include {event} in strict mode");
-    }
-    if (!lifecycle.idempotencyMarkerFormat.includes("{issue}")) {
-      errors.push("lifecycle.idempotency_marker_format must include {issue} in strict mode");
+    for (const token of ["{event}", "{issue}", "{run}", "{attempt}"]) {
+      if (!lifecycle.idempotencyMarkerFormat.includes(token)) {
+        errors.push(`lifecycle.idempotency_marker_format must include ${token} in strict mode`);
+      }
     }
   }
   if (lifecycle.allowedStateTransitions.length === 0) {
     errors.push("lifecycle.mode=agent-owned requires lifecycle.allowed_state_transitions in strict mode");
+  } else {
+    for (const transition of lifecycle.allowedStateTransitions) {
+      if (!/^\s*.+?\s*->\s*.+?\s*$/.test(transition)) {
+        errors.push(`invalid_allowed_state_transition: ${transition}`);
+      }
+    }
   }
   if (!lifecycle.duplicateCommentBehavior) {
     errors.push("lifecycle.mode=agent-owned requires lifecycle.duplicate_comment_behavior in strict mode");
   }
   if (!lifecycle.fallbackBehavior) {
     errors.push("lifecycle.mode=agent-owned requires lifecycle.fallback_behavior in strict mode");
+  } else {
+    const fallback = lifecycle.fallbackBehavior.toLowerCase();
+    if (!fallback.includes("handoff") || !fallback.includes("human_required")) {
+      errors.push("lifecycle.fallback_behavior must include handoff and human_required in strict mode");
+    }
   }
-  if (!lifecycle.maturityAcknowledgement || ![durableRecoveryAcknowledgement, legacyDurableRetryAcknowledgement].some((acknowledgement) => lifecycle.maturityAcknowledgement?.includes(acknowledgement))) {
-    errors.push(`lifecycle.mode=agent-owned requires lifecycle.maturity_acknowledgement to include "${durableRecoveryAcknowledgement}" in strict mode`);
+  for (const tool of lifecycle.clientTrackerTools) {
+    if (!lifecycleClientTrackerTools.includes(tool as (typeof lifecycleClientTrackerTools)[number])) {
+      errors.push(`unsupported_lifecycle_client_tracker_tool: ${tool}`);
+    }
   }
 
   return { errors, warnings };
@@ -94,7 +120,7 @@ export function usesFullOrchestratorHandoff(config: ServiceConfig): boolean {
 }
 
 export function lifecycleAllowsClientTrackerTools(config: ServiceConfig): boolean {
-  return config.lifecycle?.mode === "agent-owned";
+  return config.lifecycle?.mode === "agent-owned" && config.lifecycle.clientTrackerTools.includes("linear_graphql");
 }
 
 export function hybridHandoffComment(input: { issueIdentifier: string; workspacePath: string; reviewStatus?: string; reviewIteration?: number }): string {
@@ -129,4 +155,8 @@ function stringList(value: unknown): string[] {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function normalizeToolName(value: string): string {
+  return value.trim().replace(/^\.\//, "");
 }

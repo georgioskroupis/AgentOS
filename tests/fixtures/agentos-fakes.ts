@@ -28,6 +28,7 @@ export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): Servi
     lifecycle: {
       mode: "orchestrator-owned",
       allowedTrackerTools: [],
+      clientTrackerTools: [],
       idempotencyMarkerFormat: null,
       allowedStateTransitions: [],
       duplicateCommentBehavior: null,

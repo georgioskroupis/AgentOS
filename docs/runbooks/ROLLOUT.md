@@ -16,10 +16,10 @@ needed, and writes `.agent-os/handoff-<issue>.md`.
 
 `hybrid` keeps orchestrator-owned safety/bookkeeping moves and lifecycle markers
 but expects substantive handoff/update content to be owned by agent artifacts or
-tracker tools. `agent-owned` is experimental; strict workflow validation rejects
-it unless tracker tools, idempotency markers, allowed transitions,
-duplicate-comment behavior, fallback behavior, and the agent-owned durable
-recovery maturity acknowledgement are declared.
+tracker tools. `agent-owned` is strict-validation gated; strict workflow
+validation rejects it unless tracker tools, issue/run/attempt idempotency
+markers, allowed transitions, duplicate-comment behavior, and fallback behavior
+are declared.
 
 For PR-producing work, Codex should create or find the pull request through
 the repo-local non-interactive harness script:

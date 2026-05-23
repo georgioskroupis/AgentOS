@@ -87,6 +87,7 @@ function validationRelevantConfig(config: ServiceConfig, riskProfile: string): u
     lifecycle: {
       mode: config.lifecycle.mode,
       allowedTrackerTools: config.lifecycle.allowedTrackerTools,
+      clientTrackerTools: config.lifecycle.clientTrackerTools,
       idempotencyMarkerFormat: config.lifecycle.idempotencyMarkerFormat,
       allowedStateTransitions: config.lifecycle.allowedStateTransitions,
       duplicateCommentBehavior: config.lifecycle.duplicateCommentBehavior,

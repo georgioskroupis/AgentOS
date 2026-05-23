@@ -234,6 +234,7 @@ function config(): ServiceConfig {
     lifecycle: {
       mode: "orchestrator-owned",
       allowedTrackerTools: [],
+      clientTrackerTools: [],
       idempotencyMarkerFormat: null,
       allowedStateTransitions: [],
       duplicateCommentBehavior: null,

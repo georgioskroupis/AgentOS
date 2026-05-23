@@ -18,7 +18,7 @@ is a planning artifact, not a request to move code immediately.
 | Scope scoring and planning guardrails | `src/scope-report.ts`, `src/scope-report-scoring.ts` | Planning aid; should pause broad work rather than expand implementation |
 | Dashboard/API state | `src/http-server.ts`, `dashboard/` | Optional observability extension; not a scheduler control plane |
 | Registry-wide scheduling | `src/registry-orchestrator.ts`, `src/registry.ts` | Optional extension over project-local orchestration |
-| Linear writes and tracker tools | `src/linear.ts`, `src/lifecycle-controller.ts`, `src/agent-lifecycle.ts`, `src/cli-linear-helpers.ts`, `src/tracker-boundaries.ts` | Tracker read/write capabilities are split at the type boundary; the lifecycle controller only routes event-backed compatibility writes, and normal lifecycle writes move to agent-owned tools in the follow-up refactor |
+| Linear writes and tracker tools | `src/linear.ts`, `src/lifecycle-controller.ts`, `src/agent-lifecycle.ts`, `src/cli-linear-helpers.ts`, `src/tracker-boundaries.ts` | Tracker read/write capabilities are split at the type boundary; the lifecycle controller only routes event-backed compatibility writes, and normal lifecycle writes are productionized behind repo-local agent-owned tools before the default flip |
 
 ## Refactor Guardrails
 

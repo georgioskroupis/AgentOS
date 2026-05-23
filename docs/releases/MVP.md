@@ -90,13 +90,14 @@ ignored runtime artifacts under `.agent-os/`, `coverage/`, `dist/`, and
    the current operator surfaces.
 4. Protected-branch and merge-queue behavior remains report-only unless a
    trusted workflow explicitly opts into supported merge shepherd behavior.
-5. `hybrid` and experimental `agent-owned` lifecycle modes exist, but
+5. `hybrid` and strict-gated `agent-owned` lifecycle modes exist, but
    orchestrator-owned remains the safe default until broader dogfood evidence
-   proves the agent-owned path.
+   and post-run evidence verification prove the agent-owned path.
 
 ## Non-MVP Future Work
 
-- VER-95: optional Symphony `linear_graphql` client-side tool extension.
+- VER-95 / VER-130: optional Symphony `linear_graphql` client-side tool
+  extension remains separately opted in through `lifecycle.client_tracker_tools`.
 - VER-96: optional Symphony HTTP dashboard/API.
 - VER-97: pluggable tracker adapters beyond Linear.
 - VER-106: dashboard productization over the optional HTTP API.

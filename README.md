@@ -291,21 +291,23 @@ scripts/agent-linear-plan-issues.sh --file .agent-os/planned-issues.yml --parent
 ### `linear lifecycle`
 
 Provides non-interactive, repo-local Linear lifecycle tools for `hybrid` and
-experimental `agent-owned` mode. The installed script wrappers call these
+`agent-owned` mode. The installed script wrappers call these
 commands with stable tool names so `lifecycle.allowed_tracker_tools` can gate
 agent writes:
 
 ```bash
-scripts/agent-linear-comment.sh VER-46 --event status_update --file .agent-os/status.md
-scripts/agent-linear-move.sh VER-46 "Human Review"
-scripts/agent-linear-pr.sh VER-46 https://github.com/org/repo/pull/46
-scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md
+scripts/agent-linear-comment.sh VER-46 --event status_update --run-id <run> --attempt 0 --file .agent-os/status.md
+scripts/agent-linear-move.sh VER-46 "Human Review" --run-id <run> --attempt 0
+scripts/agent-linear-pr.sh VER-46 https://github.com/org/repo/pull/46 --run-id <run> --attempt 0
+scripts/agent-linear-handoff.sh VER-46 --file .agent-os/handoff-VER-46.md --run-id <run> --attempt 0
 ```
 
 These tools use marker-backed comment upserts, configured duplicate behavior,
-configured allowed state transitions, redaction, local PR metadata persistence,
-project-scoped issue lookup, repo-local `--file` reads, and fallback handoff
-writing only after lifecycle policy checks pass and a tracker write fails.
+configured allowed state transitions, run/attempt correlation, JSON result
+output, redaction, local PR metadata persistence, project-scoped issue lookup,
+repo-local `--file` reads, handoff `Validation-JSON` verification before local
+issue-state persistence or Linear writes, and fallback handoff writing only after
+lifecycle policy checks pass and a tracker write fails.
 `record-handoff` reads the resolved issue's `.agent-os/handoff-<issue>.md`
 artifact only.
 
@@ -320,12 +322,14 @@ writes `.agent-os/handoff-<issue>.md` for the final Linear comment. Each handoff
 includes an `AgentOS-Outcome` line so already-satisfied issues can become no-op
 review handoffs instead of duplicate implementations. AgentOS-owned lifecycle
 comments include hidden `agentos:event` markers so retries and restarts update
-those comments in place when Linear supports it. `hybrid` and experimental
+those comments in place when Linear supports it. `hybrid` and
 `agent-owned` modes are available as a source-alignment path. In those modes,
 repo-local `scripts/agent-linear-*` tools can own substantive comments, PR
 metadata, and handoff posting while workflow validation gates `agent-owned`
-until tracker tools, idempotency, transition, fallback, and maturity
-requirements are declared.
+until tracker tools, run/attempt idempotency, transitions, duplicate behavior,
+and fallback requirements are declared. Raw `linear_graphql` remains a separate
+extension opt-in through `lifecycle.client_tracker_tools`; it is not enabled by
+`agent-owned` alone and is not default certification proof.
 If external Linear/GitHub automations move a human-held issue out of
 `Human Review`, AgentOS records external state drift, refuses implementation
 dispatch, and moves it back to the configured review state when lifecycle

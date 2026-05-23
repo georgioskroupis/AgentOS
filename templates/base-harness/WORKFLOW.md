@@ -130,34 +130,42 @@ Other modes are separate from `trust_mode` and automation repair policy:
 
 - `hybrid`: orchestrator-owned safety/bookkeeping moves and markers, with
   substantive handoff/update content owned by agent artifacts or tracker tools.
-- `agent-owned`: experimental only. Strict workflow validation requires
-  tracker tools, idempotency marker format, allowed transitions,
-  duplicate-comment behavior, fallback behavior, and an acknowledgement that
-  agent-owned durable recovery remains experimental.
+- `agent-owned`: source-aligned lifecycle writes through repo-local tools.
+  Strict workflow validation requires tracker tools, an idempotency marker
+  format with issue/run/attempt correlation, allowed transitions,
+  duplicate-comment behavior, and fallback behavior.
 
 Repo-local Linear lifecycle tools are available for source-aligned modes:
 
 ```bash
-scripts/agent-linear-comment.sh <issue> --event <event> --file <comment.md>
-scripts/agent-linear-move.sh <issue> "<allowed state>"
-scripts/agent-linear-pr.sh <issue> <pull-request-url>
-scripts/agent-linear-handoff.sh <issue> --file .agent-os/handoff-<issue>.md
+scripts/agent-linear-comment.sh <issue> --event <event> --run-id <run> --attempt <n> --file <comment.md>
+scripts/agent-linear-move.sh <issue> "<allowed state>" --run-id <run> --attempt <n>
+scripts/agent-linear-pr.sh <issue> <pull-request-url> --run-id <run> --attempt <n>
+scripts/agent-linear-handoff.sh <issue> --file .agent-os/handoff-<issue>.md --run-id <run> --attempt <n>
 scripts/agent-linear-plan-issues.sh --file .agent-os/planned-issues.yml --parent <issue> --state Todo
 ```
 
 Those wrappers are non-interactive, call a trusted AgentOS CLI from
 `AGENT_OS_SOURCE_REPO` or `PATH`, and append the repo root, `WORKFLOW.md`, and
 stable tool path after user arguments so agents cannot swap the lifecycle policy
-file or tool identity. In `hybrid` and experimental `agent-owned`, configure
+file or tool identity. In `hybrid` and `agent-owned`, configure
 `lifecycle.allowed_tracker_tools`, `lifecycle.idempotency_marker_format`,
 `lifecycle.allowed_state_transitions`, `lifecycle.duplicate_comment_behavior`,
 and `lifecycle.fallback_behavior` to let agents own substantive comments, PR
-metadata, and handoff posting. Keep `orchestrator-owned` as the default unless a
-project explicitly opts into that source-aligned boundary.
+metadata, and handoff posting. In strict `agent-owned`, the marker format must
+include `{event}`, `{issue}`, `{run}`, and `{attempt}`; lifecycle tools require
+`--run-id` and `--attempt` and emit JSON result output. Keep
+`orchestrator-owned` as the default unless a project explicitly opts into that
+source-aligned boundary.
 Lifecycle `--file` arguments must be relative paths inside the repository, and
 `record-handoff` reads only `.agent-os/handoff-<resolved issue>.md`. PR metadata
 must point at GitHub pull requests in the current repository before it is stored
 or posted.
+
+Raw Linear GraphQL is not enabled by `agent-owned` alone. If a project truly
+needs the optional `linear_graphql` client tool, opt in separately through
+`lifecycle.client_tracker_tools`; it remains extension behavior rather than
+default certification proof.
 
 Human supervisors may use the by-identifier operator helpers in
 `orchestrator-owned` mode instead of direct GraphQL or Linear UUID writes:

@@ -221,11 +221,10 @@ configuration:
 - Which mechanical failures trigger repair loops versus human handoff.
 
 PR C makes lifecycle ownership explicit. `orchestrator-owned` remains the
-current safe mode. `agent-owned` is experimental and must fail strict validation
-unless tracker tools, idempotency markers, allowed transitions, duplicate-comment
-behavior, fallback behavior, and the durable-recovery maturity acknowledgement
-are configured. `hybrid` splits safety bookkeeping from substantive workflow
-comments.
+current safe mode. `agent-owned` must fail strict validation unless tracker
+tools, issue/run/attempt idempotency markers, allowed transitions,
+duplicate-comment behavior, and fallback behavior are configured. `hybrid`
+splits safety bookkeeping from substantive workflow comments.
 
 VER-71 adds a dogfood fixture for the intended hybrid boundary: a worker can
 post substantive ticket updates and handoff content through repo-local Linear
@@ -234,14 +233,14 @@ authoritative. Structured decisions in that path retain actor, source, and
 authority metadata; unapproved authors are preserved as context-only evidence
 and do not drive lifecycle continuation.
 
-VER-95 adds the first client-side tracker tool for the experimental
-`agent-owned` boundary. The Codex App Server runner advertises `linear_graphql`
-only when the workflow opts into `agent-owned`, the tracker adapter is Linear,
-and Linear credentials are configured. That closes the basic Symphony-aligned
-tool-extension gap without changing the safe default: `orchestrator-owned`
-continues to hide direct tracker tools, unsupported tool calls receive a
-structured failure, and durable recovery of fully agent-owned tracker writes
-remains experimental until later validation proves the boundary end to end.
+VER-95 adds the first client-side tracker tool for the `agent-owned` boundary.
+After VER-130, the Codex App Server runner advertises `linear_graphql` only when
+the workflow opts into both `agent-owned` and `lifecycle.client_tracker_tools`,
+the tracker adapter is Linear, and Linear credentials are configured. That keeps
+raw GraphQL an optional extension rather than default certification proof:
+`orchestrator-owned`, `hybrid`, and non-opted-in agent-owned workflows continue
+to hide direct tracker tools, and unsupported tool calls receive a structured
+failure.
 
 VER-96 and VER-106 add a local observability surface for the scheduler/runner
 boundary. The optional loopback HTTP API exposes durable runtime, issue, run,
@@ -372,7 +371,7 @@ Already configurable:
 - Workspace root and lifecycle hooks.
 - Agent concurrency, max turns, retry attempts, retry backoff, and per-state
   concurrency.
-- Lifecycle ownership: `orchestrator-owned`, `hybrid`, and experimental
+- Lifecycle ownership: `orchestrator-owned`, `hybrid`, and strict-gated
   `agent-owned`.
 - Review enabled flag, reviewers, max iterations, blocking severities, and
   convergence requirements.
@@ -394,10 +393,11 @@ Should become configurable:
 Refactor-needed deviations:
 
 - Lifecycle ownership is explicit, but `hybrid` and `agent-owned` still need
-  more dogfood before they should be considered mature.
-- Agent-owned lifecycle mode remains an experimental strict-validation-gated
-  path. Repo-local tracker tools exist, but broader dogfood evidence is still
-  needed before it should replace the orchestrator-owned default.
+  more dogfood before they should replace the current safe default.
+- Agent-owned lifecycle mode is a production-contract, strict-validation-gated
+  path after VER-130. Repo-local tracker tools exist, but broader evidence
+  verification and default-flip work are still needed before it should replace
+  the orchestrator-owned default.
 - High-throughput behavior is modeled as automation policy and now includes
   bounded CI repair/retry, draft PR readiness, branch freshness, merge
   shepherding, and post-merge cleanup for trusted dogfood workflows. Protected

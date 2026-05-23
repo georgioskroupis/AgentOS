@@ -94,6 +94,7 @@ export interface ServiceConfig {
   lifecycle: {
     mode: LifecycleMode;
     allowedTrackerTools: string[];
+    clientTrackerTools: string[];
     idempotencyMarkerFormat: string | null;
     allowedStateTransitions: string[];
     duplicateCommentBehavior: LifecycleDuplicateCommentBehavior | null;
@@ -191,7 +192,6 @@ export interface ValidationBudgetConfig {
   fullValidationCommand: string;
   maxFullValidationRunsPerHead: number;
 }
-
 export interface Workspace {
   path: string;
   workspaceKey: string;
