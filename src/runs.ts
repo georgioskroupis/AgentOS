@@ -3,13 +3,15 @@ import { appendFile, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { formatRunCycleDiagnostics } from "./cycle-time.js";
 import { ensureDir, exists, writeTextAtomicEnsuringDir, writeTextEnsuringDir } from "./fs-utils.js";
+import { AGENT_OWNED_LIFECYCLE_EVIDENCE_ARTIFACT } from "./run-artifact-names.js";
 import { boundEventForJsonl, parseAgentEventsFromJsonl, safeJsonStringify, summarizeText } from "./output-capture.js";
 import { artifactNameFromReference, captureArtifactReferences } from "./run-capture-artifacts.js";
 import { redactText, redactValue } from "./redaction.js";
+import type { AgentOwnedLifecycleEvidence } from "./agentOwnedEvidenceTypes.js";
 import type { AgentEvent, AgentRunResult, Issue, Workspace } from "./types.js";
 
 export const RUN_SUMMARY_SCHEMA_VERSION = 1;
-const HASHED_ARTIFACTS = ["prompt.md", "events.jsonl", "handoff.md"] as const;
+const HASHED_ARTIFACTS = ["prompt.md", "events.jsonl", "handoff.md", AGENT_OWNED_LIFECYCLE_EVIDENCE_ARTIFACT] as const;
 export type RunArtifactName = (typeof HASHED_ARTIFACTS)[number];
 
 // Measurement buckets for run timing. These are not orchestrator lifecycle
@@ -114,13 +116,11 @@ export class RunArtifactStore {
     await writeTextEnsuringDir(this.pathFor(runId, "prompt.md"), redactText(prompt));
   }
 
-  async setWorkspace(runId: string, workspace: Workspace): Promise<void> {
-    await this.updateSummary(runId, (current) => ({ ...current, workspacePath: workspace.path }));
-  }
+  async setWorkspace(runId: string, workspace: Workspace): Promise<void> { await this.updateSummary(runId, (current) => ({ ...current, workspacePath: workspace.path })); }
 
-  async writeHandoff(runId: string, handoff: string): Promise<void> {
-    await writeTextEnsuringDir(this.pathFor(runId, "handoff.md"), redactText(handoff));
-  }
+  async writeHandoff(runId: string, handoff: string): Promise<void> { await writeTextEnsuringDir(this.pathFor(runId, "handoff.md"), redactText(handoff)); }
+
+  async writeAgentOwnedLifecycleEvidence(runId: string, evidence: AgentOwnedLifecycleEvidence): Promise<void> { await writeTextEnsuringDir(this.pathFor(runId, AGENT_OWNED_LIFECYCLE_EVIDENCE_ARTIFACT), `${JSON.stringify(redactValue(evidence), null, 2)}\n`); await this.refreshArtifactHashes(runId, [AGENT_OWNED_LIFECYCLE_EVIDENCE_ARTIFACT]); }
 
   async writeEvent(runId: string, event: AgentEvent & { runId?: string }): Promise<void> {
     await ensureDir(this.runDir(runId));

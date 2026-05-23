@@ -92,7 +92,9 @@ ignored runtime artifacts under `.agent-os/`, `coverage/`, `dist/`, and
    trusted workflow explicitly opts into supported merge shepherd behavior.
 5. `hybrid` and strict-gated `agent-owned` lifecycle modes exist, but
    orchestrator-owned remains the safe default until broader dogfood evidence
-   and post-run evidence verification prove the agent-owned path.
+   and the agent-owned default flip prove the full path. Post-run evidence
+   verification now records local `human_required` state instead of duplicating
+   missing normal lifecycle writes.
 
 ## Non-MVP Future Work
 

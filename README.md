@@ -327,9 +327,13 @@ those comments in place when Linear supports it. `hybrid` and
 repo-local `scripts/agent-linear-*` tools can own substantive comments, PR
 metadata, and handoff posting while workflow validation gates `agent-owned`
 until tracker tools, run/attempt idempotency, transitions, duplicate behavior,
-and fallback requirements are declared. Raw `linear_graphql` remains a separate
-extension opt-in through `lifecycle.client_tracker_tools`; it is not enabled by
-`agent-owned` alone and is not default certification proof.
+fallback requirements, and post-run lifecycle evidence are declared and
+verified. Agent-owned runs persist `agent-owned-lifecycle-evidence.json` in the
+run artifacts and issue state; missing tracker evidence becomes local
+`human_required` state rather than scheduler-authored replacement writes. Raw
+`linear_graphql` remains a separate extension opt-in through
+`lifecycle.client_tracker_tools`; it is not enabled by `agent-owned` alone and
+is not default certification proof.
 If external Linear/GitHub automations move a human-held issue out of
 `Human Review`, AgentOS records external state drift, refuses implementation
 dispatch, and moves it back to the configured review state when lifecycle

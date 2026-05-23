@@ -11,6 +11,7 @@ is a planning artifact, not a request to move code immediately.
 | Claiming and lifecycle comments | `src/orchestrator.ts`, `src/lifecycle-controller.ts`, `src/orchestrator-lifecycle-comments.ts`, `src/lifecycle-events.ts` | Core scheduler emits lifecycle events; the thin lifecycle controller routes existing compatibility tracker writes until agent-owned tooling becomes the default |
 | Workspace creation and bootstrap failure handling | `src/workspace.ts`, `src/orchestrator-workspace-bootstrap.ts` | Core workspace lifecycle; hooks run from created workspaces |
 | Runner invocation and event capture | `src/orchestrator.ts`, `src/runner/app-server.ts` | Runner protocol stays below orchestration policy |
+| Agent-owned lifecycle evidence verification | `src/agent-owned-lifecycle-evidence.ts`, `src/orchestrator.ts`, `src/runs.ts`, `src/issue-state.ts` | Core verification for agent-owned mode; missing tracker evidence becomes local `human_required` state and does not trigger scheduler duplication of normal lifecycle writes |
 | Retry and durable recovery | `src/orchestrator.ts`, `src/runtime-state.ts`, `src/recovery.ts` | Core recovery; terminal and inactive issues must not redispatch |
 | Review and fixer loop | `src/orchestrator.ts`, `src/reviewer-runner.ts`, `src/review.ts` | Source-aligned extension of the core loop, bounded by review policy |
 | CI diagnostics and repair | `src/github.ts`, `src/ci-retry.ts`, `src/orchestrator-ci-retry.ts` | Mechanical repair only when diagnostics are trustworthy and bounded |

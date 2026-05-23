@@ -395,9 +395,9 @@ Refactor-needed deviations:
 - Lifecycle ownership is explicit, but `hybrid` and `agent-owned` still need
   more dogfood before they should replace the current safe default.
 - Agent-owned lifecycle mode is a production-contract, strict-validation-gated
-  path after VER-130. Repo-local tracker tools exist, but broader evidence
-  verification and default-flip work are still needed before it should replace
-  the orchestrator-owned default.
+  path after VER-130/VER-131. Repo-local tracker tools and post-run evidence
+  verification exist, but default-flip work is still needed before it should
+  replace the orchestrator-owned default.
 - High-throughput behavior is modeled as automation policy and now includes
   bounded CI repair/retry, draft PR readiness, branch freshness, merge
   shepherding, and post-merge cleanup for trusted dogfood workflows. Protected
