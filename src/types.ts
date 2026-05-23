@@ -356,6 +356,7 @@ export interface IssueState {
   branchUpdate?: BranchUpdateState;
   externalStateDrift?: ExternalStateDriftState;
   validation?: ValidationState;
+  agentOwnedLifecycleEvidence?: import("./agentOwnedEvidenceTypes.js").AgentOwnedLifecycleEvidence;
   updatedAt: string;
 }
 
@@ -533,8 +534,7 @@ export type LifecycleStatus =
   | "merge_success"
   | "post_merge_cleanup_warning"
   | "terminal_linear"
-  | "already_merged_pr"
-  | "terminal_missing_workspace";
+  | "already_merged_pr" | "terminal_missing_workspace" | "agent_owned_lifecycle_missing_evidence";
 
 export type RunErrorCategory =
   | "workspace"

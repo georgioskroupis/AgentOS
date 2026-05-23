@@ -6,6 +6,7 @@ import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPr
 import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, type PullRequestStatus } from "./github.js";
 import { readGitHubReviewContext } from "./github-context.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
+import { verifyAndRecordAgentOwnedLifecycleEvidence } from "./orchestrator-agent-owned-evidence.js";
 import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls, reviewTargetPullRequests } from "./issue-state.js";
 import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./landing-policy.js";
 import { landingFreshnessPatch } from "./landing-preflight.js";
@@ -59,12 +60,7 @@ import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
-export interface OrchestratorRunSummary {
-  dispatched: number;
-  retryDispatched: number;
-  candidateDispatched: number;
-  candidates: number;
-}
+export interface OrchestratorRunSummary { dispatched: number; retryDispatched: number; candidateDispatched: number; candidates: number; }
 interface RunningEntry {
   issue: Issue;
   startedAt: number;
@@ -1210,6 +1206,7 @@ export class Orchestrator {
           }
         }
         if (validation && validation.state.status !== "passed") {
+          if (this.config.lifecycle.mode === "agent-owned" && validation.state.status === "missing" && !(await verifyAndRecordAgentOwnedLifecycleEvidence({ config: this.config, tracker: this.tracker, logger: this.logger, runArtifacts: this.runArtifacts, runtimeState: this.runtimeState, stateStore, issue, workspace, runId, attempt, handoff, state: stateFromHandoff ? await stateStore.merge(issue.identifier, { ...stateFromHandoff, validation: validation.state }) : await stateStore.read(issue.identifier), validation: validation.state, result, recordIssueState: async (patch) => { await this.recordIssueState(issue, patch); }, forgetRetry: () => this.retries.delete(issue.id), forgetCompletionMarker: () => this.completedMarkers.delete(issue.id), writeRunEvent: (entry) => this.writeRunEvent(runId, entry) })).passed) return;
           const error = validationFailureMessage(validation.state);
           await this.recordIssueState(issue, {
             phase: "validation",
@@ -1239,7 +1236,7 @@ export class Orchestrator {
           });
           return;
         }
-        const persistedState = stateFromHandoff
+        let persistedState = stateFromHandoff
           ? await stateStore.merge(issue.identifier, {
               ...stateFromHandoff,
               ...(validation ? { validation: validation.state } : {})
@@ -1263,6 +1260,11 @@ export class Orchestrator {
               payload: stateFromHandoff
             });
           }
+        }
+        if (this.config.lifecycle.mode === "agent-owned") {
+          const verification = await verifyAndRecordAgentOwnedLifecycleEvidence({ config: this.config, tracker: this.tracker, logger: this.logger, runArtifacts: this.runArtifacts, runtimeState: this.runtimeState, stateStore, issue, workspace, runId, attempt, handoff, state: persistedState, validation: validation?.state ?? persistedState?.validation ?? null, result, recordIssueState: async (patch) => { await this.recordIssueState(issue, patch); }, forgetRetry: () => this.retries.delete(issue.id), forgetCompletionMarker: () => this.completedMarkers.delete(issue.id), writeRunEvent: (entry) => this.writeRunEvent(runId, entry) });
+          persistedState = verification.state;
+          if (!verification.passed) return;
         }
         const reviewedState = await this.reviewIfNeeded(issue, workspace, persistedState, attempt, abortController.signal, runId);
         await this.markLinearSucceeded(issue, workspace, handoff, reviewedState ?? persistedState ?? undefined);

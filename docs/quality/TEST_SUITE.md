@@ -97,6 +97,7 @@ the cross-boundary assertion.
 
 | File | Layer | Contract Protected |
 | --- | --- | --- |
+| `tests/agent-owned-lifecycle-evidence.test.ts` | Integration | Agent-owned lifecycle evidence verification, durable artifacts/state, missing-evidence human-required handling, and no scheduler duplication |
 | `tests/agent-lifecycle-cli.test.ts` | Boundary | Repo-local lifecycle wrappers, trusted supervisor decisions, path safety, and tracker-tool gating |
 | `tests/agent-lifecycle.test.ts` | Boundary | Agent-owned and hybrid Linear lifecycle comments, markers, PR metadata, and handoff writes |
 | `tests/app-proof-scripts.test.ts` | Boundary | Application proof scripts record configured proof without leaking secret-bearing command strings |
