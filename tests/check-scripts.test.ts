@@ -64,6 +64,17 @@ describe("architecture and docs checks", () => {
     });
   });
 
+  it("reports a missing lifecycle controller implementation", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-controller-missing-"));
+    await writeArchitectureFixture(repo);
+    await rm(join(repo, "src", "lifecycle-controller.ts"));
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringMatching(/src\/lifecycle-controller\.ts lifecycle controller implementation is missing[\s\S]*Add a thin lifecycle controller/),
+      code: 1
+    });
+  });
+
   it("reports missing lifecycle boundary contracts", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-boundary-missing-"));
     await writeArchitectureFixture(repo);
@@ -103,6 +114,51 @@ describe("architecture and docs checks", () => {
     });
     await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
       stderr: expect.stringContaining("Linear writer integration directly"),
+      code: 1
+    });
+  });
+
+  it("reports direct tracker writes inside old lifecycle helper compatibility paths", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-helper-write-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(
+      join(repo, "src", "orchestrator.ts"),
+      [
+        "export class Orchestrator {",
+        "  private tracker = {} as { move?: (issue: string, state: string) => Promise<void>; comment?: (issue: string, body: string) => Promise<void>; upsertComment?: (issue: string, body: string, key: string) => Promise<void> };",
+        "  private async moveIssue(issue: { identifier: string }, stateName: string | null) {",
+        "    if (!stateName || !this.tracker.move) return;",
+        "    await this.tracker.move(issue.identifier, stateName);",
+        "  }",
+        "  private async commentIssue(issue: { identifier: string }, body: string, key?: string) {",
+        "    if (!this.tracker.comment && !this.tracker.upsertComment) return;",
+        "    await (key && this.tracker.upsertComment ? this.tracker.upsertComment(issue.identifier, body, key) : this.tracker.comment!(issue.identifier, body));",
+        "  }",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringMatching(/direct tracker lifecycle write[\s\S]*direct tracker lifecycle writes are forbidden in core scheduler code/),
+      code: 1
+    });
+  });
+
+  it("reports lifecycle controller imports of extension implementations", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-controller-import-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(
+      join(repo, "src", "lifecycle-controller.ts"),
+      [
+        'import { evaluateReviewBudget } from "./review-budget.js";',
+        "export const controller = evaluateReviewBudget;"
+      ].join("\n"),
+      "utf8"
+    );
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringMatching(/src\/lifecycle-controller\.ts imports disallowed review implementation/),
       code: 1
     });
   });
@@ -237,23 +293,37 @@ async function writeArchitectureFixture(repo: string): Promise<void> {
       "export type LifecycleEventSource = (typeof lifecycleEventSources)[number];",
       'export const schedulerSafetyWriteReasons = ["bootstrap_failed_before_agent_start", "pre_dispatch_safety_block", "retry_budget_exhausted", "stale_run_recovery_required", "terminal_cleanup_reconciliation", "agent_owned_lifecycle_missing_evidence"] as const;',
       "export type SchedulerSafetyWriteReason = (typeof schedulerSafetyWriteReasons)[number];",
-      "export interface LifecycleEvent { schemaVersion: 1; actor: LifecycleActor; type: LifecycleEventType; issueId: string; issueIdentifier: string; source: LifecycleEventSource; createdAt: string; }",
-      "export interface LifecycleController { record(event: LifecycleEvent): Promise<void>; }"
+      "export interface LifecycleEvent { schemaVersion: 1; actor: LifecycleActor; type: LifecycleEventType; issueId: string; issueIdentifier: string; source: LifecycleEventSource; createdAt: string; requestedState?: string; commentBody?: string; commentKey?: string; commentKind?: 'bookkeeping' | 'substantive'; }",
+      'export type LifecycleTrackerUpdateResult = "applied" | "unsupported" | "failed" | "blocked";',
+      "export interface LifecycleControllerRecordResult { trackerUpdateResult?: LifecycleTrackerUpdateResult }",
+      "export interface LifecycleController { record(event: LifecycleEvent): Promise<LifecycleControllerRecordResult>; }"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    join(repo, "src", "lifecycle-controller.ts"),
+    [
+      'import type { LifecycleController, LifecycleControllerRecordResult, LifecycleEvent } from "./lifecycle-events.js";',
+      "export class TrackerLifecycleController implements LifecycleController {",
+      "  async record(_event: LifecycleEvent): Promise<LifecycleControllerRecordResult> {",
+      "    return {};",
+      "  }",
+      "}"
     ].join("\n"),
     "utf8"
   );
   await writeFile(
     join(repo, "src", "orchestrator.ts"),
     [
+      'import type { LifecycleController } from "./lifecycle-events.js";',
       "export class Orchestrator {",
-      "  private tracker = {} as { move?: (issue: string, state: string) => Promise<void>; comment?: (issue: string, body: string) => Promise<void>; upsertComment?: (issue: string, body: string, key: string) => Promise<void> };",
+      "  private lifecycleController = {} as LifecycleController;",
       "  private async moveIssue(issue: { identifier: string }, stateName: string | null) {",
-      "    if (!stateName || !this.tracker.move) return;",
-      "    await this.tracker.move(issue.identifier, stateName);",
+      "    if (!stateName) return;",
+      "    await this.lifecycleController.record({ schemaVersion: 1, actor: 'extension', type: 'state_transition_requested', issueId: issue.identifier, issueIdentifier: issue.identifier, source: 'orchestrator', requestedState: stateName, createdAt: new Date().toISOString() });",
       "  }",
       "  private async commentIssue(issue: { identifier: string }, body: string, key?: string) {",
-      "    if (!this.tracker.comment && !this.tracker.upsertComment) return;",
-      "    await (key && this.tracker.upsertComment ? this.tracker.upsertComment(issue.identifier, body, key) : this.tracker.comment!(issue.identifier, body));",
+      "    await this.lifecycleController.record({ schemaVersion: 1, actor: 'extension', type: 'progress_comment', issueId: issue.identifier, issueIdentifier: issue.identifier, source: 'orchestrator', commentBody: body, commentKey: key, createdAt: new Date().toISOString() });",
       "  }",
       "  async run() { return true; }",
       "}"

@@ -9,7 +9,8 @@ import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from 
 import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls, reviewTargetPullRequests } from "./issue-state.js";
 import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./landing-policy.js";
 import { landingFreshnessPatch } from "./landing-preflight.js";
-import { hybridHandoffComment, orchestratorMayComment, orchestratorMayMoveIssue, usesFullOrchestratorHandoff } from "./lifecycle.js";
+import { hybridHandoffComment, usesFullOrchestratorHandoff } from "./lifecycle.js";
+import { TrackerLifecycleController, type LifecycleTrackerUpdateResult } from "./lifecycle-controller.js";
 import { JsonlLogger } from "./logging.js";
 import { initialDaemonFreshnessState, isDaemonFreshnessStale } from "./daemon-freshness.js";
 import { type ReadDaemonIdentityOptions } from "./daemon-identity.js";
@@ -18,7 +19,6 @@ import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan,
 import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequestRefsForUrls } from "./context-pack.js";
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
-import { redactText } from "./redaction.js";
 import { refreshOrchestratorDaemonRuntime } from "./orchestrator-daemon-runtime.js";
 import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment, runLandingShepherdGate } from "./orchestrator-landing-preflight.js";
 import { evaluateOrchestratorStartupPreflight, type OrchestratorStartupPreflightResult } from "./orchestrator-startup-preflight.js";
@@ -37,10 +37,10 @@ import { autoRecoverPushedWork } from "./orchestrator-pushed-work-recovery.js";
 import { isRecoverablePartialWorkState, isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
-import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, linearCommentKey, linearCommentMarker, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
+import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, dependencyDispatchStopPatch, isRecordedMergeTerminal, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { detectExternalHumanReviewStateDrift, recordExternalHumanReviewStateDrift } from "./orchestrator-state-drift.js";
-import { dependencyDispatchStop, isPreRunDispatchSkipStop, reviewStateBlocksTrackerUpdate, trackerDispatchStop, type TrackerUpdateResult } from "./orchestrator-tracker-guard.js";
+import { dependencyDispatchStop, isPreRunDispatchSkipStop, trackerDispatchStop } from "./orchestrator-tracker-guard.js";
 import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
 import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewBudgetContinuation, reviewSupervisorMergeDecision } from "./review-budget.js";
 import { approvedReviewValidationBlockReason, formatApprovedReviewComment, formatReviewFixRequestedComment, formatReviewHumanRequiredComment, formatReviewSplitRecommendedComment, reviewHumanRequiredReason, reviewIterationLogMessage } from "./review-budget-orchestration.js";
@@ -79,6 +79,7 @@ export class Orchestrator {
   private config!: ServiceConfig;
   private tracker!: IssueTracker;
   private runner!: AgentRunner;
+  private lifecycleController!: TrackerLifecycleController;
   private logger: JsonlLogger;
   private runArtifacts: RunArtifactStore;
   private runtimeState: RuntimeStateStore;
@@ -126,6 +127,7 @@ export class Orchestrator {
       this.config.agent.maxConcurrentAgents = Math.min(this.config.agent.maxConcurrentAgents, this.options.maxConcurrentAgents);
     }
     this.tracker = this.options.tracker ?? createIssueTracker(this.config);
+    this.lifecycleController = new TrackerLifecycleController({ config: this.config, tracker: this.tracker, logger: this.logger });
     this.runner = this.options.runner ?? new CodexAppServerRunner();
   }
 
@@ -2760,40 +2762,35 @@ export class Orchestrator {
     return state;
   }
 
-  private async moveIssue(issue: Issue, stateName: string | null): Promise<TrackerUpdateResult> {
-    if (!stateName || !this.tracker.move || !orchestratorMayMoveIssue(this.config)) return "unsupported";
-    if (await reviewStateBlocksTrackerUpdate({ config: this.config, tracker: this.tracker, logger: this.logger, issue, operation: `move to ${stateName}` })) return "blocked";
-    try {
-      await this.tracker.move(issue.identifier, stateName);
-      return "applied";
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.logger.write({
-        type: "linear_update_failed",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: `move to ${stateName}: ${message}`
-      });
-      return "failed";
-    }
+  private async moveIssue(issue: Issue, stateName: string | null): Promise<LifecycleTrackerUpdateResult> {
+    if (!stateName) return "unsupported";
+    const result = await this.lifecycleController.record({
+      schemaVersion: 1,
+      actor: "extension",
+      type: "state_transition_requested",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      issueState: issue.state,
+      source: "orchestrator",
+      requestedState: stateName,
+      createdAt: new Date().toISOString()
+    });
+    return result.trackerUpdateResult ?? "unsupported";
   }
 
   private async commentIssue(issue: Issue, body: string, key?: string, kind: "bookkeeping" | "substantive" = "bookkeeping"): Promise<void> {
-    if (!orchestratorMayComment(this.config, kind)) return;
-    if (!this.tracker.comment && !this.tracker.upsertComment) return;
-    if (await reviewStateBlocksTrackerUpdate({ config: this.config, tracker: this.tracker, logger: this.logger, issue, operation: "comment" })) return;
-    const safeBody = redactText(key ? `${linearCommentMarker(key, issue.identifier)}\n${body}` : body);
-    const operation =
-      key && this.tracker.upsertComment
-        ? this.tracker.upsertComment(issue.identifier, safeBody, linearCommentKey(key, issue.identifier))
-        : this.tracker.comment!(issue.identifier, safeBody);
-    await operation.catch((error: Error) =>
-      this.logger.write({
-        type: "linear_update_failed",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: `comment: ${error.message}`
-      })
-    );
+    await this.lifecycleController.record({
+      schemaVersion: 1,
+      actor: "extension",
+      type: "progress_comment",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      issueState: issue.state,
+      source: "orchestrator",
+      commentBody: body,
+      commentKey: key,
+      commentKind: kind,
+      createdAt: new Date().toISOString()
+    });
   }
 }

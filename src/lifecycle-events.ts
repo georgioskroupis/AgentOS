@@ -36,12 +36,22 @@ export interface LifecycleEvent {
   createdAt: string;
   runId?: string;
   attempt?: number | null;
+  issueState?: string | null;
   requestedState?: string;
   safetyReason?: SchedulerSafetyWriteReason;
   marker?: string;
   artifactPath?: string;
+  commentBody?: string;
+  commentKey?: string;
+  commentKind?: "bookkeeping" | "substantive";
+}
+
+export type LifecycleTrackerUpdateResult = "applied" | "unsupported" | "failed" | "blocked";
+
+export interface LifecycleControllerRecordResult {
+  trackerUpdateResult?: LifecycleTrackerUpdateResult;
 }
 
 export interface LifecycleController {
-  record(event: LifecycleEvent): Promise<void>;
+  record(event: LifecycleEvent): Promise<LifecycleControllerRecordResult>;
 }

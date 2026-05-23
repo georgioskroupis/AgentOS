@@ -9,6 +9,7 @@ const canonicalStates = ["Todo", "In Progress", "Human Review", "Merging", "Done
 checkLayerBoundaries();
 checkLifecycleBoundaryContracts();
 checkCoreTrackerWriteBoundaries();
+checkLifecycleControllerThinBoundary();
 checkDuplicateWorkflowConcepts();
 checkDuplicateStateNames("WORKFLOW.md");
 checkDuplicateStateNames("templates/base-harness/WORKFLOW.md");
@@ -117,13 +118,40 @@ function checkCoreTrackerWriteBoundaries() {
     fail(`${path} contains a GraphQL mutation string`, "Move tracker write implementation into tracker adapters or lifecycle tools; core scheduler code must not contain raw GraphQL mutations.");
   }
 
-  const compatibilityRanges = ["moveIssue", "commentIssue"].map((name) => methodRange(text, name)).filter(Boolean);
   for (const match of text.matchAll(/\bthis\.tracker\.(move|comment|upsertComment)\b/g)) {
-    if (compatibilityRanges.some((range) => match.index >= range.start && match.index <= range.end)) continue;
     fail(
       `${path} contains direct tracker lifecycle write ${match[0]}`,
-      "Emit a lifecycle event or route through the lifecycle boundary. VER-128 only grandfathers moveIssue/commentIssue compatibility helpers until lifecycle extraction."
+      "Emit a lifecycle event and route through the lifecycle controller; direct tracker lifecycle writes are forbidden in core scheduler code."
     );
+  }
+}
+
+function checkLifecycleControllerThinBoundary() {
+  const path = "src/lifecycle-controller.ts";
+  const text = readOptional(path);
+  if (text == null) {
+    fail(`${path} lifecycle controller implementation is missing`, "Add a thin lifecycle controller that consumes lifecycle events before removing direct tracker writes from the orchestrator.");
+    return;
+  }
+  const disallowedImports = [
+    { pattern: /(^|\/)(review|review-budget|review-budget-orchestration|reviewer-scheduler|reviewer-runner)(\.js)?$/, label: "review" },
+    { pattern: /(^|\/)(ci-retry|orchestrator-ci-retry)(\.js)?$/, label: "CI repair" },
+    { pattern: /(^|\/)(github|github-context|github-repository|landing-policy|landing-preflight|orchestrator-landing-preflight|orchestrator-branch-update|orchestrator-merge-cleanup|orchestrator-pr-ready)(\.js)?$/, label: "merge/landing" },
+    { pattern: /(^|\/)(http-server|dashboard)(\.js)?$/, label: "dashboard" },
+    { pattern: /(^|\/)(registry|registry-orchestrator)(\.js)?$/, label: "registry" },
+    { pattern: /(^|\/)(model-routing)(\.js)?$/, label: "model-routing" },
+    { pattern: /(^|\/)(linear|tracker-adapters)(\.js)?$/, label: "tracker adapter" },
+    { pattern: /(^|\/)(orchestrator-human-decisions)(\.js)?$/, label: "human decision/review policy" }
+  ];
+  for (const specifier of importSpecifiers(text)) {
+    for (const disallowed of disallowedImports) {
+      if (disallowed.pattern.test(specifier)) {
+        fail(
+          `${path} imports disallowed ${disallowed.label} implementation ${specifier}`,
+          "Keep lifecycle-controller thin: it may route lifecycle events to tracker capabilities, but extension policy must stay in extension-owned modules."
+        );
+      }
+    }
   }
 }
 
@@ -295,38 +323,8 @@ function readOptional(path) {
   return readFileSync(fullPath, "utf8");
 }
 
-function methodRange(text, methodName) {
-  const methodPattern = new RegExp(`\\n\\s*private\\s+async\\s+${escapeRegExp(methodName)}\\s*\\(`);
-  const match = methodPattern.exec(text);
-  if (!match) return null;
-  const parametersStart = text.indexOf("(", match.index);
-  if (parametersStart === -1) return null;
-  let parameterDepth = 0;
-  let signatureEnd = -1;
-  for (let index = parametersStart; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "(") parameterDepth += 1;
-    if (char === ")") {
-      parameterDepth -= 1;
-      if (parameterDepth === 0) {
-        signatureEnd = index;
-        break;
-      }
-    }
-  }
-  if (signatureEnd === -1) return null;
-  const bodyStart = text.indexOf("{", signatureEnd);
-  if (bodyStart === -1) return null;
-  let depth = 0;
-  for (let index = bodyStart; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "{") depth += 1;
-    if (char === "}") {
-      depth -= 1;
-      if (depth === 0) return { start: match.index, end: index };
-    }
-  }
-  return null;
+function importSpecifiers(text) {
+  return [...text.matchAll(/^\s*import\s+(?:[^"']+\s+from\s+)?["']([^"']+)["']/gm)].map((match) => match[1]);
 }
 
 function fail(message, fix) {
