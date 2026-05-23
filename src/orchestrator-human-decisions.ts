@@ -1,4 +1,5 @@
 import { isAuthoritativeHumanDecision } from "./issue-state.js";
+import { lifecycleCommentKey, lifecycleCommentMarker } from "./lifecycle-comment-markers.js";
 import { isReviewSplitRecommendationBlocking, reviewSupervisorMergeDecision } from "./review-budget.js";
 import type { HumanDecisionState, Issue, IssueComment, IssueState } from "./types.js";
 
@@ -66,13 +67,7 @@ export async function refreshMergeShepherdHumanDecisionsIfNeeded(input: {
   }
 }
 
-export function linearCommentKey(event: string, issueIdentifier: string): string {
-  return `${event}:${issueIdentifier}`;
-}
-
-export function linearCommentMarker(event: string, issueIdentifier: string): string {
-  return `<!-- agentos:event=${linearCommentKey(event, issueIdentifier)} -->`;
-}
+export { lifecycleCommentKey as linearCommentKey, lifecycleCommentMarker as linearCommentMarker };
 
 function indentBlock(text: string): string {
   return text

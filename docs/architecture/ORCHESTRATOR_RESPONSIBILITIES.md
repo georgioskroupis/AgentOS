@@ -8,7 +8,7 @@ is a planning artifact, not a request to move code immediately.
 | Workflow loading and strict config validation | `src/workflow.ts` | Core config boundary; orchestration consumes resolved config |
 | Tracker polling and eligibility | `src/orchestrator.ts`, `src/orchestrator-tracker-guard.ts` | Core scheduler reads tracker state before dispatch |
 | Dependency and active-state guardrails | `src/orchestrator-tracker-guard.ts` | Core scheduler; no runner side effects before guardrails pass |
-| Claiming and lifecycle comments | `src/orchestrator.ts`, `src/orchestrator-lifecycle-comments.ts`, `src/lifecycle-events.ts` | Current compatibility helpers remain until extraction; new lifecycle writes must cross the lifecycle event boundary |
+| Claiming and lifecycle comments | `src/orchestrator.ts`, `src/lifecycle-controller.ts`, `src/orchestrator-lifecycle-comments.ts`, `src/lifecycle-events.ts` | Core scheduler emits lifecycle events; the thin lifecycle controller routes existing compatibility tracker writes until agent-owned tooling becomes the default |
 | Workspace creation and bootstrap failure handling | `src/workspace.ts`, `src/orchestrator-workspace-bootstrap.ts` | Core workspace lifecycle; hooks run from created workspaces |
 | Runner invocation and event capture | `src/orchestrator.ts`, `src/runner/app-server.ts` | Runner protocol stays below orchestration policy |
 | Retry and durable recovery | `src/orchestrator.ts`, `src/runtime-state.ts`, `src/recovery.ts` | Core recovery; terminal and inactive issues must not redispatch |
@@ -18,7 +18,7 @@ is a planning artifact, not a request to move code immediately.
 | Scope scoring and planning guardrails | `src/scope-report.ts`, `src/scope-report-scoring.ts` | Planning aid; should pause broad work rather than expand implementation |
 | Dashboard/API state | `src/http-server.ts`, `dashboard/` | Optional observability extension; not a scheduler control plane |
 | Registry-wide scheduling | `src/registry-orchestrator.ts`, `src/registry.ts` | Optional extension over project-local orchestration |
-| Linear writes and tracker tools | `src/linear.ts`, `src/agent-lifecycle.ts`, `src/cli-linear-helpers.ts`, `src/tracker-boundaries.ts` | Tracker read/write capabilities are split at the type boundary; normal lifecycle writes move to agent-owned tools in the follow-up refactor |
+| Linear writes and tracker tools | `src/linear.ts`, `src/lifecycle-controller.ts`, `src/agent-lifecycle.ts`, `src/cli-linear-helpers.ts`, `src/tracker-boundaries.ts` | Tracker read/write capabilities are split at the type boundary; the lifecycle controller only routes event-backed compatibility writes, and normal lifecycle writes move to agent-owned tools in the follow-up refactor |
 
 ## Refactor Guardrails
 
@@ -26,9 +26,14 @@ is a planning artifact, not a request to move code immediately.
   has a clear single responsibility and existing tests still cover the boundary.
 - Keep runner, tracker, GitHub, and status modules free of orchestration
   ownership decisions unless explicitly listed here.
-- New direct tracker lifecycle writes from core scheduler code are forbidden.
-  `npm run check:architecture` permits only the current `moveIssue` and
-  `commentIssue` compatibility helpers until the lifecycle extraction PR moves
-  existing writes behind the lifecycle controller.
+- Direct tracker lifecycle writes from core scheduler code are forbidden.
+  `npm run check:architecture` fails direct `move`, `comment`, or
+  `upsertComment` calls in `src/orchestrator.ts`, including old compatibility
+  helper paths. The orchestrator may emit lifecycle events; it must not perform
+  tracker writes itself.
+- `src/lifecycle-controller.ts` must stay thin. It may route lifecycle events
+  to tracker capabilities and preserve existing compatibility behavior, but it
+  must not import review, merge, CI repair, dashboard, registry, model-routing,
+  tracker-adapter, raw Linear, or human-decision policy implementations.
 - Update this map before broadening dashboard, registry, merge, or tracker-tool
   responsibilities.

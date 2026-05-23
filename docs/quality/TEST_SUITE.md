@@ -116,6 +116,7 @@ the cross-boundary assertion.
 | `tests/issue-state.test.ts` | Unit | Handoff parsing, human decisions, PR roles, legacy migration, and app proof metadata |
 | `tests/landing-policy.test.ts` | Unit | High-throughput landing gates remain explicit and public defaults remain conservative |
 | `tests/landing-preflight.test.ts` | Unit | Landing preflight combines validation, CI, daemon freshness, branch freshness, and report-only blockers |
+| `tests/lifecycle-controller.test.ts` | Unit | Lifecycle events route through the thin controller while preserving tracker write permissions, markers, blocking, and failure logging |
 | `tests/linear-planned-issues.test.ts` | Boundary | Planning-to-DAG issue creation, idempotency markers, blockers, and credential failure behavior |
 | `tests/linear-graphql-tool.test.ts` | Boundary | Agent-owned Linear GraphQL client tool advertising, input validation, structured failures, and credential reuse |
 | `tests/linear.test.ts` | Boundary | Linear pagination, comments, markers, state moves, relations, and setup-state creation |
