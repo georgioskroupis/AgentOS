@@ -51,6 +51,7 @@ export function verifyAgentOwnedLifecycleEvidence(input: VerifyAgentOwnedLifecyc
     const marker = agentTrackerMarker(input.config, event, input.issueIdentifier, { runId: input.runId, attempt: input.attempt });
     const exactMatches = (input.comments ?? []).filter((comment) => comment.body.includes(marker));
     const parsedEventMatches = parsedMarkers.filter((entry) => entry.event === event);
+    const newestExactMarkerAt = Math.max(...exactMatches.map(markerTime), 0);
     if (exactMatches.length === 0) missing.push(`marker:${event}`);
     if (exactMatches.length > 1) {
       duplicateMarkers.push({
@@ -67,10 +68,10 @@ export function verifyAgentOwnedLifecycleEvidence(input: VerifyAgentOwnedLifecyc
       if (entry.issue !== input.issueIdentifier) {
         wrongIssue.push(markerFindingFromEntry(entry, `expected issue ${input.issueIdentifier}`));
       }
-      if (entry.issue === input.issueIdentifier && entry.run !== input.runId && entry.run !== "manual") {
+      if (entry.issue === input.issueIdentifier && entry.run !== input.runId && entry.run !== "manual" && exactMatches.length > 0 && markerTime(entry.comment) > newestExactMarkerAt) {
         wrongRun.push(markerFindingFromEntry(entry, `expected run ${input.runId}`));
       }
-      if (expectedAuthors.length > 0 && !expectedAuthors.includes(normalizeAuthor(entry.comment))) {
+      if (entry.issue === input.issueIdentifier && entry.run === input.runId && expectedAuthors.length > 0 && !expectedAuthors.includes(normalizeAuthor(entry.comment))) {
         wrongAuthor.push(markerFindingFromEntry(entry, "unexpected author"));
       }
     }
@@ -100,11 +101,10 @@ export function verifyAgentOwnedLifecycleEvidence(input: VerifyAgentOwnedLifecyc
   }
 
   const uniqueMissing = uniqueStrings(missing);
-  const allWrongRun = dedupeFindings([...wrongRun, ...staleEvidence.filter((finding) => finding.observedRun && finding.observedRun !== input.runId)]);
+  const allWrongRun = dedupeFindings(wrongRun);
   const failed =
     uniqueMissing.length > 0 ||
     duplicateMarkers.length > 0 ||
-    staleEvidence.length > 0 ||
     wrongIssue.length > 0 ||
     allWrongRun.length > 0 ||
     wrongAuthor.length > 0;
@@ -214,6 +214,11 @@ function normalizeAuthor(comment: IssueComment): string {
 
 function commentAuthorLabel(comment: IssueComment): string {
   return comment.authorEmail ?? comment.authorId ?? comment.author ?? "";
+}
+
+function markerTime(comment: IssueComment): number {
+  const timestamp = comment.updatedAt ?? comment.createdAt;
+  return timestamp ? Date.parse(timestamp) || 0 : 0;
 }
 
 function sameState(left: string | null, right: string): boolean {

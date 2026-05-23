@@ -167,11 +167,11 @@ describe("agent-owned lifecycle evidence", () => {
       expectedState: "Human Review",
       observedState: "Human Review",
       comments: [
-        comment("c-start-1", start, { authorEmail: "somebody@example.com" }),
-        comment("c-start-2", start, { authorEmail: "somebody@example.com" }),
-        comment("c-stale", stale, { authorEmail: "agent@example.com" }),
+        comment("c-start-1", start, { authorEmail: "somebody@example.com", updatedAt: "2026-01-01T00:00:02.000Z" }),
+        comment("c-start-2", start, { authorEmail: "somebody@example.com", updatedAt: "2026-01-01T00:00:02.000Z" }),
+        comment("c-stale", stale, { authorEmail: "agent@example.com", updatedAt: "2026-01-01T00:00:00.000Z" }),
         comment("c-wrong-issue", wrongIssue, { authorEmail: "agent@example.com" }),
-        comment("c-wrong-run", wrongRun, { authorEmail: "agent@example.com" })
+        comment("c-wrong-run", wrongRun, { authorEmail: "agent@example.com", updatedAt: "2026-01-01T00:00:03.000Z" })
       ],
       handoff: "AgentOS-Outcome: already-satisfied\nValidation-JSON: .agent-os/validation/AG-1.json",
       handoffPath: join(workspacePath, ".agent-os", "handoff-AG-1.md"),
@@ -187,6 +187,86 @@ describe("agent-owned lifecycle evidence", () => {
     expect(evidence.wrongIssue.map((finding) => finding.commentIds[0])).toContain("c-wrong-issue");
     expect(evidence.wrongRun.map((finding) => finding.commentIds[0])).toContain("c-wrong-run");
     expect(evidence.wrongAuthor.map((finding) => finding.commentIds[0])).toContain("c-start-1");
+  });
+
+  it("fails stale old markers when the current exact marker is missing", async () => {
+    const { config, workspacePath, validation } = await evidenceFixture();
+    const stale = agentTrackerMarker(config, "run_started", "AG-1", { runId: "old-run", attempt: 0 });
+    const evidence = verifyAgentOwnedLifecycleEvidence({
+      config,
+      issueIdentifier: "AG-1",
+      runId: "run-1",
+      attempt: 0,
+      expectedState: "Human Review",
+      observedState: "Human Review",
+      comments: [
+        comment("c-stale", stale, { updatedAt: "2026-01-01T00:00:00.000Z" }),
+        comment("c-handoff", agentTrackerMarker(config, "run_handoff", "AG-1", { runId: "run-1", attempt: 0 }))
+      ],
+      handoff: "AgentOS-Outcome: already-satisfied\nValidation-JSON: .agent-os/validation/AG-1.json",
+      handoffPath: join(workspacePath, ".agent-os", "handoff-AG-1.md"),
+      workspacePath,
+      state: { schemaVersion: 1, issueId: "issue-1", issueIdentifier: "AG-1", outcome: "already_satisfied", validation, updatedAt: "2026-01-01T00:00:00.000Z" },
+      validation
+    });
+
+    expect(evidence.status).toBe("failed");
+    expect(evidence.missing).toContain("marker:run_started");
+    expect(evidence.staleEvidence.map((finding) => finding.commentIds[0])).toContain("c-stale");
+  });
+
+  it("keeps stale old markers diagnostic when the current exact marker exists", async () => {
+    const { config, workspacePath, validation } = await evidenceFixture();
+    const stale = agentTrackerMarker(config, "run_started", "AG-1", { runId: "old-run", attempt: 0 });
+    const current = agentTrackerMarker(config, "run_started", "AG-1", { runId: "run-1", attempt: 0 });
+    const evidence = verifyAgentOwnedLifecycleEvidence({
+      config,
+      issueIdentifier: "AG-1",
+      runId: "run-1",
+      attempt: 0,
+      expectedState: "Human Review",
+      observedState: "Human Review",
+      comments: [
+        comment("c-stale", stale, { updatedAt: "2026-01-01T00:00:00.000Z" }),
+        comment("c-current", current, { updatedAt: "2026-01-01T00:00:01.000Z" }),
+        comment("c-handoff", agentTrackerMarker(config, "run_handoff", "AG-1", { runId: "run-1", attempt: 0 }))
+      ],
+      handoff: "AgentOS-Outcome: already-satisfied\nValidation-JSON: .agent-os/validation/AG-1.json",
+      handoffPath: join(workspacePath, ".agent-os", "handoff-AG-1.md"),
+      workspacePath,
+      state: { schemaVersion: 1, issueId: "issue-1", issueIdentifier: "AG-1", outcome: "already_satisfied", validation, updatedAt: "2026-01-01T00:00:00.000Z" },
+      validation
+    });
+
+    expect(evidence.status).toBe("passed");
+    expect(evidence.staleEvidence.map((finding) => finding.commentIds[0])).toContain("c-stale");
+    expect(evidence.wrongRun).toEqual([]);
+  });
+
+  it("fails duplicate current exact markers", async () => {
+    const { config, workspacePath, validation } = await evidenceFixture();
+    const current = agentTrackerMarker(config, "run_started", "AG-1", { runId: "run-1", attempt: 0 });
+    const evidence = verifyAgentOwnedLifecycleEvidence({
+      config,
+      issueIdentifier: "AG-1",
+      runId: "run-1",
+      attempt: 0,
+      expectedState: "Human Review",
+      observedState: "Human Review",
+      comments: [
+        comment("c-current-1", current),
+        comment("c-current-2", current),
+        comment("c-handoff", agentTrackerMarker(config, "run_handoff", "AG-1", { runId: "run-1", attempt: 0 }))
+      ],
+      handoff: "AgentOS-Outcome: already-satisfied\nValidation-JSON: .agent-os/validation/AG-1.json",
+      handoffPath: join(workspacePath, ".agent-os", "handoff-AG-1.md"),
+      workspacePath,
+      state: { schemaVersion: 1, issueId: "issue-1", issueIdentifier: "AG-1", outcome: "already_satisfied", validation, updatedAt: "2026-01-01T00:00:00.000Z" },
+      validation
+    });
+
+    expect(evidence.status).toBe("failed");
+    expect(evidence.duplicateMarkers.map((finding) => finding.event)).toContain("run_started");
   });
 
   it("records passed agent-owned evidence before completing the run", async () => {
@@ -212,6 +292,22 @@ describe("agent-owned lifecycle evidence", () => {
     expect(summary.artifactHashes).toHaveProperty("agent-owned-lifecycle-evidence.json");
     const evidence = JSON.parse(await readFile(join(repo, ".agent-os", "runs", summary.runId, "agent-owned-lifecycle-evidence.json"), "utf8"));
     expect(evidence.status).toBe("passed");
+    expect(tracker.schedulerComments).toEqual([]);
+    expect(tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+
+    const second = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("restart should not redispatch the completed Human Review issue");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+    expect(second.dispatched).toBe(0);
     expect(tracker.schedulerComments).toEqual([]);
     expect(tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
   });
@@ -243,22 +339,71 @@ describe("agent-owned lifecycle evidence", () => {
     expect(summary.error).toContain("agent_owned_lifecycle_missing_evidence");
     expect(tracker.schedulerComments).toEqual([]);
     expect(tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+  });
 
-    const second = await new Orchestrator({
+  it("keeps start-only partial evidence human-required and stable after restart", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-owned-evidence-start-only-"));
+    const workflowPath = await writeAgentOwnedWorkflow(repo);
+    const tracker = new AgentOwnedMemoryTracker(readyIssue);
+    const runner = agentOwnedRunner({ tracker, includeStartMarker: true, includeHandoffMarker: false });
+
+    await new Orchestrator({
       repoRoot: repo,
       workflowPath,
       tracker,
-      runner: {
-        async run(): Promise<AgentRunResult> {
-          throw new Error("restart should not redispatch the Human Review issue");
-        }
-      },
+      runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
-    expect(second.dispatched).toBe(0);
-    expect(tracker.schedulerComments).toEqual([]);
-    expect(tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+
+    await expectMissingEvidenceAfterRestart({ repo, workflowPath, tracker, expectedMissing: ["marker:run_handoff"] });
+  });
+
+  it("keeps start-and-pr partial evidence human-required and stable after restart", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-owned-evidence-pr-only-"));
+    const workflowPath = await writeAgentOwnedWorkflow(repo);
+    const tracker = new AgentOwnedMemoryTracker(readyIssue);
+    const runner = agentOwnedRunner({
+      tracker,
+      includeStartMarker: true,
+      includePrMetadataMarker: true,
+      includeHandoffMarker: false
+    });
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(tracker.comments.some((entry) => entry.body.includes("agentos:event=pr_metadata"))).toBe(true);
+    await expectMissingEvidenceAfterRestart({ repo, workflowPath, tracker, expectedMissing: ["marker:run_handoff"] });
+  });
+
+  it("keeps start-and-handoff partial evidence human-required when validation evidence is missing", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-owned-evidence-validation-missing-"));
+    const workflowPath = await writeAgentOwnedWorkflow(repo);
+    const tracker = new AgentOwnedMemoryTracker(readyIssue);
+    const runner = agentOwnedRunner({
+      tracker,
+      includeStartMarker: true,
+      includeHandoffMarker: true,
+      includeValidationEvidence: false
+    });
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    await expectMissingEvidenceAfterRestart({ repo, workflowPath, tracker, expectedMissing: ["validation_evidence", "validation_evidence_passed"] });
   });
 });
 
@@ -276,6 +421,28 @@ async function evidenceFixture(): Promise<{ config: ServiceConfig; workspacePath
     checkedAt: "2026-01-01T00:00:00.000Z",
     acceptedCommands: [{ name: "npm run agent-check", exitCode: 0 }]
   };
+  await mkdir(join(workspacePath, ".agent-os", "validation"), { recursive: true });
+  await writeValidationEvidence(join(workspacePath, validation.path), {
+    schemaVersion: 1,
+    issueIdentifier: "AG-1",
+    runId: "run-1",
+    status: "passed",
+    finalResult: {
+      status: "passed",
+      command: "npm run agent-check",
+      exitCode: 0,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      finishedAt: "2026-01-01T00:00:00.000Z"
+    },
+    commands: [
+      {
+        name: "npm run agent-check",
+        exitCode: 0,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        finishedAt: "2026-01-01T00:00:00.000Z"
+      }
+    ]
+  });
   return { config, workspacePath, validation };
 }
 
@@ -320,7 +487,14 @@ async function writeAgentOwnedWorkflow(repo: string): Promise<string> {
   return workflowPath;
 }
 
-function agentOwnedRunner(input: { tracker: AgentOwnedMemoryTracker; includeStartMarker: boolean }): AgentRunner {
+function agentOwnedRunner(input: {
+  tracker: AgentOwnedMemoryTracker;
+  includeStartMarker: boolean;
+  includePrMetadataMarker?: boolean;
+  includeHandoffMarker?: boolean;
+  includeValidationEvidence?: boolean;
+  includePrInHandoff?: boolean;
+}): AgentRunner {
   return {
     async run(runInput): Promise<AgentRunResult> {
       const runId = runInput.prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
@@ -338,17 +512,31 @@ function agentOwnedRunner(input: { tracker: AgentOwnedMemoryTracker; includeStar
           }
         );
       }
-      await writePassingHandoff(runInput.workspace.path, "AG-1", runInput.prompt, "AgentOS-Outcome: already-satisfied");
-      await recordHandoffWithAgentLifecycleTool(
-        { repoRoot: runInput.workspace.path, config: runInput.config, tracker: input.tracker },
-        {
-          issue: "AG-1",
-          handoffPath: join(runInput.workspace.path, ".agent-os", "handoff-AG-1.md"),
-          tool: "scripts/agent-linear-handoff.sh",
-          runId,
-          attempt
+      if (input.includePrMetadataMarker) {
+        await input.tracker.addAgentMarker("pr_metadata", runInput.config, runId, attempt, "PR: https://github.com/o/r/pull/1");
+      }
+      const handoffBody = ["AgentOS-Outcome: already-satisfied", input.includePrInHandoff ? "PR: https://github.com/o/r/pull/1" : ""].filter(Boolean).join("\n\n");
+      if (input.includeValidationEvidence ?? true) {
+        await writePassingHandoff(runInput.workspace.path, "AG-1", runInput.prompt, handoffBody);
+      } else {
+        await writeHandoffWithoutValidation(runInput.workspace.path, "AG-1", handoffBody);
+      }
+      if (input.includeHandoffMarker ?? true) {
+        if (input.includeValidationEvidence ?? true) {
+          await recordHandoffWithAgentLifecycleTool(
+            { repoRoot: runInput.workspace.path, config: runInput.config, tracker: input.tracker },
+            {
+              issue: "AG-1",
+              handoffPath: join(runInput.workspace.path, ".agent-os", "handoff-AG-1.md"),
+              tool: "scripts/agent-linear-handoff.sh",
+              runId,
+              attempt
+            }
+          );
+        } else {
+          await input.tracker.addAgentMarker("run_handoff", runInput.config, runId, attempt, handoffBody);
         }
-      );
+      }
       await moveWithAgentLifecycleTool(
         { repoRoot: runInput.workspace.path, config: runInput.config, tracker: input.tracker },
         {
@@ -405,6 +593,11 @@ class AgentOwnedMemoryTracker implements IssueTracker, AgentLifecycleTracker {
     };
   }
 
+  async addAgentMarker(event: string, config: ServiceConfig, runId: string, attempt: number | null, body: string): Promise<void> {
+    const marker = agentTrackerMarker(config, event, this.issue.identifier, { runId, attempt });
+    await this.upsertCommentWithMarker(this.issue.identifier, body, marker);
+  }
+
   async upsertCommentWithMarker(_issueIdentifier: string, body: string, marker: string): Promise<"created" | "updated" | "skipped"> {
     const existing = this.comments.findIndex((entry) => entry.body.includes(marker));
     const entry: IssueComment = {
@@ -437,6 +630,37 @@ function comment(id: string, marker: string, author: Partial<IssueComment> = {})
   };
 }
 
+async function expectMissingEvidenceAfterRestart(input: { repo: string; workflowPath: string; tracker: AgentOwnedMemoryTracker; expectedMissing: string[] }): Promise<void> {
+  const state = await new IssueStateStore(input.repo).read("AG-1");
+  expect(state).toMatchObject({
+    phase: "human-required",
+    reviewStatus: "human_required",
+    lifecycleStatus: "agent_owned_lifecycle_missing_evidence"
+  });
+  expect(state?.agentOwnedLifecycleEvidence?.missing).toEqual(expect.arrayContaining(input.expectedMissing));
+  const [summary] = await new RunArtifactStore(input.repo).listRuns();
+  expect(summary.status).toBe("failed");
+  expect(summary.error).toContain("agent_owned_lifecycle_missing_evidence");
+  expect(input.tracker.schedulerComments).toEqual([]);
+  expect(input.tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+
+  const second = await new Orchestrator({
+    repoRoot: input.repo,
+    workflowPath: input.workflowPath,
+    tracker: input.tracker,
+    runner: {
+      async run(): Promise<AgentRunResult> {
+        throw new Error("restart should not redispatch the Human Review issue");
+      }
+    },
+    logger: new JsonlLogger(input.repo),
+    env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+  }).runOnce(true);
+  expect(second.dispatched).toBe(0);
+  expect(input.tracker.schedulerComments).toEqual([]);
+  expect(input.tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+}
+
 async function writePassingHandoff(workspacePath: string, issueIdentifier: string, prompt: string, body: string): Promise<void> {
   const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
   const reuseProfile = prompt.match(/^Validation reuse profile JSON: (.+)$/m)?.[1];
@@ -466,4 +690,9 @@ async function writePassingHandoff(workspacePath: string, issueIdentifier: strin
       }
     ]
   });
+}
+
+async function writeHandoffWithoutValidation(workspacePath: string, issueIdentifier: string, body: string): Promise<void> {
+  await mkdir(join(workspacePath, ".agent-os"), { recursive: true });
+  await writeFile(join(workspacePath, ".agent-os", `handoff-${issueIdentifier}.md`), body, "utf8");
 }

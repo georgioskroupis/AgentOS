@@ -1206,6 +1206,7 @@ export class Orchestrator {
           }
         }
         if (validation && validation.state.status !== "passed") {
+          if (this.config.lifecycle.mode === "agent-owned" && validation.state.status === "missing" && !(await verifyAndRecordAgentOwnedLifecycleEvidence({ config: this.config, tracker: this.tracker, logger: this.logger, runArtifacts: this.runArtifacts, runtimeState: this.runtimeState, stateStore, issue, workspace, runId, attempt, handoff, state: stateFromHandoff ? await stateStore.merge(issue.identifier, { ...stateFromHandoff, validation: validation.state }) : await stateStore.read(issue.identifier), validation: validation.state, result, recordIssueState: async (patch) => { await this.recordIssueState(issue, patch); }, forgetRetry: () => this.retries.delete(issue.id), forgetCompletionMarker: () => this.completedMarkers.delete(issue.id), writeRunEvent: (entry) => this.writeRunEvent(runId, entry) })).passed) return;
           const error = validationFailureMessage(validation.state);
           await this.recordIssueState(issue, {
             phase: "validation",
