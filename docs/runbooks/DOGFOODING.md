@@ -208,8 +208,8 @@ For each issue, record:
   and agents report already-satisfied, partially-satisfied, or missing scope
   before editing.
 - Strict trust mode does not block legitimate small work.
-- Lifecycle smoke checks run in default `lifecycle.mode: orchestrator-owned`
-  mode unless a test explicitly says otherwise.
+- Lifecycle smoke checks run in default `lifecycle.mode: agent-owned` mode
+  unless a test explicitly covers legacy compatibility.
 - Runtime `.agent-os/` data remains ignored and uncommitted.
 - The agent does not create a PR for already-satisfied work.
 - Investigation-only and planning-only work may finish with a handoff and no PR.

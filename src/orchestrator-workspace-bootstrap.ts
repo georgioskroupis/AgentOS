@@ -6,6 +6,7 @@ import type { PhaseTimingEventInput } from "./phase-timing.js";
 import type { RunArtifactStore } from "./runs.js";
 import type { RuntimeStateStore } from "./runtime-state.js";
 import { workspaceKey, type WorkspaceManager } from "./workspace.js";
+import type { SchedulerSafetyWriteReason } from "./lifecycle-events.js";
 import type { AgentEvent, Issue, IssueState, ServiceConfig, Workspace } from "./types.js";
 
 export function plannedWorkspaceForIssue(config: ServiceConfig, issueIdentifier: string): Workspace {
@@ -28,8 +29,8 @@ export async function handleWorkspaceBootstrapFailure(input: {
   runArtifacts: RunArtifactStore;
   writeRunEvent: (runId: string, entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }) => Promise<void>;
   recordIssueState: (issue: Issue, patch: Partial<IssueState>) => Promise<IssueState>;
-  commentIssue: (issue: Issue, body: string, key?: string) => Promise<void>;
-  moveIssue: (issue: Issue, stateName: string | null) => Promise<unknown>;
+  schedulerSafetyCommentIssue: (issue: Issue, body: string, key: string, safetyReason: SchedulerSafetyWriteReason) => Promise<void>;
+  schedulerSafetyMoveIssue: (issue: Issue, stateName: string | null, safetyReason: SchedulerSafetyWriteReason) => Promise<unknown>;
   writePhaseTimingEvent: (issue: Issue, event: PhaseTimingEventInput) => Promise<void>;
 }): Promise<void> {
   const safeError = summarizeText(input.error.message).inline;
@@ -73,8 +74,8 @@ export async function createWorkspaceForRun(input: {
   workspaceManager: WorkspaceManager;
   writeRunEvent: (runId: string, entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }) => Promise<void>;
   recordIssueState: (issue: Issue, patch: Partial<IssueState>) => Promise<IssueState>;
-  commentIssue: (issue: Issue, body: string, key?: string) => Promise<void>;
-  moveIssue: (issue: Issue, stateName: string | null) => Promise<unknown>;
+  schedulerSafetyCommentIssue: (issue: Issue, body: string, key: string, safetyReason: SchedulerSafetyWriteReason) => Promise<void>;
+  schedulerSafetyMoveIssue: (issue: Issue, stateName: string | null, safetyReason: SchedulerSafetyWriteReason) => Promise<unknown>;
   writePhaseTimingEvent: (issue: Issue, event: PhaseTimingEventInput) => Promise<void>;
 }): Promise<Workspace | null> {
   const plannedWorkspace = plannedWorkspaceForIssue(input.config, input.issue.identifier);
@@ -105,10 +106,13 @@ export async function createWorkspaceForRun(input: {
 }
 
 async function markLinearWorkspaceBootstrapFailed(
-  input: Pick<Parameters<typeof handleWorkspaceBootstrapFailure>[0], "issue" | "workspace" | "attempt" | "config" | "commentIssue" | "moveIssue" | "writePhaseTimingEvent">,
+  input: Pick<
+    Parameters<typeof handleWorkspaceBootstrapFailure>[0],
+    "issue" | "workspace" | "attempt" | "config" | "schedulerSafetyCommentIssue" | "schedulerSafetyMoveIssue" | "writePhaseTimingEvent"
+  >,
   error: string
 ): Promise<void> {
-  await input.commentIssue(
+  await input.schedulerSafetyCommentIssue(
     input.issue,
     workspaceBootstrapFailedCommentBody({
       workspace: input.workspace,
@@ -116,9 +120,10 @@ async function markLinearWorkspaceBootstrapFailed(
       hookCommand: input.config.hooks.afterCreate ?? "workspace after_create hook",
       error
     }),
-    "recovery_needed"
+    "recovery_needed",
+    "bootstrap_failed_before_agent_start"
   );
-  await input.moveIssue(input.issue, input.config.tracker.needsInputState);
+  await input.schedulerSafetyMoveIssue(input.issue, input.config.tracker.needsInputState, "bootstrap_failed_before_agent_start");
   await input.writePhaseTimingEvent(input.issue, {
     phase: "needs-input",
     status: "waiting",

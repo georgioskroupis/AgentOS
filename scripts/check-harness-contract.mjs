@@ -65,7 +65,7 @@ function checkWorkflow(path) {
     "automation:",
     "repair_policy:",
     "lifecycle:",
-    "mode: orchestrator-owned",
+    "mode: agent-owned",
     "merge_mode:",
     "merge_target:",
     "approval_event_policy: deny",
@@ -74,6 +74,16 @@ function checkWorkflow(path) {
     "@openai/codex@0.125.0 app-server"
   ]) {
     if (!text.includes(snippet)) failures.push(`${path} missing hardened workflow config ${snippet}`);
+  }
+  for (const snippet of [
+    "bootstrap_failed_before_agent_start",
+    "pre_dispatch_safety_block",
+    "retry_budget_exhausted",
+    "stale_run_recovery_required",
+    "terminal_cleanup_reconciliation",
+    "agent_owned_lifecycle_missing_evidence"
+  ]) {
+    if (!text.includes(snippet)) failures.push(`${path} missing scheduler safety-write contract ${snippet}`);
   }
   if (/@openai\/codex@latest\b/.test(text)) failures.push(`${path} contains unpinned Codex command`);
   for (const block of ["active_states", "terminal_states"]) {

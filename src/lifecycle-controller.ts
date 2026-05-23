@@ -1,5 +1,6 @@
 import { lifecycleCommentKey, lifecycleCommentMarker } from "./lifecycle-comment-markers.js";
 import { orchestratorMayComment, orchestratorMayMoveIssue, type LifecycleCommentKind } from "./lifecycle.js";
+import { schedulerSafetyWriteReasons } from "./lifecycle-events.js";
 import type { LifecycleController, LifecycleControllerRecordResult, LifecycleEvent, LifecycleTrackerUpdateResult } from "./lifecycle-events.js";
 import type { JsonlLogger } from "./logging.js";
 import { reviewStateBlocksTrackerUpdate } from "./orchestrator-tracker-guard.js";
@@ -30,7 +31,9 @@ export class TrackerLifecycleController implements LifecycleController {
 
   private async moveIssue(event: LifecycleEvent): Promise<LifecycleTrackerUpdateResult> {
     const stateName = event.requestedState ?? null;
-    if (!stateName || !this.options.tracker.move || !orchestratorMayMoveIssue(this.options.config)) return "unsupported";
+    if (!stateName || !this.options.tracker.move || !mayWriteLifecycle(event, orchestratorMayMoveIssue(this.options.config))) {
+      return this.withSchedulerSafetyLog(event, "move", "unsupported");
+    }
     const issue = issueFromLifecycleEvent(event);
     if (
       await reviewStateBlocksTrackerUpdate({
@@ -41,11 +44,11 @@ export class TrackerLifecycleController implements LifecycleController {
         operation: `move to ${stateName}`
       })
     ) {
-      return "blocked";
+      return this.withSchedulerSafetyLog(event, "move", "blocked");
     }
     try {
       await this.options.tracker.move(issue.identifier, stateName);
-      return "applied";
+      return this.withSchedulerSafetyLog(event, "move", "applied");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.options.logger.write({
@@ -54,14 +57,15 @@ export class TrackerLifecycleController implements LifecycleController {
         issueIdentifier: issue.identifier,
         message: `move to ${stateName}: ${message}`
       });
-      return "failed";
+      return this.withSchedulerSafetyLog(event, "move", "failed");
     }
   }
 
   private async commentIssue(event: LifecycleEvent): Promise<LifecycleTrackerUpdateResult> {
     const kind: LifecycleCommentKind = event.commentKind ?? "bookkeeping";
-    if (!orchestratorMayComment(this.options.config, kind)) return "unsupported";
-    if (!this.options.tracker.comment && !this.options.tracker.upsertComment) return "unsupported";
+    if (isSchedulerSafetyWrite(event) && kind === "substantive") return this.withSchedulerSafetyLog(event, "comment", "unsupported");
+    if (!mayWriteLifecycle(event, orchestratorMayComment(this.options.config, kind))) return this.withSchedulerSafetyLog(event, "comment", "unsupported");
+    if (!this.options.tracker.comment && !this.options.tracker.upsertComment) return this.withSchedulerSafetyLog(event, "comment", "unsupported");
     const issue = issueFromLifecycleEvent(event);
     if (
       await reviewStateBlocksTrackerUpdate({
@@ -72,7 +76,7 @@ export class TrackerLifecycleController implements LifecycleController {
         operation: "comment"
       })
     ) {
-      return "blocked";
+      return this.withSchedulerSafetyLog(event, "comment", "blocked");
     }
     const safeBody = redactText(event.commentKey ? `${lifecycleCommentMarker(event.commentKey, issue.identifier)}\n${event.commentBody ?? ""}` : event.commentBody ?? "");
     const operation =
@@ -81,7 +85,7 @@ export class TrackerLifecycleController implements LifecycleController {
         : this.options.tracker.comment!(issue.identifier, safeBody);
     try {
       await operation;
-      return "applied";
+      return this.withSchedulerSafetyLog(event, "comment", "applied");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.options.logger.write({
@@ -90,9 +94,29 @@ export class TrackerLifecycleController implements LifecycleController {
         issueIdentifier: issue.identifier,
         message: `comment: ${message}`
       });
-      return "failed";
+      return this.withSchedulerSafetyLog(event, "comment", "failed");
     }
   }
+
+  private async withSchedulerSafetyLog(event: LifecycleEvent, operation: "move" | "comment", result: LifecycleTrackerUpdateResult): Promise<LifecycleTrackerUpdateResult> {
+    if (!isSchedulerSafetyWrite(event)) return result;
+    await this.options.logger.write({
+      type: "scheduler_safety",
+      issueId: event.issueId,
+      issueIdentifier: event.issueIdentifier,
+      message: `${event.safetyReason}:${operation}:${result}`,
+      payload: { reason: event.safetyReason, operation, result, requestedState: event.requestedState, commentKey: event.commentKey }
+    });
+    return result;
+  }
+}
+
+function mayWriteLifecycle(event: LifecycleEvent, defaultAllowed: boolean): boolean {
+  return defaultAllowed || isSchedulerSafetyWrite(event);
+}
+
+function isSchedulerSafetyWrite(event: LifecycleEvent): boolean {
+  return event.actor === "scheduler_safety" && schedulerSafetyWriteReasons.includes(event.safetyReason as (typeof schedulerSafetyWriteReasons)[number]);
 }
 
 function issueFromLifecycleEvent(event: LifecycleEvent): Issue {

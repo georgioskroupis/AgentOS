@@ -12,6 +12,7 @@ import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./lan
 import { landingFreshnessPatch } from "./landing-preflight.js";
 import { hybridHandoffComment, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { TrackerLifecycleController, type LifecycleTrackerUpdateResult } from "./lifecycle-controller.js";
+import type { SchedulerSafetyWriteReason } from "./lifecycle-events.js";
 import { JsonlLogger } from "./logging.js";
 import { initialDaemonFreshnessState, isDaemonFreshnessStale } from "./daemon-freshness.js";
 import { type ReadDaemonIdentityOptions } from "./daemon-identity.js";
@@ -37,6 +38,7 @@ import { planningRecommendedCommentBody } from "./orchestrator-planning-comments
 import { autoRecoverPushedWork } from "./orchestrator-pushed-work-recovery.js";
 import { isRecoverablePartialWorkState, isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
+import { schedulerSafetyCommentIssue, schedulerSafetyMoveIssue } from "./orchestrator-scheduler-safety.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, dependencyDispatchStopPatch, isRecordedMergeTerminal, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
@@ -525,7 +527,7 @@ export class Orchestrator {
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
       if (state.reviewStatus === "human_required" || state.phase === "human-required") {
-        await this.moveIssue(issue, this.config.tracker.reviewState);
+        await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "stale_run_recovery_required" });
       }
       messages.push(`cleared stale running run for ${issue.identifier}: local issue state is already ${state.phase}`);
       return { stale: true, terminal: state.phase === "completed" && state.reviewStatus !== "human_required", retryRebuilt: false, messages };
@@ -563,7 +565,7 @@ export class Orchestrator {
       await this.recordIssueState(issue, recoverablePartialWorkStatePatch(message));
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
-      await this.markLinearRecoveryNeeded(issue, recovery);
+      await this.markLinearRecoveryNeeded(issue, recovery, "stale_run_recovery_required");
       messages.push(`paused stale run for ${issue.identifier}: recoverable partial work`);
       return { stale: true, terminal: false, retryRebuilt: false, messages };
     }
@@ -579,7 +581,7 @@ export class Orchestrator {
         nextRetryAt: undefined,
         retryAttempt: undefined
       });
-      await this.moveIssue(issue, this.config.tracker.reviewState);
+      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "stale_run_recovery_required" });
       await this.runtimeState.clearIssue(issue.id);
       messages.push(`escalated stale review/fix run for ${issue.identifier} to human review`);
       return { stale: true, terminal: false, retryRebuilt: false, messages };
@@ -597,7 +599,7 @@ export class Orchestrator {
         nextRetryAt: undefined,
         retryAttempt: undefined
       });
-      await this.moveIssue(issue, this.config.tracker.needsInputState);
+      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.needsInputState, safetyReason: "retry_budget_exhausted" });
       await this.runtimeState.clearIssue(issue.id);
       messages.push(`stale run for ${issue.identifier} exhausted retry budget`);
       return { stale: true, terminal: false, retryRebuilt: false, messages };
@@ -673,7 +675,7 @@ export class Orchestrator {
         issue: latest, drift,
         recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch), clearRuntimeIssue: async (issueId, issueIdentifier) => { await this.runtimeState.clearIssue(issueId, issueIdentifier); },
         deleteRetry: (issueId) => { this.retries.delete(issueId); }, logger: this.logger,
-        commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key), moveIssue: (targetIssue, stateName) => this.moveIssue(targetIssue, stateName)
+        commentIssue: (targetIssue, body, key) => schedulerSafetyCommentIssue({ controller: this.lifecycleController, issue: targetIssue, body, key, safetyReason: "pre_dispatch_safety_block" }), moveIssue: (targetIssue, stateName) => schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue: targetIssue, stateName, safetyReason: "pre_dispatch_safety_block" })
       });
       return null;
     }
@@ -722,7 +724,7 @@ export class Orchestrator {
         const message = `approved PR landing ${formatLandingPolicyResult(landing)}`;
         await this.recordIssueState(issue, { phase: state.phase, mergeTargetUrl: mergeTarget.url, mergeTargetRole: mergeTarget.role ?? "primary", stopReason: message, nextRetryAt: undefined, retryAttempt: undefined });
         await this.logger.write({ type: `landing_${landing.status}`, issueId: issue.id, issueIdentifier: issue.identifier, message, payload: { prUrl: mergeTarget.url, landing } });
-        await this.moveIssue(issue, this.config.tracker.reviewState);
+        await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "pre_dispatch_safety_block" });
         return true;
       }
       const github = new GitHubClient(this.config.github.command);
@@ -741,7 +743,7 @@ export class Orchestrator {
       }
       const refreshedState = pr ? await this.recordIssueState(issue, landingFreshnessPatch(state, pr, this.config.github.requireChecks)) : state;
       const landingBlock = pr && refreshedState ? await approvedPrLandingPreflightBlock({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, state: refreshedState, pullRequest: pr, mergeTarget }) : null;
-      if (landingBlock) { await this.recordIssueState(issue, landingBlock.statePatch); await this.logger.write({ type: `landing_preflight_${landingBlock.status}`, issueId: issue.id, issueIdentifier: issue.identifier, message: landingBlock.message, payload: landingBlock.payload }); if (landingBlock.status === "blocked") await this.moveIssue(issue, this.config.tracker.reviewState); return true; }
+      if (landingBlock) { await this.recordIssueState(issue, landingBlock.statePatch); await this.logger.write({ type: `landing_preflight_${landingBlock.status}`, issueId: issue.id, issueIdentifier: issue.identifier, message: landingBlock.message, payload: landingBlock.payload }); if (landingBlock.status === "blocked") await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "pre_dispatch_safety_block" }); return true; }
       const readyPr =
         pr && refreshedState
           ? await markDraftPullRequestReadyIfConfigured({ issue, github, repoRoot, pr, prUrl: mergeTarget.url, state: refreshedState, requireChecks: this.config.github.requireChecks, markDraftReady: this.config.github.markDraftReady, reason: "approved PR landing preflight passed", recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch), commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key), logger: this.logger })
@@ -765,7 +767,7 @@ export class Orchestrator {
         message,
         payload: { prUrl: mergeTarget.url, readiness }
       });
-      if (readiness?.ready) await this.moveIssue(issue, this.config.tracker.mergeState);
+      if (readiness?.ready) await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.mergeState, safetyReason: "pre_dispatch_safety_block" });
       return true;
     }
 
@@ -777,7 +779,7 @@ export class Orchestrator {
         lastError: undefined,
         errorCategory: undefined
       });
-      await this.moveIssue(issue, this.config.tracker.reviewState);
+      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "pre_dispatch_safety_block" });
       return true;
     }
 
@@ -788,7 +790,7 @@ export class Orchestrator {
         reviewStatus: "human_required",
         stopReason: message
       });
-      await this.moveIssue(issue, this.config.tracker.needsInputState);
+      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.needsInputState, safetyReason: "pre_dispatch_safety_block" });
       return true;
     }
 
@@ -801,7 +803,7 @@ export class Orchestrator {
       await this.recordIssueState(issue, recoverablePartialWorkStatePatch(message));
       await this.runtimeState.clearIssue(issue.id);
       this.retries.delete(issue.id);
-      await this.markLinearRecoveryNeeded(issue, recovery);
+      await this.markLinearRecoveryNeeded(issue, recovery, "pre_dispatch_safety_block");
       await this.logger.write({
         type: "dispatch_skipped",
         issueId: issue.id,
@@ -822,7 +824,7 @@ export class Orchestrator {
           stopReason: message,
           scopeReport: scopeReportStateFromReport(scopeReport)
         });
-        await this.moveIssue(issue, this.config.tracker.needsInputState);
+        await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.needsInputState, safetyReason: "pre_dispatch_safety_block" });
       }
       await this.logger.write({
         type: "dispatch_skipped",
@@ -881,7 +883,7 @@ export class Orchestrator {
         errorCategory: "prompt",
         stopReason: message
       });
-      await this.moveIssue(issue, this.config.tracker.reviewState);
+      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "pre_dispatch_safety_block" });
       return false;
     }
   }
@@ -896,8 +898,8 @@ export class Orchestrator {
       stopReason: message,
       scopeReport: scopeReportStateFromReport(report)
     });
-    await this.commentIssue(issue, planningRecommendedCommentBody(report), "planning_recommended");
-    await this.moveIssue(issue, this.config.tracker.needsInputState);
+    await schedulerSafetyCommentIssue({ controller: this.lifecycleController, issue, body: planningRecommendedCommentBody(report), key: "planning_recommended", safetyReason: "pre_dispatch_safety_block" });
+    await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.needsInputState, safetyReason: "pre_dispatch_safety_block" });
     await this.writePhaseTimingEvent(issue, {
       phase: "needs-input",
       status: "waiting",
@@ -989,7 +991,7 @@ export class Orchestrator {
     this.retries.delete(issue.id);
     this.completedMarkers.set(issue.id, completionMarker(issue));
     if (!isStateIn(issue.state, this.config.tracker.terminalStates)) {
-      await this.moveIssue(issue, this.config.github.doneState);
+      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.github.doneState, safetyReason: "terminal_cleanup_reconciliation" });
     }
     await this.logger.write({
       type: "issue_already_merged_reconciled",
@@ -1132,8 +1134,8 @@ export class Orchestrator {
       workspaceManager,
       writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry),
       recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch),
-      commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key),
-      moveIssue: (targetIssue, stateName) => this.moveIssue(targetIssue, stateName),
+      schedulerSafetyCommentIssue: (targetIssue, body, key, safetyReason) => schedulerSafetyCommentIssue({ controller: this.lifecycleController, issue: targetIssue, body, key, safetyReason }),
+      schedulerSafetyMoveIssue: (targetIssue, stateName, safetyReason) => schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue: targetIssue, stateName, safetyReason }),
       writePhaseTimingEvent: (targetIssue, event) => this.writePhaseTimingEvent(targetIssue, event)
     });
     if (!workspace) return;
@@ -2468,7 +2470,7 @@ export class Orchestrator {
         workspaceKey: workspace.workspaceKey,
         nextRetryAt: undefined
       });
-      await this.markLinearFailed(issue, workspace, previousAttempt, safeError);
+      await this.markLinearFailed(issue, workspace, previousAttempt, safeError, "retry_budget_exhausted");
       return;
     }
     const retry = await this.scheduleRetry(issue, previousAttempt, safeError, undefined, runId, workspace);
@@ -2621,23 +2623,19 @@ export class Orchestrator {
   private async markLinearCapacityWaitScheduled(issue: Issue, workspace: Workspace, retry: RetryEntry, reason: string): Promise<void> {
     await this.commentIssue(issue, capacityWaitScheduledCommentBody(workspace, retry, this.config.agent.maxRetryAttempts, reason), "capacity_wait_scheduled");
   }
-
-  private async markLinearFailed(issue: Issue, workspace: Workspace, attempt: number | null, error: string): Promise<void> {
+  private async markLinearFailed(issue: Issue, workspace: Workspace, attempt: number | null, error: string, safetyReason?: SchedulerSafetyWriteReason): Promise<void> {
     const recovery = await inspectWorkspaceRecovery(resolve(this.options.repoRoot), {
       issueIdentifier: issue.identifier,
       workspacePath: workspace.path
     }).catch(() => null);
-    await this.commentIssue(
-      issue,
-      runFailedCommentBody({
-        workspace,
-        attemptLabel: displayAttempt(attempt),
-        error,
-        recoveryText: recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null
-      }),
-      "run_failed"
-    );
-    await this.moveIssue(issue, this.config.tracker.needsInputState);
+    const body = runFailedCommentBody({ workspace, attemptLabel: displayAttempt(attempt), error, recoveryText: recovery ? formatRecoveryDiagnostics(recovery).join("\n") : null });
+    if (safetyReason) {
+      await schedulerSafetyCommentIssue({ controller: this.lifecycleController, issue, body, key: "run_failed", safetyReason });
+      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.needsInputState, safetyReason });
+    } else {
+      await this.commentIssue(issue, body, "run_failed");
+      await this.moveIssue(issue, this.config.tracker.needsInputState);
+    }
     await this.writePhaseTimingEvent(issue, {
       phase: "needs-input",
       status: "waiting",
@@ -2648,10 +2646,14 @@ export class Orchestrator {
       }
     });
   }
-
-  private async markLinearRecoveryNeeded(issue: Issue, recovery: WorkspaceRecoveryDiagnostics): Promise<void> {
-    await this.commentIssue(issue, recoveryNeededCommentBody(formatRecoveryDiagnostics(recovery).join("\n")), "recovery_needed");
-    await this.moveIssue(issue, this.config.tracker.needsInputState);
+  private async markLinearRecoveryNeeded(issue: Issue, recovery: WorkspaceRecoveryDiagnostics, safetyReason?: SchedulerSafetyWriteReason): Promise<void> {
+    if (safetyReason) {
+      await schedulerSafetyCommentIssue({ controller: this.lifecycleController, issue, body: recoveryNeededCommentBody(formatRecoveryDiagnostics(recovery).join("\n")), key: "recovery_needed", safetyReason });
+      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.needsInputState, safetyReason });
+    } else {
+      await this.commentIssue(issue, recoveryNeededCommentBody(formatRecoveryDiagnostics(recovery).join("\n")), "recovery_needed");
+      await this.moveIssue(issue, this.config.tracker.needsInputState);
+    }
     await this.writePhaseTimingEvent(issue, {
       phase: "needs-input",
       status: "waiting",
@@ -2779,7 +2781,6 @@ export class Orchestrator {
     });
     return result.trackerUpdateResult ?? "unsupported";
   }
-
   private async commentIssue(issue: Issue, body: string, key?: string, kind: "bookkeeping" | "substantive" = "bookkeeping"): Promise<void> {
     await this.lifecycleController.record({
       schemaVersion: 1,

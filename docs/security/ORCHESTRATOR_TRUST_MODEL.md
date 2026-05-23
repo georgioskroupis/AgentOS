@@ -97,9 +97,9 @@ fails the run instead of waiting for interactive input.
 
 | Mode | Orchestrator state moves | Orchestrator comments | Notes |
 | --- | --- | --- | --- |
-| `orchestrator-owned` | on | bookkeeping and substantive handoff | Current safe default and intentional AgentOS deviation from Symphony's usual tracker-write boundary. |
+| `orchestrator-owned` | on | bookkeeping and substantive handoff | Legacy compatibility mode retained until VER-133 removes or quarantines it from public certification paths. |
 | `hybrid` | on | bookkeeping only | Agent artifacts/tools own substantive handoff/update content and PR metadata through configured repo-local lifecycle tools. |
-| `agent-owned` | off | off | Source-aligned lifecycle writes through repo-local tools. Strict validation requires tracker tools, issue/run/attempt idempotency marker format, allowed transitions, duplicate-comment behavior, and fallback behavior. |
+| `agent-owned` | off for normal lifecycle progress; scheduler safety writes only for enumerated no-agent-can-act reasons | off for normal lifecycle progress; scheduler safety comments only for enumerated no-agent-can-act reasons | Default source-aligned lifecycle writes through repo-local tools. Strict validation requires tracker tools, issue/run/attempt idempotency marker format, allowed transitions, duplicate-comment behavior, and fallback behavior. |
 
 The repo-local `scripts/agent-linear-*` tools are still governed by lifecycle
 configuration. They reject `orchestrator-owned`, enforce

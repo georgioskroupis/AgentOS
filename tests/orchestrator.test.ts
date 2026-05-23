@@ -335,6 +335,12 @@ describe("orchestrator", () => {
       lifecycleStatus: "planning_required",
       stopReason: "likely-large scope needs planning or decomposition before implementation dispatch"
     });
+    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: "pre_dispatch_safety_block:comment:applied", payload: expect.objectContaining({ reason: "pre_dispatch_safety_block" }) }),
+        expect.objectContaining({ message: "pre_dispatch_safety_block:move:applied", payload: expect.objectContaining({ reason: "pre_dispatch_safety_block" }) })
+      ])
+    );
   });
 
   it("refuses active redispatch when prior handoff already satisfied the issue", async () => {
@@ -3327,6 +3333,7 @@ describe("orchestrator", () => {
       async move() {}
     };
     let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
 
     await new Orchestrator({
       repoRoot: repo,
@@ -3338,7 +3345,7 @@ describe("orchestrator", () => {
           return { status: "succeeded" };
         }
       },
-      logger: new JsonlLogger(repo),
+      logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
 
@@ -3706,6 +3713,7 @@ describe("orchestrator", () => {
       async comment() {}
     };
     let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
 
     await new Orchestrator({
       repoRoot: repo,
@@ -3717,7 +3725,7 @@ describe("orchestrator", () => {
           return { status: "succeeded" };
         }
       },
-      logger: new JsonlLogger(repo),
+      logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
 
@@ -3772,6 +3780,11 @@ describe("orchestrator", () => {
       .filter((phase) => phase === "human-wait" || phase === "needs-input" || phase === "ci-wait")
       .sort();
     expect(finishedWaitPhases).toEqual(["ci-wait", "human-wait", "needs-input"]);
+    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: "terminal_cleanup_reconciliation:move:applied", payload: expect.objectContaining({ reason: "terminal_cleanup_reconciliation" }) })
+      ])
+    );
   });
 
   it("does not treat merged review-only PRs as terminal already-merged truth", async () => {
@@ -3864,6 +3877,7 @@ describe("orchestrator", () => {
       async move() {}
     };
     let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
 
     await new Orchestrator({
       repoRoot: repo,
@@ -3875,7 +3889,7 @@ describe("orchestrator", () => {
           return { status: "succeeded" };
         }
       },
-      logger: new JsonlLogger(repo),
+      logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
 
@@ -3957,6 +3971,7 @@ describe("orchestrator", () => {
       async comment() {}
     };
     let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
 
     await new Orchestrator({
       repoRoot: repo,
@@ -3968,7 +3983,7 @@ describe("orchestrator", () => {
           return { status: "succeeded" };
         }
       },
-      logger: new JsonlLogger(repo),
+      logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
 
@@ -3981,6 +3996,11 @@ describe("orchestrator", () => {
       lifecycleStatus: "review_escalation"
     });
     expect((await new RunArtifactStore(repo).inspect(run.runId)).summary.status).toBe("stale");
+    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: "stale_run_recovery_required:move:applied", payload: expect.objectContaining({ reason: "stale_run_recovery_required" }) })
+      ])
+    );
   });
 
   it("reports daemon freshness when main advances under a long-running orchestrator", async () => {
@@ -4945,6 +4965,7 @@ describe("orchestrator", () => {
       }
     };
     let runnerCalled = false;
+    const logger = new JsonlLogger(repo);
 
     await new Orchestrator({
       repoRoot: repo,
@@ -4956,7 +4977,7 @@ describe("orchestrator", () => {
           return { status: "succeeded" };
         }
       },
-      logger: new JsonlLogger(repo),
+      logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
 
@@ -4989,6 +5010,60 @@ describe("orchestrator", () => {
     expect(summary.error).toContain("dirty source worktree");
     const events = await new RunArtifactStore(repo).replay(summary.runId);
     expect(events.some((event) => event.type === "workspace_bootstrap_failed" && event.message?.includes("dirty source worktree"))).toBe(true);
+    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: "bootstrap_failed_before_agent_start:comment:applied", payload: expect.objectContaining({ reason: "bootstrap_failed_before_agent_start" }) }),
+        expect.objectContaining({ message: "bootstrap_failed_before_agent_start:move:applied", payload: expect.objectContaining({ reason: "bootstrap_failed_before_agent_start" }) })
+      ])
+    );
+  });
+
+  it("routes retry budget exhaustion through scheduler safety lifecycle events", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-retry-budget-safety-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nagent:\n  max_turns: 1\n  max_retry_attempts: 1\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const moves: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async upsertComment() {}
+    };
+    const logger = new JsonlLogger(repo);
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          return { status: "failed", error: "boom" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await orchestrator.runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: "retry_budget_exhausted:comment:applied", payload: expect.objectContaining({ reason: "retry_budget_exhausted" }) }),
+        expect.objectContaining({ message: "retry_budget_exhausted:move:applied", payload: expect.objectContaining({ reason: "retry_budget_exhausted" }) })
+      ])
+    );
   });
 
   it("records already-satisfied no-op handoffs without requiring a PR", async () => {
