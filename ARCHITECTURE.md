@@ -55,6 +55,10 @@ layers:
 
 ## Boundaries
 
+- Source-faithful core and non-core extension surfaces are classified in
+  `docs/architecture/SOURCE_FAITHFUL_CORE.md`. Use that contract before moving
+  behavior across orchestration, lifecycle, tracker, GitHub, review, registry,
+  dashboard, or model-routing modules.
 - Template files should not depend on this repository after installation.
 - Shared skills should be reusable across project types.
 - CLI behavior should be conservative and avoid overwriting user files.

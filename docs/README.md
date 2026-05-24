@@ -12,6 +12,7 @@ Start with:
 - `docs/product/README.md`
 - `docs/architecture/README.md`
 - `docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md`
+- `docs/architecture/SOURCE_FAITHFUL_CORE.md`
 - `docs/quality/APP_LEGIBILITY.md`
 - `docs/quality/PROOF_OF_WORK.md`
 - `docs/quality/QUALITY_SCORE.md`
