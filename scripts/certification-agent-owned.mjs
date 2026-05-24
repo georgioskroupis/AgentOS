@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 const root = process.cwd();
 const failures = [];
 const certificationPath = "docs/releases/agent-owned-core-certification.json";
+const proofCommandOverridePath = process.env.AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE;
 const requiredSafetyReasons = [
   "bootstrap_failed_before_agent_start",
   "pre_dispatch_safety_block",
@@ -13,6 +14,62 @@ const requiredSafetyReasons = [
   "stale_run_recovery_required",
   "terminal_cleanup_reconciliation",
   "agent_owned_lifecycle_missing_evidence"
+];
+const curatedProofCommands = [
+  {
+    label: "agent-owned local scenario tests",
+    command: "npm",
+    args: [
+      "test",
+      "--",
+      "tests/agent-owned-lifecycle-evidence.test.ts",
+      "tests/lifecycle-controller.test.ts",
+      "tests/workflow.test.ts",
+      "tests/linear-graphql-tool.test.ts",
+      "tests/orchestrator.test.ts",
+      "tests/issue-state.test.ts",
+      "tests/characterization.test.ts",
+      "tests/harness.test.ts",
+      "tests/app-proof-scripts.test.ts",
+      "--reporter",
+      "verbose"
+    ],
+    covers: [
+      "no-PR already satisfied",
+      "one-PR implementation",
+      "multi-PR handoff with roles preserved",
+      "missing evidence path",
+      "restart recovery across lifecycle evidence steps",
+      "scheduler safety reasons",
+      "extension routing through lifecycle boundary checks",
+      "raw GraphQL opt-in",
+      "app-legibility generated harness proof"
+    ]
+  },
+  {
+    label: "agent-owned app-legibility doctor",
+    command: "bin/agent-os",
+    args: ["doctor", ".", "--workflow", "WORKFLOW.md"],
+    covers: ["app-legibility proof enforced by doctor"]
+  },
+  {
+    label: "architecture boundary check",
+    command: "npm",
+    args: ["run", "check:architecture"],
+    covers: ["extension routing through lifecycle boundaries", "core scheduler architecture guardrails"]
+  },
+  {
+    label: "docs check",
+    command: "npm",
+    args: ["run", "check:docs"],
+    covers: ["public docs and generated harness certification consistency"]
+  },
+  {
+    label: "traceability check",
+    command: "npm",
+    args: ["run", "check:traceability"],
+    covers: ["machine-checkable source-faithful traceability"]
+  }
 ];
 
 const traceability = spawnSync(process.execPath, ["scripts/check-traceability.mjs"], { cwd: root, encoding: "utf8" });
@@ -60,10 +117,16 @@ for (const snippet of ["scripts/agent-capture-proof.sh", "App-Proof:", "Proof-Ar
   if (!harness?.includes(snippet)) fail(`doctor contract missing ${snippet}`, "agent-os doctor must enforce app-legibility proof hooks.");
 }
 
-if (failures.length > 0) {
-  for (const failure of failures) console.error(`certification: ${failure}`);
-  process.exit(1);
+exitIfFailures();
+
+const proofCommands = loadProofCommands();
+validateProofCommands(proofCommands);
+exitIfFailures();
+
+for (const proofCommand of proofCommands) {
+  runProofCommand(proofCommand);
 }
+exitIfFailures();
 
 console.log("Agent-owned core certification passed.");
 
@@ -102,8 +165,74 @@ function expectScript(packageJson, name, command) {
   if (packageJson.scripts?.[name] !== command) fail(`package.json script ${name} is missing or changed`, `Set ${name} to ${command}.`);
 }
 
+function loadProofCommands() {
+  if (!proofCommandOverridePath) return curatedProofCommands;
+  const text = read(proofCommandOverridePath);
+  if (text == null) {
+    fail(`proof command override ${proofCommandOverridePath} missing`, "Set AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE to a JSON array of proof commands.");
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      fail(`proof command override ${proofCommandOverridePath} is not an array`, "Use an array of { label, command, args } objects.");
+      return [];
+    }
+    return parsed;
+  } catch (error) {
+    fail(`proof command override ${proofCommandOverridePath} invalid JSON: ${error instanceof Error ? error.message : String(error)}`, "Keep proof command overrides machine-readable.");
+    return [];
+  }
+}
+
+function validateProofCommands(proofCommands) {
+  if (!proofCommands.length) fail("certification proof command list is empty", "Run a curated local/fake proof suite, not pointer-only validation.");
+  for (const [index, proofCommand] of proofCommands.entries()) {
+    const label = typeof proofCommand.label === "string" && proofCommand.label.trim() ? proofCommand.label : `proof command ${index + 1}`;
+    if (typeof proofCommand.command !== "string" || !proofCommand.command.trim()) {
+      fail(`${label} has no command`, "Each proof command needs a non-empty command.");
+    }
+    if (!Array.isArray(proofCommand.args) || proofCommand.args.some((arg) => typeof arg !== "string")) {
+      fail(`${label} has invalid args`, "Each proof command args field must be an array of strings.");
+    }
+    const commandText = [proofCommand.command, ...(Array.isArray(proofCommand.args) ? proofCommand.args : [])].join(" ");
+    if (commandText.includes("certification:agent-owned") || commandText.includes("certification-agent-owned.mjs")) {
+      fail(`${label} would recursively invoke agent-owned certification`, "Keep certification proof commands explicit and non-recursive.");
+    }
+  }
+}
+
+function runProofCommand(proofCommand) {
+  const label = proofCommand.label;
+  const commandLine = [proofCommand.command, ...proofCommand.args].join(" ");
+  console.log(`certification proof: ${label}`);
+  console.log(`  command: ${commandLine}`);
+  if (Array.isArray(proofCommand.covers) && proofCommand.covers.length > 0) {
+    console.log(`  covers: ${proofCommand.covers.join("; ")}`);
+  }
+  const result = spawnSync(proofCommand.command, proofCommand.args, {
+    cwd: root,
+    encoding: "utf8",
+    env: process.env,
+    maxBuffer: 20 * 1024 * 1024
+  });
+  if (result.status !== 0) {
+    fail(
+      `${label} failed`,
+      [
+        `Command: ${commandLine}`,
+        `Exit code: ${result.status ?? "signal " + result.signal}`,
+        `stdout excerpt:\n${excerpt(result.stdout)}`,
+        `stderr excerpt:\n${excerpt(result.stderr)}`
+      ].join("\n")
+    );
+    return;
+  }
+  console.log(`certification proof passed: ${label}`);
+}
+
 function read(path) {
-  const fullPath = join(root, path);
+  const fullPath = isAbsolute(path) ? path : join(root, path);
   if (!existsSync(fullPath)) return null;
   return readFileSync(fullPath, "utf8");
 }
@@ -124,4 +253,17 @@ function readJson(path) {
 
 function fail(message, fix) {
   failures.push(`${message}. Fix: ${fix}`);
+}
+
+function exitIfFailures() {
+  if (failures.length === 0) return;
+  for (const failure of failures) console.error(`certification: ${failure}`);
+  process.exit(1);
+}
+
+function excerpt(text) {
+  if (!text) return "<empty>";
+  const normalized = text.trim();
+  if (normalized.length <= 4000) return normalized;
+  return `${normalized.slice(0, 1200)}\n...\n${normalized.slice(-2800)}`;
 }

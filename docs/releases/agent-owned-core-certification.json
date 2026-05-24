@@ -45,7 +45,7 @@
     },
     {
       "id": "VER-134",
-      "prOrBranch": "branch: codex/ver-134-agent-owned-certification",
+      "prOrBranch": "PR #108",
       "classification": "core",
       "status": "local certification gate"
     }
@@ -189,7 +189,7 @@
       ],
       "proofCommands": [
         "npm test -- tests/lifecycle-controller.test.ts --reporter verbose",
-        "npm run certification:agent-owned"
+        "npm run check:architecture"
       ]
     },
     {

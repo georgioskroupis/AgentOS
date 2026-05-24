@@ -239,11 +239,26 @@ describe("architecture and docs checks", () => {
 
   it("keeps agent-owned certification and traceability gates discoverable", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-certification-proof-"));
+    const proofCommandsPath = join(repo, "proof-commands.json");
+    await writeFile(
+      proofCommandsPath,
+      JSON.stringify([
+        {
+          label: "fixture certification proof",
+          command: process.execPath,
+          args: ["-e", "console.log('fixture certification proof executed')"]
+        }
+      ]),
+      "utf8"
+    );
 
     expect(packageJson.scripts["check:traceability"]).toBe("node scripts/check-traceability.mjs");
     expect(packageJson.scripts["certification:agent-owned"]).toBe("node scripts/certification-agent-owned.mjs");
     await expect(execNode(traceabilityScript, process.cwd())).resolves.toMatchObject({ stdout: expect.stringContaining("Traceability check passed.") });
-    await expect(execNode(agentOwnedCertificationScript, process.cwd())).resolves.toMatchObject({ stdout: expect.stringContaining("Agent-owned core certification passed.") });
+    await expect(execNode(agentOwnedCertificationScript, process.cwd(), { AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath })).resolves.toMatchObject({
+      stdout: expect.stringContaining("fixture certification proof executed")
+    });
   });
 
   it("accepts a minimal traceability fixture", async () => {
@@ -599,13 +614,13 @@ function qualityScoreFixture(): string {
   ].join("\n");
 }
 
-function execNode(script: string, cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
-  return execShell(process.execPath, [script], cwd);
+function execNode(script: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> {
+  return execShell(process.execPath, [script], cwd, env);
 }
 
-function execShell(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
+function execShell(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolvePromise, reject) => {
-    execFile(command, args, { cwd }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd, env: env ? { ...process.env, ...env } : process.env }, (error, stdout, stderr) => {
       if (error) {
         reject(Object.assign(error, { stdout, stderr, code: error.code }));
         return;
