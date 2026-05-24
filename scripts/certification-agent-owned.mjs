@@ -120,6 +120,7 @@ for (const snippet of ["scripts/agent-capture-proof.sh", "App-Proof:", "Proof-Ar
 exitIfFailures();
 
 const proofCommands = loadProofCommands();
+exitIfFailures();
 validateProofCommands(proofCommands);
 exitIfFailures();
 
@@ -167,6 +168,15 @@ function expectScript(packageJson, name, command) {
 
 function loadProofCommands() {
   if (!proofCommandOverridePath) return curatedProofCommands;
+  // Test fixtures need a tiny proof command; real certification must never replace
+  // the curated local/fake suite through environment alone.
+  if (!isTestContext()) {
+    fail(
+      "AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE proof-command overrides are test-only",
+      "Unset AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE; real agent-owned certification must execute the curated proof suite."
+    );
+    return [];
+  }
   const text = read(proofCommandOverridePath);
   if (text == null) {
     fail(`proof command override ${proofCommandOverridePath} missing`, "Set AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE to a JSON array of proof commands.");
@@ -183,6 +193,10 @@ function loadProofCommands() {
     fail(`proof command override ${proofCommandOverridePath} invalid JSON: ${error instanceof Error ? error.message : String(error)}`, "Keep proof command overrides machine-readable.");
     return [];
   }
+}
+
+function isTestContext() {
+  return process.env.NODE_ENV === "test" || process.env.VITEST === "true";
 }
 
 function validateProofCommands(proofCommands) {

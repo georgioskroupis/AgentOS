@@ -256,8 +256,36 @@ describe("architecture and docs checks", () => {
     expect(packageJson.scripts["check:traceability"]).toBe("node scripts/check-traceability.mjs");
     expect(packageJson.scripts["certification:agent-owned"]).toBe("node scripts/certification-agent-owned.mjs");
     await expect(execNode(traceabilityScript, process.cwd())).resolves.toMatchObject({ stdout: expect.stringContaining("Traceability check passed.") });
-    await expect(execNode(agentOwnedCertificationScript, process.cwd(), { AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath })).resolves.toMatchObject({
+    await expect(execNode(agentOwnedCertificationScript, process.cwd(), { AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath, VITEST: "true" })).resolves.toMatchObject({
       stdout: expect.stringContaining("fixture certification proof executed")
+    });
+  });
+
+  it("rejects agent-owned certification proof-command overrides outside test contexts", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-certification-proof-reject-"));
+    const proofCommandsPath = join(repo, "proof-commands.json");
+    await writeFile(
+      proofCommandsPath,
+      JSON.stringify([
+        {
+          label: "bypass certification proof",
+          command: process.execPath,
+          args: ["-e", "console.log('bypass certification proof executed')"]
+        }
+      ]),
+      "utf8"
+    );
+
+    await expect(
+      execNode(agentOwnedCertificationScript, process.cwd(), {
+        AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath,
+        NODE_ENV: "production",
+        VITEST: ""
+      })
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining("proof-command overrides are test-only"),
+      stdout: expect.not.stringContaining("bypass certification proof executed"),
+      code: 1
     });
   });
 
