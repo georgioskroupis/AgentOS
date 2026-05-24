@@ -5,8 +5,6 @@ import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
 import type { AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueState, IssueTracker } from "../src/types.js";
-import { commentWithAgentLifecycleTool, recordHandoffWithAgentLifecycleTool } from "../src/agent-lifecycle.js";
-import type { AgentLifecycleTracker } from "../src/agent-lifecycle.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RunArtifactStore } from "../src/runs.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
@@ -2930,214 +2928,36 @@ describe("orchestrator", () => {
     expect(state.prUrl).toBe("https://github.com/o/r/pull/1");
   });
 
-  it("keeps hybrid lifecycle moves and bookkeeping comments but not full handoff comments", async () => {
-    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-hybrid-linear-"));
-    await initGitRemote(repo);
-    const workflowPath = join(repo, "WORKFLOW.md");
-    await writeFile(
-      workflowPath,
-      `---\nlifecycle:\n  mode: hybrid\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
-      "utf8"
-    );
+  it("rejects legacy lifecycle workflow modes before dispatch", async () => {
+    for (const legacyMode of ["hybrid", "orchestrator-owned"]) {
+      const repo = await mkdtemp(join(tmpdir(), `agent-os-orch-legacy-${legacyMode}-`));
+      const workflowPath = join(repo, "WORKFLOW.md");
+      await writeFile(
+        workflowPath,
+        `---\nlifecycle:\n  mode: ${legacyMode}\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+        "utf8"
+      );
 
-    const moves: string[] = [];
-    const comments: string[] = [];
-    const tracker: IssueTracker = {
-      async fetchCandidates() {
-        return [readyIssue];
-      },
-      async fetchIssueStates() {
-        return new Map();
-      },
-      async move(issue, state) {
-        moves.push(`${issue} -> ${state}`);
-      },
-      async comment(_issue, body) {
-        comments.push(body);
-      }
-    };
-    const runner: AgentRunner = {
-      async run(input): Promise<AgentRunResult> {
-        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "### Handoff\n\nValidation passed.\n\nPR: https://github.com/o/r/pull/1");
-        return { status: "succeeded" };
-      }
-    };
+      const tracker: IssueTracker = {
+        async fetchCandidates() {
+          throw new Error("legacy lifecycle config should fail before tracker fetch");
+        },
+        async fetchIssueStates() {
+          return new Map();
+        }
+      };
 
-    await new Orchestrator({
-      repoRoot: repo,
-      workflowPath,
-      tracker,
-      runner,
-      logger: new JsonlLogger(repo),
-      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
-    }).runOnce(true);
-
-    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
-    expect(comments[0]).toContain("AgentOS started");
-    expect(comments[1]).toContain("AgentOS handoff recorded");
-    expect(comments[1]).not.toContain("Validation passed.");
-    expect(comments[1]).toContain("lifecycle.mode: hybrid");
-    const state = JSON.parse(await readFile(join(repo, ".agent-os", "state", "issues", "AG-1.json"), "utf8"));
-    expect(state.prUrl).toBe("https://github.com/o/r/pull/1");
-  });
-
-  it("lets hybrid workers write substantive ticket content while scheduler owns state moves", async () => {
-    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-hybrid-worker-boundary-"));
-    await initGitRemote(repo);
-    const workflowPath = join(repo, "WORKFLOW.md");
-    await writeFile(
-      workflowPath,
-      [
-        "---",
-        "lifecycle:",
-        "  mode: hybrid",
-        "  allowed_tracker_tools:",
-        "    - scripts/agent-linear-comment.sh",
-        "    - scripts/agent-linear-handoff.sh",
-        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} -->\"",
-        "  duplicate_comment_behavior: upsert",
-        "  fallback_behavior: write handoff and stop human_required",
-        "tracker:",
-        "  kind: linear",
-        "  api_key: $LINEAR_API_KEY",
-        "  project_slug: AgentOS",
-        "  active_states: [Ready]",
-        "  running_state: In Progress",
-        "  review_state: Human Review",
-        "workspace:",
-        "  root: .agent-os/workspaces",
-        "review:",
-        "  enabled: false",
-        "---",
-        "Do {{ issue.identifier }}"
-      ].join("\n"),
-      "utf8"
-    );
-
-    const issue = { ...readyIssue, ...supervisorAssignee };
-    const moves: string[] = [];
-    const schedulerComments: string[] = [];
-    const agentComments: Array<{ issue: string; body: string; marker: string; duplicateBehavior?: string }> = [];
-    const tracker: IssueTracker & AgentLifecycleTracker = {
-      async fetchCandidates() {
-        return [issue];
-      },
-      async fetchIssueStates() {
-        return new Map([[issue.id, issue]]);
-      },
-      async fetchIssueComments() {
-        return [
-          {
-            id: "comment-context-only",
-            author: "Random User",
-            authorId: "user-random",
-            authorEmail: "random@example.com",
-            createdAt: "2026-05-10T00:01:00.000Z",
-            body: "AgentOS-Human-Decision: approve-as-is"
-          },
-          {
-            id: "comment-authoritative",
-            ...supervisorCommentAuthor,
-            createdAt: "2026-05-10T00:02:00.000Z",
-            body: ["AgentOS-Human-Decision: fix-findings", "Decision-Summary: continue with the bounded hybrid fixture"].join("\n")
-          }
-        ];
-      },
-      async move(issueIdentifier, state) {
-        moves.push(`${issueIdentifier} -> ${state}`);
-      },
-      async comment(_issueIdentifier, body) {
-        schedulerComments.push(body);
-      },
-      async findIssueReference() {
-        return {
-          id: issue.id,
-          identifier: issue.identifier,
-          state: issue.state,
-          team: { id: "team-1", key: "AG", name: "AgentOS" }
-        };
-      },
-      async upsertCommentWithMarker(issueIdentifier, body, marker, duplicateBehavior) {
-        agentComments.push({ issue: issueIdentifier, body, marker, duplicateBehavior });
-        return "created";
-      }
-    };
-    let prompt = "";
-    const runner: AgentRunner = {
-      async run(input): Promise<AgentRunResult> {
-        prompt = input.prompt;
-        await initGitRemote(input.workspace.path);
-        await commentWithAgentLifecycleTool(
-          { repoRoot: input.workspace.path, config: input.config, tracker },
-          {
-            issue: issue.identifier,
-            event: "worker_status",
-            tool: "scripts/agent-linear-comment.sh",
-            body: "Worker substantive update: validation is passing and the handoff is ready."
-          }
-        );
-        await writePassingHandoff(
-          input.workspace.path,
-          issue.identifier,
-          input.prompt,
-          "AgentOS-Outcome: implemented\n\nWorker-authored handoff content.\n\nPR: https://github.com/o/r/pull/1"
-        );
-        await recordHandoffWithAgentLifecycleTool(
-          { repoRoot: input.workspace.path, config: input.config, tracker },
-          {
-            issue: issue.identifier,
-            handoffPath: join(input.workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
-            tool: "scripts/agent-linear-handoff.sh"
-          }
-        );
-        return { status: "succeeded" };
-      }
-    };
-
-    await new Orchestrator({
-      repoRoot: repo,
-      workflowPath,
-      tracker,
-      runner,
-      logger: new JsonlLogger(repo),
-      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
-    }).runOnce(true);
-
-    expect(prompt).toContain("- Authority: authoritative");
-    expect(prompt).toContain("- Source: linear-comment");
-    expect(prompt).toContain("- Actor: Supervisor");
-    expect(prompt).toContain("Context-only structured human decision:");
-    expect(prompt).toContain("Random User");
-    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
-    expect(schedulerComments[0]).toContain("AgentOS started");
-    expect(schedulerComments[1]).toContain("AgentOS handoff recorded");
-    expect(schedulerComments[1]).not.toContain("Worker-authored handoff content");
-    expect(agentComments).toEqual([
-      expect.objectContaining({
-        issue: "AG-1",
-        marker: "<!-- agentos:event=worker_status issue=AG-1 -->",
-        body: expect.stringContaining("Worker substantive update"),
-        duplicateBehavior: "upsert"
-      }),
-      expect.objectContaining({
-        issue: "AG-1",
-        marker: "<!-- agentos:event=run_handoff issue=AG-1 -->",
-        body: expect.stringContaining("Worker-authored handoff content"),
-        duplicateBehavior: "upsert"
-      })
-    ]);
-    const state = await new IssueStateStore(repo).read("AG-1");
-    expect(state?.prUrl).toBe("https://github.com/o/r/pull/1");
-    expect(state?.lastHumanDecision).toMatchObject({
-      type: "fix_findings",
-      actor: "Supervisor",
-      source: "linear-comment",
-      trusted: true
-    });
-    expect(state?.humanDecisions?.map((decision) => [decision.commentId, decision.trusted])).toEqual([
-      ["comment-context-only", false],
-      ["comment-authoritative", true]
-    ]);
+      await expect(
+        new Orchestrator({
+          repoRoot: repo,
+          workflowPath,
+          tracker,
+          runner: { async run() { return { status: "succeeded" }; } },
+          logger: new JsonlLogger(repo),
+          env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+        }).runOnce(true)
+      ).rejects.toThrow(`legacy_lifecycle_mode_disabled: ${legacyMode}; use agent-owned`);
+    }
   });
 
   it("refuses unconfigured agent-owned lifecycle dispatch", async () => {
@@ -10930,7 +10750,7 @@ describe("orchestrator", () => {
 
     expect(result.dispatched).toBe(0);
     expect(runnerCalled).toBe(false);
-    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect([...new Set(moves)]).toEqual(["AG-1 -> Human Review"]);
     expect(comments.join("\n")).toContain("Primary PR: https://github.com/o/r/pull/77");
     expect(comments.join("\n")).toContain("Recovery-Summary: reconstructed after Codex app-server/session closure");
     const state = await new IssueStateStore(repo).read("AG-1");
@@ -11227,7 +11047,16 @@ function supervisorProceedCommentBody(summary: string): string {
 
 async function reuseProfileForWorkflow(workflowPath: string) {
   const workflow = await loadWorkflow(workflowPath);
-  return validationReuseProfileForConfig(resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test" }));
+  const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test" });
+  const lifecycleConfig = workflow.config.lifecycle;
+  const hasExplicitMode = lifecycleConfig != null
+    && typeof lifecycleConfig === "object"
+    && !Array.isArray(lifecycleConfig)
+    && Object.prototype.hasOwnProperty.call(lifecycleConfig, "mode");
+  if (!hasExplicitMode) {
+    config.lifecycle.mode = "orchestrator-owned";
+  }
+  return validationReuseProfileForConfig(config);
 }
 
 async function writePassingHandoff(

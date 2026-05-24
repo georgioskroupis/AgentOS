@@ -39,6 +39,7 @@ checkDocsIndexCoverage();
 checkMarkdownLinks();
 checkCommandReferences();
 checkSourceAlignmentCurrency();
+checkNoPublicLegacyLifecycleModes();
 checkQualityScoreRubric();
 checkTestSuiteInventory();
 checkMaintenanceTemplates();
@@ -123,6 +124,22 @@ function checkSourceAlignmentCurrency() {
   ]) {
     if (!text.includes(snippet)) {
       fail(`docs/planning/SOURCE_ALIGNMENT_AUDIT.md missing source-alignment update for ${snippet}`, "Update the source-alignment audit when architecture, recovery, or invariant checks change.");
+    }
+  }
+}
+
+function checkNoPublicLegacyLifecycleModes() {
+  for (const path of publicLifecycleDocs()) {
+    const text = read(path);
+    if (text == null) continue;
+    for (const pattern of [
+      { label: "orchestrator-owned", regex: /\borchestrator-owned\b/ },
+      { label: "legacy-orchestrator-owned", regex: /\blegacy-orchestrator-owned\b/ },
+      { label: "hybrid", regex: /\bhybrid\b/ }
+    ]) {
+      if (pattern.regex.test(text)) {
+        fail(`${path} references disabled public lifecycle mode ${pattern.label}`, "Remove legacy lifecycle modes from public docs/templates; only agent-owned is source-faithful certification scope.");
+      }
     }
   }
 }
@@ -234,6 +251,18 @@ function referencedAgentOsCommands(text) {
 
 function markdownFiles() {
   return ["README.md", "AGENTS.md", "ARCHITECTURE.md", "WORKFLOW.md", ...walk("docs").filter((path) => path.endsWith(".md")), ...walk("templates/base-harness").filter((path) => path.endsWith(".md")), ...walk("skills").filter((path) => path.endsWith(".md"))]
+    .filter((path, index, paths) => paths.indexOf(path) === index)
+    .filter((path) => existsSync(join(root, path)));
+}
+
+function publicLifecycleDocs() {
+  return [
+    "README.md",
+    "ARCHITECTURE.md",
+    "WORKFLOW.md",
+    ...walk("docs").filter((path) => path.endsWith(".md") || path.endsWith(".json")),
+    ...walk("templates/base-harness").filter((path) => path.endsWith(".md"))
+  ]
     .filter((path, index, paths) => paths.indexOf(path) === index)
     .filter((path) => existsSync(join(root, path)));
 }

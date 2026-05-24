@@ -22,8 +22,8 @@ layers:
 - `src/linear-planned-issues.ts` turns approved decomposition plans into
   idempotent Linear child/follow-up issue writes.
 - `src/agent-lifecycle.ts` provides repo-local Linear lifecycle tool policy for
-  hybrid and experimental agent-owned modes, plus explicit by-identifier
-  supervisor helpers for human Linear state moves and decisions.
+  the source-faithful agent-owned mode, plus explicit by-identifier supervisor
+  helpers for human Linear state moves and decisions.
 - `src/github.ts` shells through `gh` for PR status and squash merge.
 - `src/issue-state.ts` stores durable per-issue PR metadata.
 - `src/context-pack.ts` builds targeted prompt context packs for
@@ -58,11 +58,11 @@ layers:
 - Template files should not depend on this repository after installation.
 - Shared skills should be reusable across project types.
 - CLI behavior should be conservative and avoid overwriting user files.
-- Lifecycle ownership is explicit in `WORKFLOW.md`. The current safe default is
-  `orchestrator-owned`, where the orchestrator reads tracker state, starts
-  runs, moves Linear issues, and posts lifecycle comments. `hybrid` and
-  experimental `agent-owned` are source-alignment modes with stricter validation
-  requirements. Codex writes repo changes and handoff files.
+- Lifecycle ownership is explicit in `WORKFLOW.md`. The public source-faithful
+  mode is `agent-owned`: the orchestrator reads tracker state, starts and
+  observes runs, and reserves tracker writes for enumerated scheduler-safety
+  cases while Codex uses repo-local tools for normal Linear lifecycle progress.
+  Legacy scheduler-owned lifecycle modes are not public certification paths.
 - Merge shepherding is a separate orchestrator path: `Merging` issues do not
   start Codex; they use stored PR metadata and GitHub checks to merge or return
   to `Human Review`.

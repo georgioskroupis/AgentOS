@@ -182,9 +182,9 @@ axes:
 - `automation.profile` or `automation.repair_policy` for retry, repair, and
   feedback-loop behavior.
 
-## 5. Where AgentOS Is More Orchestrator-Owned Than Symphony
+## 5. Where AgentOS Previously Drifted Toward Scheduler-Owned Lifecycle
 
-Current orchestrator-owned behavior includes:
+Earlier scheduler-owned behavior included:
 
 - Moving Linear issues to `In Progress`, `Human Review`, merge failure states,
   and `Done`.
@@ -220,27 +220,20 @@ configuration:
 - Whether merge shepherding is disabled, manual, or orchestrator-driven.
 - Which mechanical failures trigger repair loops versus human handoff.
 
-PR C makes lifecycle ownership explicit. `orchestrator-owned` remains the
-current safe mode. `agent-owned` must fail strict validation unless tracker
-tools, issue/run/attempt idempotency markers, allowed transitions,
-duplicate-comment behavior, and fallback behavior are configured. `hybrid`
-splits safety bookkeeping from substantive workflow comments.
-
-VER-71 adds a dogfood fixture for the intended hybrid boundary: a worker can
-post substantive ticket updates and handoff content through repo-local Linear
-lifecycle tools, while scheduler-owned moves to running and review states remain
-authoritative. Structured decisions in that path retain actor, source, and
-authority metadata; unapproved authors are preserved as context-only evidence
-and do not drive lifecycle continuation.
+Lifecycle ownership is explicit. `agent-owned` is now the public
+source-faithful mode and must fail strict validation unless tracker tools,
+issue/run/attempt idempotency markers, allowed transitions, duplicate-comment
+behavior, and fallback behavior are configured. VER-133 removes legacy
+scheduler-owned lifecycle modes from public workflow configuration and
+certification paths.
 
 VER-95 adds the first client-side tracker tool for the `agent-owned` boundary.
 After VER-130, the Codex App Server runner advertises `linear_graphql` only when
 the workflow opts into both `agent-owned` and `lifecycle.client_tracker_tools`,
 the tracker adapter is Linear, and Linear credentials are configured. That keeps
 raw GraphQL an optional extension rather than default certification proof:
-`orchestrator-owned`, `hybrid`, and non-opted-in agent-owned workflows continue
-to hide direct tracker tools, and unsupported tool calls receive a structured
-failure.
+non-opted-in agent-owned workflows continue to hide direct tracker tools, and
+unsupported tool calls receive a structured failure.
 
 VER-96 and VER-106 add a local observability surface for the scheduler/runner
 boundary. The optional loopback HTTP API exposes durable runtime, issue, run,
@@ -371,8 +364,9 @@ Already configurable:
 - Workspace root and lifecycle hooks.
 - Agent concurrency, max turns, retry attempts, retry backoff, and per-state
   concurrency.
-- Lifecycle ownership: `orchestrator-owned`, `hybrid`, and strict-gated
-  `agent-owned`.
+- Lifecycle ownership: strict-gated `agent-owned` is the public
+  source-faithful mode; legacy scheduler-owned modes are disabled from public
+  workflow configuration.
 - Review enabled flag, reviewers, max iterations, blocking severities, and
   convergence requirements.
 - GitHub merge mode, merge method, check requirement, branch deletion, done
@@ -395,8 +389,8 @@ Refactor-needed deviations:
 - Lifecycle ownership is explicit, and `agent-owned` is now the default
   source-faithful certification posture after VER-130/VER-131 productionized
   repo-local tracker tools and post-run evidence verification.
-- Legacy `orchestrator-owned` and `hybrid` behavior still need VER-133 cleanup
-  before they can be fully deleted from public docs and certification paths.
+- VER-133 removes legacy scheduler-owned lifecycle modes from public docs,
+  templates, validation, and certification paths.
 - High-throughput behavior is modeled as automation policy and now includes
   bounded CI repair/retry, draft PR readiness, branch freshness, merge
   shepherding, and post-merge cleanup for trusted dogfood workflows. Protected
@@ -444,8 +438,8 @@ Top three intentional deviations:
 
 Top three refactor-needed deviations:
 
-1. Continue dogfooding explicit Linear lifecycle ownership, especially
-   `hybrid`, without losing idempotency or safety.
+1. Continue dogfooding explicit agent-owned Linear lifecycle ownership without
+   losing idempotency or scheduler-safety recovery.
 2. Mature agent-owned tracker writes and Human Review drift guards without
    weakening idempotent orchestrator safety.
 3. Reduce validation/runtime cost and add optional dashboard/API surfaces

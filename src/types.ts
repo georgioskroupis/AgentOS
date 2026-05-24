@@ -1,10 +1,10 @@
 export const harnessProfiles = ["base", "typescript", "python", "web", "api"] as const;
-
 export type HarnessProfile = (typeof harnessProfiles)[number];
 export type TrustMode = "review-only" | "ci-locked" | "local-trusted" | "danger";
 export type GitHubMergeMode = "manual" | "shepherd" | "auto";
 export type CodexEventPolicy = "deny" | "allow";
-export type LifecycleMode = "orchestrator-owned" | "hybrid" | "agent-owned";
+export type LegacyLifecycleMode = "orchestrator-owned" | "hybrid";
+export type LifecycleMode = "agent-owned" | LegacyLifecycleMode;
 export type LifecycleDuplicateCommentBehavior = "upsert" | "skip" | "error";
 export type AutomationProfile = "conservative" | "high-throughput";
 export type AutomationRepairPolicy = "conservative" | "mechanical-first";

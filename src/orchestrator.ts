@@ -10,7 +10,7 @@ import { verifyAndRecordAgentOwnedLifecycleEvidence } from "./orchestrator-agent
 import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls, reviewTargetPullRequests } from "./issue-state.js";
 import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./landing-policy.js";
 import { landingFreshnessPatch } from "./landing-preflight.js";
-import { hybridHandoffComment, usesFullOrchestratorHandoff } from "./lifecycle.js";
+import { applyTestOnlyLegacyLifecycleFallback, schedulerBookkeepingHandoffComment, usesFullOrchestratorHandoff } from "./lifecycle.js";
 import { TrackerLifecycleController, type LifecycleTrackerUpdateResult } from "./lifecycle-controller.js";
 import type { SchedulerSafetyWriteReason } from "./lifecycle-events.js";
 import { JsonlLogger } from "./logging.js";
@@ -107,6 +107,7 @@ export class Orchestrator {
     this.repoEnv = resolvedEnv.repoEnv;
     this.workflow = await loadWorkflow(this.options.workflowPath);
     this.config = resolveServiceConfig(this.workflow, resolvedEnv.env);
+    applyTestOnlyLegacyLifecycleFallback(this.workflow.config, this.config);
     const credentialPreflight = await daemonPreflightWithLandingCredentialCheck(this.config, daemonPreflight(this.config, this.repoEnv), resolve(this.options.repoRoot));
     if (this.startupPreflight?.daemonPreflight.status === "singleton_conflict") {
       this.preflight = this.startupPreflight.daemonPreflight;
@@ -128,7 +129,6 @@ export class Orchestrator {
     this.lifecycleController = new TrackerLifecycleController({ config: this.config, tracker: this.tracker, logger: this.logger });
     this.runner = this.options.runner ?? new CodexAppServerRunner();
   }
-
   async runOnce(waitForWorkers = true, options: OrchestratorRunOptions = {}): Promise<OrchestratorRunSummary> {
     await this.reload();
     let dispatched = 0;
@@ -2572,10 +2572,10 @@ export class Orchestrator {
             errorCategory: undefined
           })
     });
-    const reviewLine = state?.reviewStatus
-      ? `\n\nAutomated review status: \`${state.reviewStatus}\`${state.reviewIteration ? ` after iteration ${state.reviewIteration}` : ""}.`
-      : "";
     if (usesFullOrchestratorHandoff(this.config)) {
+      const reviewLine = state?.reviewStatus
+        ? `\n\nAutomated review status: \`${state.reviewStatus}\`${state.reviewIteration ? ` after iteration ${state.reviewIteration}` : ""}.`
+        : "";
       await this.commentIssue(
         issue,
         handoff
@@ -2595,7 +2595,7 @@ export class Orchestrator {
     } else {
       await this.commentIssue(
         issue,
-        hybridHandoffComment({
+        schedulerBookkeepingHandoffComment({
           issueIdentifier: issue.identifier,
           workspacePath: workspace.path,
           reviewStatus: state?.reviewStatus,

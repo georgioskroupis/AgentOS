@@ -667,7 +667,18 @@ describe("issue inspection", () => {
         "  profile: high-throughput",
         "  repair_policy: mechanical-first",
         "lifecycle:",
-        "  mode: orchestrator-owned",
+        "  mode: agent-owned",
+        "  allowed_tracker_tools:",
+        "    - scripts/agent-linear-comment.sh",
+        "    - scripts/agent-linear-move.sh",
+        "    - scripts/agent-linear-pr.sh",
+        "    - scripts/agent-linear-handoff.sh",
+        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+        "  allowed_state_transitions:",
+        "    - Todo -> In Progress",
+        "    - In Progress -> Human Review",
+        "  duplicate_comment_behavior: upsert",
+        "  fallback_behavior: write handoff and stop human_required",
         "tracker:",
         "  api_key: lin_test",
         "  project_slug: AgentOS",
@@ -831,7 +842,7 @@ describe("issue inspection", () => {
     const output = await getRegistryStatus(registryPath);
 
     expect(output).toContain("alpha: transient_tracker_error");
-    expect(output).toContain("Config: trust=danger; lifecycle=orchestrator-owned; automation=high-throughput/mechanical-first");
+    expect(output).toContain("Config: trust=danger; lifecycle=agent-owned; automation=high-throughput/mechanical-first");
     expect(output).toContain("Error: tracker_network - fetch failed");
     expect(output).toContain("Daemon: stale - main advanced from old to new; run git pull && bin/agent-os daemon restart");
     expect(output).toContain("Daemon preflight: missing_credentials - tracker.api_key is required after environment resolution");

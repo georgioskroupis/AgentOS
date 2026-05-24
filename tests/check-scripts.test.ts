@@ -197,6 +197,18 @@ describe("architecture and docs checks", () => {
     });
   });
 
+  it("reports disabled lifecycle modes in public docs and templates", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-legacy-lifecycle-fail-"));
+    await writeDocsFixture(repo);
+    await mkdir(join(repo, "templates", "base-harness"), { recursive: true });
+    await writeFile(join(repo, "templates", "base-harness", "WORKFLOW.md"), "Use hybrid lifecycle mode.\n", "utf8");
+
+    await expect(execNode(docsScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("disabled public lifecycle mode"),
+      code: 1
+    });
+  });
+
   it("keeps agent-check scripts noisy enough for long validation phases", async () => {
     const rootScript = await readFile("scripts/agent-check.sh", "utf8");
     const templateScript = await readFile("templates/base-harness/scripts/agent-check.sh", "utf8");

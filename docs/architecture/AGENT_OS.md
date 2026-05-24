@@ -35,18 +35,17 @@ upserts are optional capabilities used only when the workflow path needs them.
 It keeps orchestration logic narrow:
 
 - Linear is the scheduler control plane.
-- Lifecycle ownership is explicit. `orchestrator-owned` is the current safe
-  mode, where the orchestrator is a reader/runner with retry, reconciliation,
-  status moves, and Linear lifecycle comments. `hybrid` keeps orchestrator-owned
-  safety/bookkeeping moves and markers while leaving substantive update content
-  to agent artifacts/tools. Repo-local `scripts/agent-linear-*` wrappers provide
-  marker-backed comments, allowed state moves, PR metadata persistence, and
-  handoff posting for that boundary. Human supervisors have a separate
-  by-identifier `agent-os supervisor` path for state moves and structured
-  decisions, so operators do not need direct GraphQL or raw Linear UUIDs.
-  `agent-owned` is strict-validation gated and now requires repo-local tools,
-  issue/run/attempt marker correlation, duplicate-comment policy, transition
-  policy, and fallback behavior before certification can use it.
+- Lifecycle ownership is explicit. `agent-owned` is the public source-faithful
+  mode: the orchestrator is a reader/runner/reconciler, normal Linear lifecycle
+  writes come from repo-local `scripts/agent-linear-*` wrappers, and scheduler
+  tracker writes are limited to enumerated no-agent-can-act safety reasons.
+  Those wrappers provide marker-backed comments, allowed state moves, PR
+  metadata persistence, handoff posting, issue/run/attempt marker correlation,
+  duplicate-comment policy, transition policy, and fallback behavior. Human
+  supervisors have a separate by-identifier `agent-os supervisor` path for state
+  moves and structured decisions, so operators do not need direct GraphQL or raw
+  Linear UUIDs. Legacy scheduler-owned lifecycle modes are removed from public
+  workflow configuration and excluded from source-faithful certification.
 - The agent, guided by `WORKFLOW.md`, changes the repo, validates the work,
   opens or updates pull requests only when the issue produced repo changes and
   the workflow expects a PR, and writes a handoff file for the orchestrator to

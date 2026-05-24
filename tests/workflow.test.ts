@@ -42,7 +42,7 @@ describe("workflow", () => {
       repairPolicy: "conservative"
     });
     expect(config.lifecycle).toMatchObject({
-      mode: "orchestrator-owned",
+      mode: "agent-owned",
       allowedTrackerTools: [],
       clientTrackerTools: [],
       idempotencyMarkerFormat: null,
@@ -92,6 +92,17 @@ describe("workflow", () => {
       })
     });
     expect(config.workspace.root).toContain(".agent-os/workspaces");
+
+    const strictValidation = validateWorkflowDefinition(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }, true);
+    expect(strictValidation.errors).toEqual(
+      expect.arrayContaining([
+        "lifecycle.mode=agent-owned requires lifecycle.allowed_tracker_tools in strict mode",
+        "lifecycle.mode=agent-owned requires lifecycle.idempotency_marker_format in strict mode",
+        "lifecycle.mode=agent-owned requires lifecycle.allowed_state_transitions in strict mode",
+        "lifecycle.mode=agent-owned requires lifecycle.duplicate_comment_behavior in strict mode",
+        "lifecycle.mode=agent-owned requires lifecycle.fallback_behavior in strict mode"
+      ])
+    );
   });
 
   it("resolves relative workspace roots from the selected workflow directory", async () => {
@@ -146,6 +157,19 @@ describe("workflow", () => {
         "  kind: linear",
         "  api_key: $LINEAR_API_KEY",
         "  project_slug: AgentOS",
+        "lifecycle:",
+        "  mode: agent-owned",
+        "  allowed_tracker_tools:",
+        "    - scripts/agent-linear-comment.sh",
+        "    - scripts/agent-linear-move.sh",
+        "    - scripts/agent-linear-pr.sh",
+        "    - scripts/agent-linear-handoff.sh",
+        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+        "  allowed_state_transitions:",
+        "    - Todo -> In Progress",
+        "    - In Progress -> Human Review",
+        "  duplicate_comment_behavior: upsert",
+        "  fallback_behavior: write handoff and stop human_required",
         "codex:",
         "  command: npx -y @openai/codex@0.125.0 app-server",
         "github:",
@@ -277,7 +301,18 @@ describe("workflow", () => {
         "  profile: high-throughput",
         "  repair_policy: mechanical-first",
         "lifecycle:",
-        "  mode: orchestrator-owned",
+        "  mode: agent-owned",
+        "  allowed_tracker_tools:",
+        "    - scripts/agent-linear-comment.sh",
+        "    - scripts/agent-linear-move.sh",
+        "    - scripts/agent-linear-pr.sh",
+        "    - scripts/agent-linear-handoff.sh",
+        "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+        "  allowed_state_transitions:",
+        "    - Todo -> In Progress",
+        "    - In Progress -> Human Review",
+        "  duplicate_comment_behavior: upsert",
+        "  fallback_behavior: write handoff and stop human_required",
         "tracker:",
         "  api_key: $LINEAR_API_KEY",
         "  project_slug: AgentOS",
@@ -299,7 +334,7 @@ describe("workflow", () => {
     const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
     expect(config.automation).toEqual({ profile: "high-throughput", repairPolicy: "mechanical-first" });
     expect(config.trustMode).toBe("ci-locked");
-    expect(config.lifecycle.mode).toBe("orchestrator-owned");
+    expect(config.lifecycle.mode).toBe("agent-owned");
     expect(config.codex.approvalEventPolicy).toBe("deny");
     expect(config.codex.userInputPolicy).toBe("deny");
     expect(config.github.markDraftReady).toBe(true);
@@ -666,12 +701,36 @@ describe("workflow", () => {
       expect(workflow.prompt_template).toContain("scripts/agent-linear-pr.sh");
       expect(workflow.prompt_template).toContain("scripts/agent-linear-handoff.sh");
       expect(workflow.prompt_template).toContain("Do not use raw `linear_graphql` unless `lifecycle.client_tracker_tools`");
+      expect(workflow.prompt_template).not.toContain("mode: hybrid");
+      expect(workflow.prompt_template).not.toContain("mode: orchestrator-owned");
+      expect(workflow.prompt_template).not.toContain("`hybrid`");
+      expect(workflow.prompt_template).not.toContain("`orchestrator-owned`");
     }
   });
 
   it("rejects invalid lifecycle configs", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-workflow-lifecycle-invalid-"));
     const workflowPath = join(repo, "WORKFLOW.md");
+    for (const legacyMode of ["hybrid", "orchestrator-owned"]) {
+      await writeFile(
+        workflowPath,
+        [
+          "---",
+          "lifecycle:",
+          `  mode: ${legacyMode}`,
+          "tracker:",
+          "  api_key: $LINEAR_API_KEY",
+          "  project_slug: AgentOS",
+          "---",
+          "Do work"
+        ].join("\n"),
+        "utf8"
+      );
+      expect(validateWorkflowDefinition(await loadWorkflow(workflowPath), { LINEAR_API_KEY: "lin_test" }).errors).toContain(
+        `legacy_lifecycle_mode_disabled: ${legacyMode}; use agent-owned`
+      );
+    }
+
     await writeFile(
       workflowPath,
       [

@@ -15,13 +15,12 @@ a PR when needed, writes `.agent-os/handoff-<issue>.md`, and uses repo-local
 `scripts/agent-linear-*` tools for normal Linear moves, comments, PR metadata,
 handoff posting, and `Human Review`.
 
-`hybrid` keeps orchestrator-owned safety/bookkeeping moves and lifecycle markers
-but expects substantive handoff/update content to be owned by agent artifacts or
-tracker tools. `agent-owned` is strict-validation gated; strict workflow
-validation rejects it unless tracker tools, issue/run/attempt idempotency
-markers, allowed transitions, duplicate-comment behavior, and fallback behavior
-are declared. Scheduler-owned tracker writes are reserved for enumerated
-no-agent-can-act safety reasons.
+`agent-owned` is strict-validation gated; strict workflow validation rejects it
+unless tracker tools, issue/run/attempt idempotency markers, allowed
+transitions, duplicate-comment behavior, and fallback behavior are declared.
+Scheduler-owned tracker writes are reserved for enumerated no-agent-can-act
+safety reasons. Legacy scheduler-owned lifecycle modes are disabled from public
+workflow configuration and excluded from source-faithful certification.
 
 For PR-producing work, Codex should create or find the pull request through
 the repo-local non-interactive harness script:

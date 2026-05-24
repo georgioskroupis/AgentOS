@@ -99,7 +99,7 @@ the cross-boundary assertion.
 | --- | --- | --- |
 | `tests/agent-owned-lifecycle-evidence.test.ts` | Integration | Agent-owned lifecycle evidence verification, durable artifacts/state, missing-evidence human-required handling, and no scheduler duplication |
 | `tests/agent-lifecycle-cli.test.ts` | Boundary | Repo-local lifecycle wrappers, trusted supervisor decisions, path safety, and tracker-tool gating |
-| `tests/agent-lifecycle.test.ts` | Boundary | Agent-owned and hybrid Linear lifecycle comments, markers, PR metadata, and handoff writes |
+| `tests/agent-lifecycle.test.ts` | Boundary | Agent-owned Linear lifecycle comments, markers, PR metadata, handoff writes, and supervisor bypass safety |
 | `tests/app-proof-scripts.test.ts` | Boundary | Application proof scripts record configured proof without leaking secret-bearing command strings |
 | `tests/capacity-wait.test.ts` | Unit | Codex usage-limit/capacity wait parsing stays distinct from ordinary failures |
 | `tests/characterization.test.ts` | Certification | Legacy and roadmap characterization behavior remains visible while later tests harden it |

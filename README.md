@@ -214,8 +214,7 @@ bin/agent-os supervisor decide VER-73 fix-findings \
 These commands validate the issue identifier, configured workflow state names,
 the six-field `AgentOS-Human-Decision` payload, and validation evidence reuse
 profile metadata. They are operator tools; agent turns must keep using the
-handoff contract and must not take over Linear lifecycle writes in
-`orchestrator-owned` mode.
+handoff contract and repo-local lifecycle tools instead of supervisor bypasses.
 
 ### `daemon start`, `daemon stop`, `daemon restart`, and `daemon status`
 
@@ -290,8 +289,8 @@ scripts/agent-linear-plan-issues.sh --file .agent-os/planned-issues.yml --parent
 
 ### `linear lifecycle`
 
-Provides non-interactive, repo-local Linear lifecycle tools for `hybrid` and
-`agent-owned` mode. The installed script wrappers call these
+Provides non-interactive, repo-local Linear lifecycle tools for `agent-owned`
+mode. The installed script wrappers call these
 commands with stable tool names so `lifecycle.allowed_tracker_tools` can gate
 agent writes:
 

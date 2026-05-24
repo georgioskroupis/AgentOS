@@ -246,7 +246,7 @@ function mergeWorkflowConfig(config: Record<string, unknown>, profile: ProjectPr
     },
     lifecycle: {
       ...lifecycle,
-      mode: typeof lifecycle.mode === "string" ? lifecycle.mode : "orchestrator-owned"
+      mode: typeof lifecycle.mode === "string" ? lifecycle.mode : "agent-owned"
     },
     tracker: {
       ...tracker,

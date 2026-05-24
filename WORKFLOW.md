@@ -189,15 +189,13 @@ runs, while the coding agent uses repo-local lifecycle tools for normal Linear
 progress: run-start/running, substantive progress comments, PR metadata,
 handoff posting, and the final `Human Review` transition.
 
-Lifecycle ownership is separate from `trust_mode` and automation repair policy:
-
-- `hybrid`: the orchestrator keeps safety/bookkeeping state moves and lifecycle
-  markers, while substantive handoff/update content is expected to be owned by
-  agent-authored artifacts or tracker tools.
-- `agent-owned`: source-aligned lifecycle writes through repo-local tools.
-  Strict workflow validation requires configured tracker tools, an idempotency
-  marker format with issue/run/attempt correlation, allowed transitions,
-  duplicate-comment behavior, and tracker-write fallback behavior.
+Lifecycle ownership is separate from `trust_mode` and automation repair policy.
+The only public, source-faithful lifecycle mode is `agent-owned`: source-aligned
+lifecycle writes through repo-local tools. Strict workflow validation requires
+configured tracker tools, an idempotency marker format with issue/run/attempt
+correlation, allowed transitions, duplicate-comment behavior, and tracker-write
+fallback behavior. Legacy scheduler-owned lifecycle modes are disabled from
+public workflow configuration and excluded from source-faithful certification.
 
 Repo-local Linear lifecycle tools are available for source-aligned modes:
 
@@ -212,7 +210,7 @@ scripts/agent-linear-plan-issues.sh --file .agent-os/planned-issues.yml --parent
 Those wrappers are non-interactive, call a trusted AgentOS CLI from
 `AGENT_OS_SOURCE_REPO` or `PATH`, and append the repo root, `WORKFLOW.md`, and
 stable tool path after user arguments so agents cannot swap the lifecycle policy
-file or tool identity. In `hybrid` and `agent-owned`, configure
+file or tool identity. In `agent-owned`, configure
 `lifecycle.allowed_tracker_tools`, `lifecycle.idempotency_marker_format`,
 `lifecycle.allowed_state_transitions`, `lifecycle.duplicate_comment_behavior`,
 and `lifecycle.fallback_behavior` to let agents own substantive comments, PR
@@ -238,11 +236,11 @@ named `linear_graphql` by declaring it in `lifecycle.client_tracker_tools`. The
 tool is advertised only for `tracker.kind: linear` with configured Linear
 credentials and the explicit client-tool opt-in, accepts a single GraphQL
 operation plus optional object variables, and returns structured success/failure
-results. `orchestrator-owned`, `hybrid`, and agent-owned workflows without that
-opt-in do not receive the direct GraphQL tool.
+results. Agent-owned workflows without that opt-in do not receive the direct
+GraphQL tool.
 
-Human supervisors may use the by-identifier operator helpers in
-`orchestrator-owned` mode instead of direct GraphQL or Linear UUID writes:
+Human supervisors may use the by-identifier operator helpers instead of direct
+GraphQL or Linear UUID writes:
 
 ```bash
 bin/agent-os supervisor move <identifier> <state> --repo .
@@ -260,7 +258,7 @@ target state, the exact structured decision fields below, and validation
 evidence with matching issue identifier, PR head SHA, and reuse-profile
 metadata. Repo-local `scripts/agent-linear-*` wrappers may also be invoked with
 `--supervisor` by a human operator. Agent calls without the explicit supervisor
-flag remain lifecycle-policy denied in `orchestrator-owned` mode.
+flag remain governed by the agent-owned lifecycle policy.
 
 Approved planning/decomposition output can use `scripts/agent-linear-plan-issues.sh`
 to create or update small Linear child and follow-up issues from a repo-local
