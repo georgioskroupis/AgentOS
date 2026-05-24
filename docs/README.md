@@ -22,6 +22,7 @@ Start with:
 - `docs/planning/SOURCE_ALIGNMENT_AUDIT.md`
 - `docs/releases/MVP.md`
 - `docs/releases/CERTIFICATION_TRACEABILITY.md`
+- `docs/releases/agent-owned-core-certification.json`
 - `docs/releases/high-throughput-landing-certification.json`
 - `docs/runbooks/README.md`
 - `docs/runbooks/LINEAR_SETUP.md`

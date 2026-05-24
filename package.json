@@ -13,11 +13,13 @@
     "check:dashboard": "node scripts/check-dashboard.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:security": "node scripts/check-security.mjs",
+    "check:traceability": "node scripts/check-traceability.mjs",
     "coverage": "vitest run --coverage --testTimeout=30000",
     "format:check": "node scripts/check-format.mjs",
     "lint": "node scripts/check-lint.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "certification:agent-owned": "node scripts/certification-agent-owned.mjs",
     "certification:e2e": "bash scripts/certification-e2e.sh",
     "agent-check": "bash scripts/agent-check.sh"
   },

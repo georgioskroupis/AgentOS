@@ -110,7 +110,8 @@ describe("MVP certification", () => {
   it("keeps source-alignment scoring tied to the MVP certification", async () => {
     const audit = await readFile("docs/planning/SOURCE_ALIGNMENT_AUDIT.md", "utf8");
     expect(audit).toContain("docs/releases/MVP.md");
-    expect(audit).toContain("Harness Engineering alignment: A-");
-    expect(audit).toContain("Symphony alignment: A-");
+    expect(audit).toContain("docs/releases/agent-owned-core-certification.json");
+    expect(audit).toContain("Harness Engineering alignment: A+");
+    expect(audit).toContain("Symphony alignment: A+");
   });
 });

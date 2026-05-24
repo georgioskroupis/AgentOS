@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 
 const architectureScript = resolve("scripts/check-architecture.mjs");
 const docsScript = resolve("scripts/check-docs.mjs");
+const traceabilityScript = resolve("scripts/check-traceability.mjs");
+const agentOwnedCertificationScript = resolve("scripts/certification-agent-owned.mjs");
 
 describe("architecture and docs checks", () => {
   it("accepts a minimal architecture fixture", async () => {
@@ -234,6 +236,91 @@ describe("architecture and docs checks", () => {
       stdout: expect.stringContaining("AgentOS live E2E certification skipped.")
     });
   });
+
+  it("keeps agent-owned certification and traceability gates discoverable", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-certification-proof-"));
+    const proofCommandsPath = join(repo, "proof-commands.json");
+    await writeFile(
+      proofCommandsPath,
+      JSON.stringify([
+        {
+          label: "fixture certification proof",
+          command: process.execPath,
+          args: ["-e", "console.log('fixture certification proof executed')"]
+        }
+      ]),
+      "utf8"
+    );
+
+    expect(packageJson.scripts["check:traceability"]).toBe("node scripts/check-traceability.mjs");
+    expect(packageJson.scripts["certification:agent-owned"]).toBe("node scripts/certification-agent-owned.mjs");
+    await expect(execNode(traceabilityScript, process.cwd())).resolves.toMatchObject({ stdout: expect.stringContaining("Traceability check passed.") });
+    await expect(execNode(agentOwnedCertificationScript, process.cwd(), { AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath, VITEST: "true" })).resolves.toMatchObject({
+      stdout: expect.stringContaining("fixture certification proof executed")
+    });
+  });
+
+  it("rejects agent-owned certification proof-command overrides outside test contexts", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-certification-proof-reject-"));
+    const proofCommandsPath = join(repo, "proof-commands.json");
+    await writeFile(
+      proofCommandsPath,
+      JSON.stringify([
+        {
+          label: "bypass certification proof",
+          command: process.execPath,
+          args: ["-e", "console.log('bypass certification proof executed')"]
+        }
+      ]),
+      "utf8"
+    );
+
+    await expect(
+      execNode(agentOwnedCertificationScript, process.cwd(), {
+        AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath,
+        NODE_ENV: "production",
+        VITEST: ""
+      })
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining("proof-command overrides are test-only"),
+      stdout: expect.not.stringContaining("bypass certification proof executed"),
+      code: 1
+    });
+  });
+
+  it("accepts a minimal traceability fixture", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-traceability-pass-"));
+    await writeTraceabilityFixture(repo);
+
+    await expect(execNode(traceabilityScript, repo)).resolves.toMatchObject({ stdout: expect.stringContaining("Traceability check passed.") });
+  });
+
+  it("reports malformed traceability rows with remediation guidance", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-traceability-fail-"));
+    await writeTraceabilityFixture(repo);
+    await writeFile(join(repo, "docs", "releases", "CERTIFICATION_TRACEABILITY.md"), traceabilityMarkdown({ classification: "mystery", proof: "TBD" }), "utf8");
+
+    await expect(execNode(traceabilityScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("unknown classification"),
+      code: 1
+    });
+    await expect(execNode(traceabilityScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("unfinished proof command"),
+      code: 1
+    });
+  });
+
+  it("reports missing traceability evidence paths", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-traceability-missing-path-"));
+    await writeTraceabilityFixture(repo);
+    await rm(join(repo, "src", "core.ts"));
+
+    await expect(execNode(traceabilityScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("references missing code path"),
+      code: 1
+    });
+  });
 });
 
 async function writeArchitectureFixture(repo: string): Promise<void> {
@@ -372,6 +459,7 @@ async function writeDocsFixture(repo: string): Promise<void> {
     "docs/runbooks/DOGFOODING.md",
     "docs/planning/SOURCE_ALIGNMENT_AUDIT.md",
     "docs/releases/CERTIFICATION_TRACEABILITY.md",
+    "docs/releases/agent-owned-core-certification.json",
     "docs/security/SECURITY.md",
     "docs/security/ORCHESTRATOR_TRUST_MODEL.md"
   ];
@@ -385,7 +473,7 @@ async function writeDocsFixture(repo: string): Promise<void> {
     await mkdir(join(repo, path, ".."), { recursive: true });
     let text = `${path}\n`;
     if (path.endsWith("SOURCE_ALIGNMENT_AUDIT.md")) {
-      text = "pre-dispatch reconciliation\nrecoverable partial work\ndaemon liveness\nExisting Implementation Audit\ncheck:architecture\ncheck:docs\ndocs/releases/CERTIFICATION_TRACEABILITY.md\ndocs/decisions/0002-optional-extension-boundaries.md\n";
+      text = "pre-dispatch reconciliation\nrecoverable partial work\ndaemon liveness\nExisting Implementation Audit\ncheck:architecture\ncheck:docs\ncheck:traceability\ndocs/releases/CERTIFICATION_TRACEABILITY.md\ndocs/decisions/0002-optional-extension-boundaries.md\n";
     } else if (path.endsWith("QUALITY_SCORE.md")) {
       text = qualityScoreFixture();
     } else if (path.endsWith("TEST_SUITE.md")) {
@@ -396,6 +484,78 @@ async function writeDocsFixture(repo: string): Promise<void> {
     await writeFile(join(repo, path), text, "utf8");
   }
   await writeMaintenanceTemplateFixture(repo);
+}
+
+async function writeTraceabilityFixture(repo: string): Promise<void> {
+  await mkdir(join(repo, "src"), { recursive: true });
+  await mkdir(join(repo, "tests"), { recursive: true });
+  await mkdir(join(repo, "scripts"), { recursive: true });
+  await mkdir(join(repo, "docs", "releases"), { recursive: true });
+  await writeFile(join(repo, "src", "core.ts"), "export const core = true;\n", "utf8");
+  await writeFile(join(repo, "tests", "core.test.ts"), "import { it } from 'vitest';\nit(\"covers certification scenario\", () => {});\n", "utf8");
+  await writeFile(join(repo, "scripts", "certification-e2e.sh"), "#!/usr/bin/env bash\n", "utf8");
+  await writeFile(join(repo, "docs", "releases", "CERTIFICATION_TRACEABILITY.md"), traceabilityMarkdown(), "utf8");
+  await writeFile(join(repo, "docs", "releases", "agent-owned-core-certification.json"), JSON.stringify(traceabilityCertificationFixture(), null, 2), "utf8");
+}
+
+function traceabilityMarkdown(options: { classification?: string; proof?: string } = {}): string {
+  const classification = options.classification ?? "core";
+  const proof = options.proof ?? "npm test -- tests/core.test.ts --reporter verbose";
+  const rows = [
+    ["VER-128", "PR #102", classification, "Boundary interfaces", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
+    ["VER-129", "PR #103", "core", "Lifecycle extraction", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
+    ["VER-130", "PR #104", "core", "Lifecycle tooling", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
+    ["VER-131", "PR #105", "core", "Evidence verification", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
+    ["VER-132", "PR #106", "core", "Default flip", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
+    ["VER-133", "PR #107", "legacy", "Legacy fixture exclusion", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
+    ["VER-106", "PR #99", "extension", "Optional extension", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
+    ["VER-134", "branch: codex/ver-134-agent-owned-certification", "core", "Certification", "`src/core.ts`", "`tests/core.test.ts`", "npm run check:traceability && npm run certification:agent-owned", "Complete"],
+    ["VER-134", "live-e2e: credential-gated", "live-e2e", "Live proof", "`scripts/certification-e2e.sh`", "`tests/core.test.ts`", "npm run certification:e2e", "Gated"]
+  ];
+  return [
+    "# Certification Traceability",
+    "",
+    "| Linear issue | PR/branch | Classification | Acceptance focus | Code path | Test or artifact | Proof command | Status |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.map((row) => `| ${row.join(" | ")} |`)
+  ].join("\n");
+}
+
+function traceabilityCertificationFixture(): unknown {
+  const evidence = [{ path: "tests/core.test.ts", testName: "covers certification scenario" }];
+  const proofCommands = ["npm test -- tests/core.test.ts --reporter verbose"];
+  return {
+    schemaVersion: 1,
+    certificationIssue: "VER-134",
+    status: "certified",
+    lifecycleMode: "agent-owned",
+    refactorIssues: ["VER-128", "VER-129", "VER-130", "VER-131", "VER-132", "VER-133", "VER-134"].map((id) => ({
+      id,
+      prOrBranch: id === "VER-134" ? "branch: codex/ver-134-agent-owned-certification" : "PR #100",
+      classification: id === "VER-133" ? "legacy" : "core"
+    })),
+    legacyPolicy: {
+      excludedFromCoreCertification: true,
+      ver134BlockerUnlessRemoved: true
+    },
+    scenarios: [
+      "no-pr-already-satisfied",
+      "one-pr-implementation",
+      "multi-pr-handoff-roles-preserved",
+      "missing-evidence-path",
+      "restart-recovery-across-evidence-steps",
+      "all-scheduler-safety-reasons",
+      "extension-routing-through-lifecycle-adapters",
+      "raw-graphql-opt-in-only",
+      "app-legibility-proof"
+    ].map((id) => ({
+      id,
+      status: "covered",
+      classification: id === "extension-routing-through-lifecycle-adapters" || id === "raw-graphql-opt-in-only" ? "extension" : "core",
+      evidence,
+      proofCommands
+    }))
+  };
 }
 
 async function writeMaintenanceTemplateFixture(repo: string): Promise<void> {
@@ -482,13 +642,13 @@ function qualityScoreFixture(): string {
   ].join("\n");
 }
 
-function execNode(script: string, cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
-  return execShell(process.execPath, [script], cwd);
+function execNode(script: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> {
+  return execShell(process.execPath, [script], cwd, env);
 }
 
-function execShell(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number }> {
+function execShell(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolvePromise, reject) => {
-    execFile(command, args, { cwd }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd, env: env ? { ...process.env, ...env } : process.env }, (error, stdout, stderr) => {
       if (error) {
         reject(Object.assign(error, { stdout, stderr, code: error.code }));
         return;

@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 1,
+  "certificationIssue": "VER-134",
+  "status": "certified",
+  "lifecycleMode": "agent-owned",
+  "sourceFaithfulCertificationTarget": true,
+  "localFakeGated": true,
+  "liveE2EGatedBy": "npm run certification:e2e",
+  "refactorIssues": [
+    {
+      "id": "VER-128",
+      "prOrBranch": "PR #102",
+      "classification": "core",
+      "status": "complete"
+    },
+    {
+      "id": "VER-129",
+      "prOrBranch": "PR #103",
+      "classification": "core",
+      "status": "complete"
+    },
+    {
+      "id": "VER-130",
+      "prOrBranch": "PR #104",
+      "classification": "core",
+      "status": "complete"
+    },
+    {
+      "id": "VER-131",
+      "prOrBranch": "PR #105",
+      "classification": "core",
+      "status": "complete"
+    },
+    {
+      "id": "VER-132",
+      "prOrBranch": "PR #106",
+      "classification": "core",
+      "status": "complete"
+    },
+    {
+      "id": "VER-133",
+      "prOrBranch": "PR #107",
+      "classification": "legacy",
+      "status": "public-disabled; test-only fallback excluded"
+    },
+    {
+      "id": "VER-134",
+      "prOrBranch": "PR #108",
+      "classification": "core",
+      "status": "local certification gate"
+    }
+  ],
+  "legacyPolicy": {
+    "remainingFixture": "test-only scheduler-owned fallback",
+    "publicConfig": false,
+    "excludedFromCoreCertification": true,
+    "ver134BlockerUnlessRemoved": true,
+    "resolution": "explicitly final-excluded from source-faithful core proof"
+  },
+  "classifications": {
+    "core": "Agent-owned scheduler, workspace, runner, evidence, lifecycle-tool, validation, and traceability proof.",
+    "extension": "Review, CI, merge, dashboard, registry, model-routing, tracker-adapter, and raw GraphQL surfaces; useful but not core proof.",
+    "legacy": "Test-only compatibility fixture that is not public config and does not count toward source-faithful proof.",
+    "live-e2e": "Credential-gated certification that remains separate from local fake-gated core proof."
+  },
+  "scenarios": [
+    {
+      "id": "no-pr-already-satisfied",
+      "classification": "core",
+      "status": "covered",
+      "summary": "AgentOS preserves issue-first, no-PR already-satisfied completion without requiring pull request metadata.",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "records already-satisfied no-op handoffs without requiring a PR"
+        },
+        {
+          "path": "docs/releases/MVP.md"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/orchestrator.test.ts -t \"records already-satisfied no-op\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "one-pr-implementation",
+      "classification": "core",
+      "status": "covered",
+      "summary": "One-PR implementation remains supported while agent-owned lifecycle evidence and strict workflow defaults govern completion.",
+      "evidence": [
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "runs automated reviewers before moving an implemented PR to Human Review"
+        },
+        {
+          "path": "tests/workflow.test.ts",
+          "testName": "keeps root and base template workflows as strict agent-owned defaults"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/orchestrator.test.ts tests/workflow.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "multi-pr-handoff-roles-preserved",
+      "classification": "core",
+      "status": "covered",
+      "summary": "Multi-PR handoffs preserve PR arrays and roles instead of collapsing issue state to one URL.",
+      "evidence": [
+        {
+          "path": "tests/characterization.test.ts",
+          "testName": "captures multi-PR handoff parsing behavior"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "persists multiple PR outputs without collapsing issue state to one PR"
+        },
+        {
+          "path": "tests/issue-state.test.ts",
+          "testName": "parses explicit PR roles and selects review and merge targets"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/characterization.test.ts tests/issue-state.test.ts tests/orchestrator.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "missing-evidence-path",
+      "classification": "core",
+      "status": "covered",
+      "summary": "Successful runner output without required agent-owned tracker evidence becomes local human-required state and is not repaired by scheduler-authored lifecycle progress.",
+      "evidence": [
+        {
+          "path": "tests/agent-owned-lifecycle-evidence.test.ts",
+          "testName": "marks missing agent-owned evidence human-required without duplicating lifecycle writes and remains stable after restart"
+        },
+        {
+          "path": "src/orchestrator-agent-owned-evidence.ts"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/agent-owned-lifecycle-evidence.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "restart-recovery-across-evidence-steps",
+      "classification": "core",
+      "status": "covered",
+      "summary": "Partial evidence remains stable after restart across start-only, start-plus-PR, start-plus-handoff, and complete evidence states.",
+      "evidence": [
+        {
+          "path": "tests/agent-owned-lifecycle-evidence.test.ts",
+          "testName": "keeps start-only partial evidence human-required and stable after restart"
+        },
+        {
+          "path": "tests/agent-owned-lifecycle-evidence.test.ts",
+          "testName": "keeps start-and-pr partial evidence human-required and stable after restart"
+        },
+        {
+          "path": "tests/agent-owned-lifecycle-evidence.test.ts",
+          "testName": "keeps start-and-handoff partial evidence human-required when validation evidence is missing"
+        },
+        {
+          "path": "tests/agent-owned-lifecycle-evidence.test.ts",
+          "testName": "records passed agent-owned evidence before completing the run"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/agent-owned-lifecycle-evidence.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "all-scheduler-safety-reasons",
+      "classification": "core",
+      "status": "covered",
+      "summary": "All allowed no-agent-can-act scheduler safety reasons are enumerated, logged as scheduler safety, and kept bookkeeping-only.",
+      "evidence": [
+        {
+          "path": "src/lifecycle-events.ts"
+        },
+        {
+          "path": "tests/lifecycle-controller.test.ts",
+          "testName": "allows enumerated scheduler safety writes in agent-owned mode and logs the safety reason"
+        },
+        {
+          "path": "tests/lifecycle-controller.test.ts",
+          "testName": "rejects scheduler safety writes without an allowed reason or with substantive content"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/lifecycle-controller.test.ts --reporter verbose",
+        "npm run check:architecture"
+      ]
+    },
+    {
+      "id": "extension-routing-through-lifecycle-adapters",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Review, CI, and merge remain extension surfaces; architecture checks prove core scheduler writes route through lifecycle boundaries and the controller stays thin.",
+      "evidence": [
+        {
+          "path": "scripts/check-architecture.mjs"
+        },
+        {
+          "path": "tests/check-scripts.test.ts",
+          "testName": "reports direct tracker writes and raw tracker mutations in core scheduler code"
+        },
+        {
+          "path": "tests/check-scripts.test.ts",
+          "testName": "reports lifecycle controller imports of extension implementations"
+        },
+        {
+          "path": "docs/decisions/0002-optional-extension-boundaries.md"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/check-scripts.test.ts --reporter verbose",
+        "npm run check:architecture"
+      ]
+    },
+    {
+      "id": "raw-graphql-opt-in-only",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Raw Linear GraphQL remains unavailable unless separately opted in through client tracker tools.",
+      "evidence": [
+        {
+          "path": "tests/linear-graphql-tool.test.ts",
+          "testName": "advertises only for agent-owned Linear workflows with auth"
+        },
+        {
+          "path": "tests/linear-graphql-tool.test.ts",
+          "testName": "returns structured availability and unsupported-tool failures"
+        },
+        {
+          "path": "tests/workflow.test.ts",
+          "testName": "strictly gates production agent-owned lifecycle mode"
+        },
+        {
+          "path": "tests/workflow.test.ts",
+          "testName": "keeps root and base template workflows as strict agent-owned defaults"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/linear-graphql-tool.test.ts tests/workflow.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "app-legibility-proof",
+      "classification": "core",
+      "status": "covered",
+      "summary": "Generated harnesses include app-legibility proof hooks and doctor checks enforce the proof contract.",
+      "evidence": [
+        {
+          "path": "tests/harness.test.ts",
+          "testName": "installs a profile without overwriting existing files by default"
+        },
+        {
+          "path": "tests/app-proof-scripts.test.ts",
+          "testName": "records configured proof commands without persisting secret-bearing command strings"
+        },
+        {
+          "path": "src/harness.ts"
+        },
+        {
+          "path": "docs/quality/APP_LEGIBILITY.md"
+        },
+        {
+          "path": "templates/base-harness/docs/quality/APP_LEGIBILITY.md"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/harness.test.ts tests/app-proof-scripts.test.ts --reporter verbose",
+        "bin/agent-os doctor . --workflow WORKFLOW.md"
+      ]
+    }
+  ]
+}
