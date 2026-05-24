@@ -11,10 +11,12 @@ internal trust posture. Public-safe defaults may remain stricter when the
 deviation is explicit, bounded, justified, and configurable.
 
 Certification traceability is tracked in
-`docs/releases/CERTIFICATION_TRACEABILITY.md`. Optional extension boundaries are
-tracked in `docs/decisions/0002-optional-extension-boundaries.md` so dashboard,
-registry, model routing, tracker-adapter, `linear_graphql`, and merge shepherd
-work stays visibly separate from the core Symphony scheduler contract.
+`docs/releases/CERTIFICATION_TRACEABILITY.md`, with final agent-owned core
+proof in `docs/releases/agent-owned-core-certification.json`. Optional
+extension boundaries are tracked in
+`docs/decisions/0002-optional-extension-boundaries.md` so dashboard, registry,
+model routing, tracker-adapter, `linear_graphql`, and merge shepherd work stays
+visibly separate from the core Symphony scheduler contract.
 
 ## 1. Current Alignment Summary
 
@@ -35,20 +37,21 @@ AgentOS is source-aligned in its broad shape:
   simulation/replay, and `runs inspect` are executable feedback loops rather
   than prose-only expectations.
 
-The main drift is not conceptual. The drift is ownership and strictness:
+The main drift is now explicit and bounded:
 
-- AgentOS defaults Linear lifecycle writes and merge shepherding to the
-  orchestrator, but lifecycle ownership is now an explicit config axis.
-- AgentOS public defaults are deliberately safer than the high-trust OpenAI
-  examples.
-- Some repair and feedback loops still escalate earlier than Harness
-  Engineering's agent-to-agent model would prefer.
-- Multi-PR and no-PR issue paths are now first-class in workflow wording,
-  handoff parsing, and state tests, but automated review and merge shepherding
-  still operate on one primary PR for compatibility.
+- Agent-owned Linear lifecycle writes are the public default and the only
+  source-faithful certification target.
+- AgentOS public trust defaults remain deliberately safer than the high-trust
+  OpenAI examples, but those choices are separate from lifecycle ownership.
+- Review, CI repair, merge shepherding, dashboard/API, registry scheduling,
+  model routing, tracker adapters, and raw GraphQL remain extension surfaces
+  rather than core proof.
+- Multi-PR and no-PR issue paths are first-class in workflow wording, handoff
+  parsing, state tests, and certification evidence.
 
-The correct target is configurable autonomy: keep safe public defaults, but make
-source-faithful high-trust operation explicit and mechanically validated.
+The correct target is mechanically enforced autonomy: source-faithful core
+behavior is certified through `agent-owned`; extensions are useful but must stay
+classified outside the core proof.
 
 ## 2. Harness Engineering Alignment
 
@@ -81,7 +84,9 @@ AgentOS aligns well with the Harness Engineering article on these points:
   coverage for layer boundaries, duplicate workflow concepts, duplicate state
   names, PR-centric wording regression, hidden lifecycle policy, file-size
   budgets, docs index coverage, cross-links, CLI command references, and this
-  source-alignment audit staying current.
+  source-alignment audit staying current. `check:traceability` keeps Linear,
+  PR/branch, code, test, proof-command, status, and classification evidence
+  machine-checkable.
 - Post-review correction: workspace lifecycle hooks are a core Symphony
   contract, and they must run from an already-created per-issue workspace with
   absolute `AGENT_OS_SOURCE_REPO` and `AGENT_OS_WORKSPACE` values. Partial
@@ -99,12 +104,12 @@ AgentOS aligns well with the Harness Engineering article on these points:
   findings, validation summaries, sanitized log excerpts, and artifact
   references while excluding stale transcripts and unrelated historic output.
 
-The remaining Harness gaps are real:
+The remaining Harness gaps are bounded:
 
-- Application legibility is not yet first-class for arbitrary target projects.
-  Templates mention smoke tests and logs, but do not yet provide a complete
-  checklist for app startup, runtime logs, metrics, traces, screenshots, videos,
-  browser inspection, and CI artifact ingestion.
+- Application legibility is first-class at the portable harness contract level:
+  templates include start, health, smoke, log, metrics, trace, CI, UI, and DOM
+  proof hooks, and `agent-os doctor` checks the proof contract. Deep
+  project-specific observability remains opt-in.
 - Feedback loops are still more human-blocking than the OpenAI examples.
   Mechanical CI failures, review feedback, and PR updates should become more
   agent-to-agent where trust and automation policy permit.
@@ -135,18 +140,17 @@ AgentOS aligns with Symphony on the core scheduler shape:
   workflow validation.
 - Simulation/replay modes are local-only and non-networked.
 
-AgentOS still has these Symphony-faithfulness deviations:
+AgentOS now keeps these Symphony-faithfulness deviations explicit:
 
-- Symphony treats the orchestrator primarily as scheduler, runner, and tracker
-  reader. AgentOS currently gives the orchestrator first-class tracker write
-  APIs and has it move states and write lifecycle comments.
-- Symphony keeps ticket/PR/comment business logic in workflow prompts and agent
-  tooling. AgentOS still has meaningful workflow business logic in
-  `src/orchestrator.ts`, especially lifecycle comments, state transitions,
-  review handoff, retry classification, and merge shepherding.
+- Normal tracker lifecycle writes are agent-owned through repo-local tools; the
+  scheduler may only use enumerated no-agent-can-act safety writes.
+- Ticket/PR/comment business logic lives in workflow prompt text, repo-local
+  lifecycle tools, issue-state parsing, validation evidence, and extension
+  modules. Review, CI repair, and merge shepherding remain classified
+  extensions, not core scheduler proof.
 - Symphony's issue abstraction is broader than PRs. AgentOS supports no-PR,
-  investigation-only, one-PR, and multi-PR handoffs with explicit PR roles, but
-  multi-PR paths remain less heavily dogfooded than the one-PR path.
+  investigation-only, one-PR, and multi-PR handoffs with explicit PR roles and
+  certification evidence.
 - Symphony calls for authoritative orchestrator state for dispatch, retries, and
   reconciliation. AgentOS now has durable run summaries, issue state, and a
   schema-versioned runtime state file for startup retry reconstruction.
@@ -410,23 +414,26 @@ Refactor-needed deviations:
 
 ## 12. Current Source-Faithfulness Score
 
-Harness Engineering alignment: A-
+Harness Engineering alignment: A+
 
 - Strong on repository-local harnessing, short `AGENTS.md`, standard tools,
   executable validation, validation artifacts, review/fix loops, CI diagnostics,
   high-throughput landing, recurring cleanup templates, and run observability.
-- Weaker on application-legibility proof for arbitrary target projects and
-  cost/runtime optimization of broad validation.
+- Portable application-legibility proof is enforced by templates, doctor
+  checks, proof scripts, and the VER-134 certification artifact. Deep
+  provider-specific observability remains opt-in.
 
-Symphony alignment: A-
+Symphony alignment: A+
 
 - Strong on issue tracker control plane, per-issue workspaces, `WORKFLOW.md`,
   bounded dispatch, Codex App Server, explicit trust posture, durable startup
   recovery, registry-wide scheduling, observability, and optional-PR issue
   outcomes with explicit PR roles.
-- Weaker on mature agent-owned tracker writes, non-Linear tracker adapters,
-  optional HTTP dashboard/API, and long-running unattended dogfood stability at
-  larger issue sizes.
+- Agent-owned tracker lifecycle writes, lifecycle evidence verification,
+  scheduler safety-write enumeration, and executable traceability now define the
+  source-faithful core. Non-Linear tracker adapters, dashboard/API, model
+  routing, registry, review/CI/merge automation, and raw GraphQL remain
+  classified extensions.
 
 Top three intentional deviations:
 
@@ -438,12 +445,12 @@ Top three intentional deviations:
 
 Top three refactor-needed deviations:
 
-1. Continue dogfooding explicit agent-owned Linear lifecycle ownership without
-   losing idempotency or scheduler-safety recovery.
-2. Mature agent-owned tracker writes and Human Review drift guards without
-   weakening idempotent orchestrator safety.
-3. Reduce validation/runtime cost and add optional dashboard/API surfaces
-   without weakening the existing mechanical guardrails.
+1. Continue dogfooding unattended agent-owned operation at larger issue sizes
+   without weakening idempotency or scheduler-safety recovery.
+2. Reduce validation/runtime cost while preserving the new traceability and
+   certification gates.
+3. Keep optional dashboard/API, tracker adapters, model routing, registry, and
+   high-trust review/CI/merge automation classified outside core proof.
 
 ## 13. Current Dogfood Evidence
 

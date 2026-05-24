@@ -103,7 +103,7 @@ the cross-boundary assertion.
 | `tests/app-proof-scripts.test.ts` | Boundary | Application proof scripts record configured proof without leaking secret-bearing command strings |
 | `tests/capacity-wait.test.ts` | Unit | Codex usage-limit/capacity wait parsing stays distinct from ordinary failures |
 | `tests/characterization.test.ts` | Certification | Legacy and roadmap characterization behavior remains visible while later tests harden it |
-| `tests/check-scripts.test.ts` | Boundary | Architecture/docs check scripts emit remediation-friendly failures |
+| `tests/check-scripts.test.ts` | Boundary | Architecture, docs, traceability, and certification check scripts emit remediation-friendly failures |
 | `tests/context-pack.test.ts` | Unit | Targeted prompt context stays bounded, sanitized, and role-specific |
 | `tests/daemon-identity.test.ts` | Unit | Daemon identity metadata is deterministic, repo-scoped, and stale-safe |
 | `tests/daemon-lifecycle.test.ts` | Boundary | Daemon start/stop/restart/status commands prevent parallel daemons and attach safely |

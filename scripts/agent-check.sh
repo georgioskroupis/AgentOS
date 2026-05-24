@@ -130,6 +130,8 @@ required=(
   "scripts/check-architecture.mjs"
   "scripts/check-dashboard.mjs"
   "scripts/check-harness-contract.mjs"
+  "scripts/check-traceability.mjs"
+  "scripts/certification-agent-owned.mjs"
   "scripts/certification-e2e.sh"
 )
 
@@ -194,6 +196,8 @@ run_phase "build" npm --prefix "$root" run build
 run_phase "architecture check" npm --prefix "$root" run check:architecture
 run_phase "dashboard check" npm --prefix "$root" run check:dashboard
 run_phase "docs check" npm --prefix "$root" run check:docs
+run_phase "traceability check" npm --prefix "$root" run check:traceability
+run_phase "agent-owned certification" npm --prefix "$root" run certification:agent-owned
 run_phase "security check" npm --prefix "$root" run check:security
 run_phase "contract check" npm --prefix "$root" run check:contracts
 

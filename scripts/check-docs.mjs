@@ -27,6 +27,7 @@ const requiredDocs = [
   "docs/runbooks/DOGFOODING.md",
   "docs/planning/SOURCE_ALIGNMENT_AUDIT.md",
   "docs/releases/CERTIFICATION_TRACEABILITY.md",
+  "docs/releases/agent-owned-core-certification.json",
   "docs/security/SECURITY.md",
   "docs/security/ORCHESTRATOR_TRUST_MODEL.md"
 ];
@@ -120,7 +121,8 @@ function checkSourceAlignmentCurrency() {
     "daemon liveness",
     "Existing Implementation Audit",
     "check:architecture",
-    "check:docs"
+    "check:docs",
+    "check:traceability"
   ]) {
     if (!text.includes(snippet)) {
       fail(`docs/planning/SOURCE_ALIGNMENT_AUDIT.md missing source-alignment update for ${snippet}`, "Update the source-alignment audit when architecture, recovery, or invariant checks change.");

@@ -6,6 +6,9 @@ Status: certified.
 
 Traceability matrix: `docs/releases/CERTIFICATION_TRACEABILITY.md`
 
+Agent-owned core A+ certification:
+`docs/releases/agent-owned-core-certification.json`
+
 This checkpoint certifies the AgentOS MVP against the source-faithful roadmap
 derived from OpenAI Harness Engineering and Symphony. The MVP bar is not "all
 future automation is complete"; it is that AgentOS now has a coherent
