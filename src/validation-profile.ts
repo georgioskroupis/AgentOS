@@ -107,7 +107,11 @@ function validationRelevantConfig(config: ServiceConfig, riskProfile: string): u
       needsInputState: config.tracker.needsInputState
     },
     polling: config.polling,
-    workspace: config.workspace,
+    // The source checkout and issue worktree intentionally resolve different
+    // absolute workspace roots; that local path must not invalidate validation.
+    workspace: {
+      root: "<workspace-root>"
+    },
     hooks: config.hooks,
     agent: {
       maxConcurrentAgents: config.agent.maxConcurrentAgents,

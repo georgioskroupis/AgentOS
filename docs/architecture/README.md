@@ -12,5 +12,7 @@ Agents should be able to answer:
 Current architecture references:
 
 - `docs/architecture/AGENT_OS.md`
+- `docs/architecture/LEAN_MONITOR_CONTRACT.md`
+- `docs/architecture/MONITOR_DELETION_MANIFEST.md`
 - `docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md`
 - `docs/architecture/SOURCE_FAITHFUL_CORE.md`

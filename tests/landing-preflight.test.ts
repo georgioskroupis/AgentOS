@@ -184,6 +184,14 @@ describe("landing preflight", () => {
     expect(validationReuseProfileForConfig(changed).workflowConfigHash).not.toBe(validationReuseProfileForConfig(baseline).workflowConfigHash);
   });
 
+  it("keeps the reuse profile stable when only the local workspace root changes", () => {
+    const baseline = config();
+    const relocated = config();
+    relocated.workspace = { root: "/tmp/agent-os/workspaces" };
+
+    expect(validationReuseProfileForConfig(relocated).workflowConfigHash).toBe(validationReuseProfileForConfig(baseline).workflowConfigHash);
+  });
+
   it("classifies stale same-repository AgentOS branches as safe to update", () => {
     const result = planBranchFreshnessUpdate(config(), pullRequest({ headSha: "abc123", checks: "passed", mergeStateStatus: "BEHIND" }));
 
