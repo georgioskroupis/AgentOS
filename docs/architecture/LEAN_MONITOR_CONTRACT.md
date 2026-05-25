@@ -21,6 +21,11 @@ Source-core-safe contracts live in `src/monitor-contracts.ts`:
 Core modules must not import snapshot, UI, or launcher contracts. A core caller
 that has no monitor configured should use `NullMonitorSink`.
 
+The default orchestration path uses `NullMonitorSink`, preserving existing
+behavior when no monitor extension is configured. If a non-null sink is wired
+in, sink failures are logged as monitor sink warnings and swallowed; monitor
+observability must not fail dispatch, validation, review, or merge behavior.
+
 ## Extension-Only Contract
 
 Extension-only contracts live in `src/monitor-extension-contracts.ts`:

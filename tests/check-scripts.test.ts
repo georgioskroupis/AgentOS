@@ -165,6 +165,27 @@ describe("architecture and docs checks", () => {
     });
   });
 
+  it("reports source-core imports of extension-only monitor contracts", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-monitor-boundary-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(
+      join(repo, "src", "orchestrator.ts"),
+      [
+        'import type { MonitorSnapshot } from "./index.js";',
+        "export class Orchestrator {",
+        "  snapshot?: MonitorSnapshot;",
+        "  async run() { return true; }",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("imports monitor contracts through the src/index.ts barrel"),
+      code: 1
+    });
+  });
+
   it("accepts a minimal docs fixture", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-pass-"));
     await writeDocsFixture(repo);

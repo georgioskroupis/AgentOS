@@ -14,6 +14,8 @@ import { applyTestOnlyLegacyLifecycleFallback, schedulerBookkeepingHandoffCommen
 import { TrackerLifecycleController, type LifecycleTrackerUpdateResult } from "./lifecycle-controller.js";
 import type { SchedulerSafetyWriteReason } from "./lifecycle-events.js";
 import { JsonlLogger } from "./logging.js";
+import { NullMonitorSink, type MonitorSink } from "./monitor-contracts.js";
+import { createMonitorEmitter, type MonitorEmitter } from "./monitor-sink.js";
 import { initialDaemonFreshnessState, isDaemonFreshnessStale } from "./daemon-freshness.js";
 import { type ReadDaemonIdentityOptions } from "./daemon-identity.js";
 import { summarizeText } from "./output-capture.js";
@@ -60,7 +62,7 @@ import { createWorkspaceForRun } from "./orchestrator-workspace-bootstrap.js";
 import { createIssueTracker } from "./tracker-adapters.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
-export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; }
+export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
 export interface OrchestratorRunSummary { dispatched: number; retryDispatched: number; candidateDispatched: number; candidates: number; }
 interface RunningEntry {
@@ -71,7 +73,6 @@ interface RunningEntry {
   abortController: AbortController;
   promise: Promise<void>;
 }
-
 export class Orchestrator {
   private workflow!: WorkflowDefinition;
   private config!: ServiceConfig;
@@ -79,6 +80,7 @@ export class Orchestrator {
   private runner!: AgentRunner;
   private lifecycleController!: TrackerLifecycleController;
   private logger: JsonlLogger;
+  private monitorEmitter: MonitorEmitter;
   private runArtifacts: RunArtifactStore;
   private runtimeState: RuntimeStateStore;
   private running = new Map<string, RunningEntry>();
@@ -96,9 +98,9 @@ export class Orchestrator {
   private startupPreflight: OrchestratorStartupPreflightResult | null = null;
   private startupSingletonPreflightDone = false;
   private preflightWarningMarker: string | null = null;
-
   constructor(private readonly options: OrchestratorOptions) {
     this.logger = options.logger ?? new JsonlLogger(resolve(options.repoRoot));
+    this.monitorEmitter = createMonitorEmitter({ sink: options.monitorSink ?? new NullMonitorSink(), logger: this.logger });
     this.runArtifacts = new RunArtifactStore(resolve(options.repoRoot));
     this.runtimeState = new RuntimeStateStore(resolve(options.repoRoot));
   }
@@ -199,7 +201,6 @@ export class Orchestrator {
       await sleep(this.config.polling.intervalMs, signal);
     }
   }
-
   private singletonPreflightFailureInput(): Parameters<typeof recordSingletonPreflightFailure>[0] {
     return { daemonStartedAt: this.daemonStartedAt, workflow: this.workflow, preflight: this.preflight, repoEnv: this.repoEnv, runtimeState: this.runtimeState, logger: this.logger, startupPreflight: this.startupPreflight };
   }
@@ -208,8 +209,8 @@ export class Orchestrator {
     const payload = { ...entry, runId, timestamp: entry.timestamp ?? new Date().toISOString() };
     await this.logger.write(payload);
     await this.runArtifacts.writeEvent(runId, payload);
+    await this.monitorEmitter.emit(runId, payload);
   }
-
   private async startRunPhase(
     runId: string,
     issue: Issue,
@@ -228,7 +229,6 @@ export class Orchestrator {
     });
     return timing;
   }
-
   private async finishRunPhase(
     runId: string,
     issue: Issue,

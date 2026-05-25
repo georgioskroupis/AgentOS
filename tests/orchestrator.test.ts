@@ -15,6 +15,7 @@ import { writeValidationEvidence } from "../src/validation.js";
 import { inspectIssue } from "../src/status.js";
 import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
 import { validationReuseProfileForConfig } from "../src/validation-profile.js";
+import type { MonitorEvent } from "../src/monitor-contracts.js";
 
 const readyIssue: Issue = {
   id: "issue-1",
@@ -142,6 +143,49 @@ describe("orchestrator", () => {
         startGitSha: expect.any(String)
       })
     });
+  });
+
+  it("emits source-core monitor events without letting sink failures fail orchestration", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-monitor-sink-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const emitted: MonitorEvent[] = [];
+    const logger = new JsonlLogger(repo);
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: {
+        async fetchCandidates() {
+          return [readyIssue];
+        },
+        async fetchIssueStates() {
+          return new Map();
+        }
+      },
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+          return { status: "succeeded" };
+        }
+      },
+      monitorSink: {
+        emit(event) {
+          emitted.push(event);
+          throw new Error("monitor sink unavailable");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(emitted.some((event) => event.kind === "run_started" && event.runId.startsWith("run_"))).toBe(true);
+    expect(emitted.every((event) => event.issueId === "AG-1")).toBe(true);
+    expect((await logger.tail(50)).some((entry) => entry.type === "monitor_sink_warning" && entry.message === "monitor sink unavailable")).toBe(true);
   });
 
   it("stops before a runner call when the implementation prompt exceeds the context budget", async () => {
