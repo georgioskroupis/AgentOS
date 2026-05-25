@@ -113,7 +113,7 @@ the cross-boundary assertion.
 | `tests/github.test.ts` | Boundary | GitHub CLI boundary, PR status, CI diagnostics, branch updates, readiness, merge, and cleanup semantics |
 | `tests/harness.test.ts` | Boundary | Harness generation includes required portable project files |
 | `tests/high-throughput-certification.test.ts` | Certification | VER-54 certification evidence points to real tests |
-| `tests/http-server.test.ts` | Boundary | Optional loopback HTTP API exposes durable runtime/issue/run summaries and coalesces refresh requests |
+| `tests/http-server.test.ts` | Boundary | Optional monitor listener serves only the static shell and rejects removed monitor API routes |
 | `tests/issue-state.test.ts` | Unit | Handoff parsing, human decisions, PR roles, legacy migration, and app proof metadata |
 | `tests/landing-policy.test.ts` | Unit | High-throughput landing gates remain explicit and public defaults remain conservative |
 | `tests/landing-preflight.test.ts` | Unit | Landing preflight combines validation, CI, daemon freshness, branch freshness, and report-only blockers |

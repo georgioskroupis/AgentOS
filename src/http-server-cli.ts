@@ -7,7 +7,6 @@ export async function startHttpServerIfConfigured(input: {
   workflowPath: string;
   port?: number;
   host?: string;
-  onRefresh: () => Promise<void>;
 }): Promise<AgentOsHttpServerHandle | null> {
   try {
     const resolvedEnv = await resolveRepoEnv(input.repoRoot, process.env);
@@ -17,13 +16,12 @@ export async function startHttpServerIfConfigured(input: {
       repoRoot: input.repoRoot,
       config,
       port: input.port,
-      host: input.host,
-      onRefresh: input.onRefresh
+      host: input.host
     });
-    if (server) console.error(`AgentOS HTTP API listening at ${server.url}`);
+    if (server) console.error(`AgentOS monitor placeholder listening at ${server.url}`);
     return server;
   } catch (error) {
-    console.error(`AgentOS HTTP API disabled: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`AgentOS monitor listener disabled: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }
