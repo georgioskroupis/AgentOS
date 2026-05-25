@@ -17,9 +17,12 @@ export function createMonitorEmitter(input: { sink: MonitorSink; logger: JsonlLo
       const kind = monitorKind(event.type);
       if (!kind) return;
       const timestamp = event.timestamp ?? new Date().toISOString();
+      const spanId = monitorSpanId(runId, event);
+      const parentSpanId = monitorParentSpanId(runId, spanId);
       const monitorEvent: MonitorEvent = {
         eventId: `${runId}:${sequence++}:${event.type}`,
-        spanId: monitorSpanId(runId, event),
+        spanId,
+        ...(parentSpanId ? { parentSpanId } : {}),
         runId,
         issueId: event.issueIdentifier ?? event.issueId,
         timestamp,
@@ -65,18 +68,31 @@ function monitorStatus(type: string): MonitorEventStatus | undefined {
 
 function monitorTimeClass(event: AgentEvent): MonitorTimeClass | undefined {
   const phase = timingPhase(event);
+  if (phase === "implementation" || phase === "automated-review" || phase === "fixer-turn") return "agent";
   if (phase === "validation") return "validation";
-  if (phase === "human-wait") return "human-wait";
-  if (phase === "ci-wait") return "external-wait";
-  if (phase === "workspace" || phase === "planning") return "scheduler";
-  if (event.type === "merge_shepherd_started") return "scheduler";
+  if (phase === "human-wait" || phase === "needs-input") return "human-wait";
+  if (phase === "ci-wait" || phase === "retry-backoff") return "external-wait";
+  if (phase === "merge-shepherding" || phase === "stall-cancel") return "scheduler";
   if (event.type.startsWith("review_")) return "agent";
+  if (event.type === "merge_shepherd_started") return "scheduler";
   return undefined;
 }
 
 function monitorSpanId(runId: string, event: AgentEvent): string {
+  if (isRunEvent(event.type)) {
+    return `${runId}:run`;
+  }
   const timing = timingPayload(event);
   return typeof timing?.id === "string" ? timing.id : `${runId}:${event.type}`;
+}
+
+function monitorParentSpanId(runId: string, spanId: string): string | undefined {
+  if (spanId === `${runId}:run`) return undefined;
+  return `${runId}:run`;
+}
+
+function isRunEvent(type: string): boolean {
+  return type === "run_started" || type === "run_succeeded" || type === "run_failed" || type === "run_canceled" || type === "run_stalled" || type === "run_timed_out";
 }
 
 function timingPhase(event: AgentEvent): string | undefined {
