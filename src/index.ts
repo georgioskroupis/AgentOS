@@ -26,3 +26,5 @@ export * from "./runtime-state.js";
 export * from "./daemon-identity.js";
 export * from "./scope-report.js";
 export * from "./recovery.js";
+export * from "./monitor-contracts.js";
+export * from "./monitor-extension-contracts.js";

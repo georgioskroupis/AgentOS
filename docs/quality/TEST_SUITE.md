@@ -124,6 +124,7 @@ the cross-boundary assertion.
 | `tests/maintenance.test.ts` | Boundary | Maintenance templates and seeding helper stay available and structurally valid |
 | `tests/mvp-certification.test.ts` | Certification | MVP certification evidence and source-alignment score remain current |
 | `tests/model-routing.test.ts` | Unit | Per-role model policy defaults, configured reviewer routes, promotion/refusal rules, and telemetry |
+| `tests/monitor-contracts.test.ts` | Unit | Lean monitor event, snapshot, UI-section, human-action, and launcher-boundary contracts |
 | `tests/orchestrator-startup-preflight.test.ts` | Integration | Startup singleton preflight refuses competing daemons without blocking safe ownership cases |
 | `tests/orchestrator.test.ts` | Integration | End-to-end orchestration across issue states, workspaces, runner turns, review, CI, recovery, merge, and guardrails |
 | `tests/phase-timing.test.ts` | Unit | Phase timing redacts validation commands and preserves artifact hashes |
