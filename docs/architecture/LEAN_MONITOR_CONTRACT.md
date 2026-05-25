@@ -45,6 +45,11 @@ source-core orchestration.
 `HumanAction.required` controls rendering. When `required` is false, the UI
 renders the human-action fields as `Not needed`.
 
+The in-memory reducer lives in `src/monitor-aggregator.ts`. It is an
+extension-owned `MonitorSink` implementation that combines monitor events and
+current run context into `MonitorSnapshot`; source-core modules must not import
+it.
+
 ## Modes
 
 Browser mode reads an already-running monitor endpoint and renders the current

@@ -224,6 +224,9 @@ function checkMonitorContractBoundary() {
       if (/(^|\/)monitor-extension-contracts\.js$/.test(specifier)) {
         fail(`${path} imports extension-only monitor contracts from ${specifier}`, "Source-core may import only MonitorSink, MonitorEvent, and NullMonitorSink from src/monitor-contracts.ts.");
       }
+      if (/(^|\/)monitor-aggregator\.js$/.test(specifier)) {
+        fail(`${path} imports extension-only monitor aggregator from ${specifier}`, "Source-core may emit monitor events, but snapshot aggregation must stay extension-owned.");
+      }
       if (/(^|\/)index\.js$/.test(specifier) && monitorNames.length > 0) {
         fail(`${path} imports monitor contracts through the src/index.ts barrel`, "Import source-core monitor contracts directly from src/monitor-contracts.ts so the barrel cannot weaken extension boundaries.");
       }

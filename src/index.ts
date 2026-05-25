@@ -28,3 +28,4 @@ export * from "./scope-report.js";
 export * from "./recovery.js";
 export * from "./monitor-contracts.js";
 export * from "./monitor-extension-contracts.js";
+export * from "./monitor-aggregator.js";
