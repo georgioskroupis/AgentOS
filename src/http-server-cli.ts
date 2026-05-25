@@ -21,7 +21,7 @@ export async function startHttpServerIfConfigured(input: {
     if (server) console.error(`AgentOS monitor placeholder listening at ${server.url}`);
     return server;
   } catch (error) {
-    console.error(`AgentOS HTTP API disabled: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`AgentOS monitor listener disabled: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }

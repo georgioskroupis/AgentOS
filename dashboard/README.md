@@ -27,4 +27,4 @@ is a static `index.html` served by the AgentOS monitor root route.
 ./dashboard/serve.sh 4317
 ```
 
-The helper starts the normal AgentOS orchestrator with the HTTP API enabled.
+The helper starts the normal AgentOS orchestrator with the monitor listener enabled.
