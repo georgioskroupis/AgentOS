@@ -181,7 +181,28 @@ describe("architecture and docs checks", () => {
     );
 
     await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
-      stderr: expect.stringContaining("imports monitor contracts through the src/index.ts barrel"),
+      stderr: expect.stringContaining("imports monitor contracts or extension implementations through the src/index.ts barrel"),
+      code: 1
+    });
+  });
+
+  it("reports source-core imports of monitor extension implementations through the barrel", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-monitor-implementation-boundary-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(
+      join(repo, "src", "orchestrator.ts"),
+      [
+        'import { InMemoryMonitorAggregator } from "./index.js";',
+        "export class Orchestrator {",
+        "  private aggregator = new InMemoryMonitorAggregator();",
+        "  async run() { return this.aggregator.snapshot(); }",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("imports monitor contracts or extension implementations through the src/index.ts barrel"),
       code: 1
     });
   });
