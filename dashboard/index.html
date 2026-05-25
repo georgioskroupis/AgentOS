@@ -7,20 +7,17 @@
     <style>
       :root {
         color-scheme: light;
-        --bg: #f7f7f4;
+        --bg: #f5f6f8;
         --panel: #ffffff;
-        --panel-2: #f0f2f5;
-        --text: #191b1f;
-        --muted: #646c76;
-        --line: #d9dde3;
-        --green: #1f8a5b;
-        --amber: #b7791f;
-        --red: #c2413d;
-        --blue: #2764bd;
-        --violet: #6b4bb8;
+        --text: #1f2328;
+        --muted: #667085;
+        --line: #d7dce2;
+        --accent: #246b5a;
+        --wait: #8a5a13;
       }
 
       * { box-sizing: border-box; }
+
       body {
         margin: 0;
         min-width: 320px;
@@ -30,10 +27,6 @@
         font-size: 14px;
       }
 
-      button, select {
-        font: inherit;
-      }
-
       .shell {
         min-height: 100vh;
         display: grid;
@@ -41,20 +34,12 @@
       }
 
       header {
-        position: sticky;
-        top: 0;
-        z-index: 3;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 14px 20px;
+        padding: 18px 22px;
         border-bottom: 1px solid var(--line);
-        background: color-mix(in srgb, var(--panel) 94%, transparent);
-        backdrop-filter: blur(10px);
+        background: var(--panel);
       }
 
-      h1, h2, h3, p {
+      h1, h2, p {
         margin: 0;
       }
 
@@ -64,229 +49,69 @@
       }
 
       h2 {
-        font-size: 15px;
+        font-size: 14px;
         font-weight: 650;
       }
 
-      h3 {
-        font-size: 13px;
-        font-weight: 650;
-      }
-
-      .toolbar {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        gap: 8px;
-      }
-
-      .button {
-        min-height: 34px;
-        padding: 0 12px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: var(--panel);
-        color: var(--text);
-        cursor: pointer;
-      }
-
-      .button:hover {
-        border-color: var(--blue);
-      }
-
-      .button.primary {
-        border-color: var(--blue);
-        background: var(--blue);
-        color: #ffffff;
-      }
-
-      .button:disabled {
-        opacity: 0.55;
-        cursor: not-allowed;
+      .status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        margin-top: 8px;
+        padding: 0 9px;
+        border: 1px solid color-mix(in srgb, var(--wait) 30%, var(--line));
+        border-radius: 999px;
+        color: var(--wait);
+        background: #fff7e8;
+        font-size: 12px;
       }
 
       main {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 18px 0 28px;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 360px;
-        gap: 18px;
-        padding: 18px;
-      }
-
-      .left, .right {
-        display: grid;
-        gap: 14px;
-        align-content: start;
-      }
-
-      .cards {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(130px, 1fr));
+        grid-template-columns: repeat(7, minmax(120px, 1fr));
         gap: 12px;
       }
 
-      .card, .panel, .row {
+      section {
+        min-height: 132px;
+        padding: 14px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--panel);
-      }
-
-      .card {
-        min-height: 94px;
-        padding: 14px;
         display: grid;
-        gap: 10px;
+        align-content: space-between;
+        gap: 18px;
       }
 
       .label {
         color: var(--muted);
         font-size: 12px;
-        line-height: 1.2;
       }
 
-      .value {
-        font-size: 26px;
-        font-weight: 700;
-        line-height: 1;
-      }
-
-      .subtle {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .panel {
-        overflow: hidden;
-      }
-
-      .panel-title {
-        min-height: 46px;
-        padding: 12px 14px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        border-bottom: 1px solid var(--line);
-      }
-
-      .list {
-        display: grid;
-        gap: 8px;
-        padding: 10px;
-      }
-
-      .row {
-        width: 100%;
-        min-height: 58px;
-        padding: 10px;
-        display: grid;
-        gap: 6px;
-        text-align: left;
-      }
-
-      button.row {
-        cursor: pointer;
-      }
-
-      button.row:hover {
-        border-color: var(--blue);
-      }
-
-      .row-top {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-      }
-
-      .mono {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      }
-
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 24px;
-        padding: 0 8px;
+      .empty {
+        min-height: 8px;
         border-radius: 999px;
-        font-size: 12px;
-        white-space: nowrap;
-        background: var(--panel-2);
-        color: var(--muted);
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
       }
 
-      .pill.green { background: #dff5e8; color: var(--green); }
-      .pill.amber { background: #fff0d6; color: var(--amber); }
-      .pill.red { background: #ffe2df; color: var(--red); }
-      .pill.blue { background: #e0ecff; color: var(--blue); }
-      .pill.violet { background: #ece5ff; color: var(--violet); }
-
-      .grid-two {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 14px;
-      }
-
-      .empty, .error {
-        padding: 16px;
-        color: var(--muted);
-      }
-
-      .error {
-        color: var(--red);
-      }
-
-      .detail {
-        display: grid;
-        gap: 12px;
-        padding: 14px;
-      }
-
-      .kv {
-        display: grid;
-        grid-template-columns: 110px minmax(0, 1fr);
-        gap: 8px;
-        padding: 8px 0;
-        border-bottom: 1px solid var(--line);
-      }
-
-      .kv:last-child {
-        border-bottom: 0;
-      }
-
-      .truncate {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      @media (max-width: 1080px) {
+      @media (max-width: 980px) {
         main {
-          grid-template-columns: 1fr;
-        }
-        .right {
-          grid-row: 2;
-        }
-        .cards {
-          grid-template-columns: repeat(2, minmax(130px, 1fr));
-        }
-        .grid-two {
-          grid-template-columns: 1fr;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
-      @media (max-width: 620px) {
+      @media (max-width: 540px) {
         header {
-          align-items: flex-start;
-          flex-direction: column;
+          padding: 16px;
         }
-        .toolbar {
-          width: 100%;
-          justify-content: flex-start;
-        }
-        .cards {
+
+        main {
+          width: calc(100vw - 24px);
           grid-template-columns: 1fr;
+          padding-top: 12px;
         }
       }
     </style>
@@ -294,249 +119,46 @@
   <body>
     <div class="shell">
       <header>
-        <div>
-          <h1>AgentOS Monitor</h1>
-          <p class="subtle" id="updated">Waiting for API</p>
-        </div>
-        <div class="toolbar">
-          <button class="button" id="pause" type="button">Pause</button>
-          <button class="button" id="refresh" type="button">Refresh</button>
-          <button class="button primary" id="reconcile" type="button">Reconcile</button>
-        </div>
+        <h1>AgentOS Monitor</h1>
+        <p class="status">Lean monitor shell</p>
       </header>
-      <main>
-        <section class="left">
-          <div class="cards" id="cards"></div>
-          <div class="grid-two">
-            <section class="panel">
-              <div class="panel-title">
-                <h2>Active</h2>
-                <span class="pill blue" id="active-count">0</span>
-              </div>
-              <div class="list" id="active-list"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-title">
-                <h2>Retry Queue</h2>
-                <span class="pill amber" id="retry-count">0</span>
-              </div>
-              <div class="list" id="retry-list"></div>
-            </section>
-          </div>
-          <section class="panel">
-            <div class="panel-title">
-              <h2>Issues</h2>
-              <span class="pill" id="issue-count">0</span>
-            </div>
-            <div class="list" id="issue-list"></div>
-          </section>
+      <main aria-label="Monitor sections">
+        <section>
+          <h2>Run Header</h2>
+          <div class="empty"></div>
+          <p class="label">Idle</p>
         </section>
-        <aside class="right">
-          <section class="panel">
-            <div class="panel-title">
-              <h2>Issue Detail</h2>
-              <span class="pill violet" id="detail-id">None</span>
-            </div>
-            <div class="detail" id="detail"></div>
-          </section>
-          <section class="panel">
-            <div class="panel-title">
-              <h2>Recent Runs</h2>
-              <span class="pill" id="run-count">0</span>
-            </div>
-            <div class="list" id="runs"></div>
-          </section>
-        </aside>
+        <section>
+          <h2>Tiny Summary</h2>
+          <div class="empty"></div>
+          <p class="label">Idle</p>
+        </section>
+        <section>
+          <h2>Current Activity</h2>
+          <div class="empty"></div>
+          <p class="label">Idle</p>
+        </section>
+        <section>
+          <h2>Nested Timing Table</h2>
+          <div class="empty"></div>
+          <p class="label">Idle</p>
+        </section>
+        <section>
+          <h2>Top Time Sinks</h2>
+          <div class="empty"></div>
+          <p class="label">Idle</p>
+        </section>
+        <section>
+          <h2>Human Action</h2>
+          <div class="empty"></div>
+          <p class="label">Not needed</p>
+        </section>
+        <section>
+          <h2>Links</h2>
+          <div class="empty"></div>
+          <p class="label">None</p>
+        </section>
       </main>
     </div>
-
-    <script>
-      const stateUrl = "/api/v1/state";
-      const refreshUrl = "/api/v1/refresh";
-      let paused = false;
-      let currentState = null;
-      let selectedIssue = null;
-
-      const $ = (id) => document.getElementById(id);
-      const fmt = new Intl.NumberFormat();
-
-      function text(value, fallback = "None") {
-        return value == null || value === "" ? fallback : String(value);
-      }
-
-      function relativeTime(value) {
-        if (!value) return "Never";
-        const then = Date.parse(value);
-        if (!Number.isFinite(then)) return value;
-        const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
-        if (seconds < 60) return `${seconds}s ago`;
-        const minutes = Math.round(seconds / 60);
-        if (minutes < 60) return `${minutes}m ago`;
-        const hours = Math.round(minutes / 60);
-        if (hours < 48) return `${hours}h ago`;
-        return new Date(value).toLocaleString();
-      }
-
-      function pillClass(value) {
-        const normalized = String(value ?? "").toLowerCase();
-        if (/(done|fresh|success|approved|complete)/.test(normalized)) return "green";
-        if (/(retry|pending|wait|review|merge)/.test(normalized)) return "amber";
-        if (/(fail|error|stale|blocked|canceled)/.test(normalized)) return "red";
-        if (/(run|active|progress|stream)/.test(normalized)) return "blue";
-        return "";
-      }
-
-      async function loadState() {
-        if (paused) return;
-        try {
-          const response = await fetch(stateUrl, { cache: "no-store" });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          currentState = await response.json();
-          if (!selectedIssue) selectedIssue = firstIssueIdentifier(currentState);
-          render();
-        } catch (error) {
-          $("updated").textContent = `API unavailable: ${error.message}`;
-          $("cards").innerHTML = `<div class="error">API unavailable</div>`;
-        }
-      }
-
-      async function requestRefresh() {
-        $("reconcile").disabled = true;
-        try {
-          await fetch(refreshUrl, { method: "POST" });
-          await loadState();
-        } finally {
-          $("reconcile").disabled = false;
-        }
-      }
-
-      function firstIssueIdentifier(state) {
-        return state.running?.[0]?.identifier || state.retrying?.[0]?.identifier || state.issues?.[0]?.issueIdentifier || null;
-      }
-
-      function render() {
-        const state = currentState;
-        if (!state) return;
-        $("updated").textContent = `Updated ${relativeTime(state.generatedAt)}`;
-        $("active-count").textContent = state.running.length;
-        $("retry-count").textContent = state.retrying.length;
-        $("issue-count").textContent = state.issues.length;
-        $("run-count").textContent = state.runs.length;
-        renderCards(state);
-        renderActive(state.running);
-        renderRetries(state.retrying);
-        renderIssues(state.issues);
-        renderRuns(state.runs);
-        renderDetail(state);
-      }
-
-      function renderCards(state) {
-        const daemon = state.runtime.daemon || {};
-        const humanReview = state.issues.filter((issue) => String(issue.reviewStatus || issue.lifecycleStatus || issue.phase || "").includes("human")).length;
-        const cards = [
-          ["Daemon", daemon.freshnessStatus || daemon.preflightStatus || "unknown", daemon.currentMainGitSha || daemon.currentGitSha || "No SHA"],
-          ["Active", state.running.length, "Runs in flight"],
-          ["Retrying", state.retrying.length, "Scheduled attempts"],
-          ["Human Review", humanReview, "Waiting states"],
-          ["Tokens", fmt.format(state.codex_totals.totalTokens), `${fmt.format(state.codex_totals.runs)} runs`]
-        ];
-        $("cards").innerHTML = cards.map(([label, value, sub]) => `
-          <div class="card">
-            <div class="label">${escapeHtml(label)}</div>
-            <div class="value">${escapeHtml(value)}</div>
-            <div class="subtle truncate">${escapeHtml(sub)}</div>
-          </div>
-        `).join("");
-      }
-
-      function renderActive(items) {
-        $("active-list").innerHTML = items.length ? items.map((item) => rowButton(item.identifier, `
-          <div class="row-top"><strong>${escapeHtml(item.identifier)}</strong><span class="pill ${pillClass(item.phase)}">${escapeHtml(text(item.phase, "running"))}</span></div>
-          <div class="subtle truncate mono">${escapeHtml(text(item.runId, "No run id"))}</div>
-          <div class="subtle">${escapeHtml(relativeTime(item.lastEventAt || item.startedAt))}</div>
-        `)).join("") : `<div class="empty">No active runs</div>`;
-      }
-
-      function renderRetries(items) {
-        $("retry-list").innerHTML = items.length ? items.map((item) => rowButton(item.identifier, `
-          <div class="row-top"><strong>${escapeHtml(item.identifier)}</strong><span class="pill amber">attempt ${escapeHtml(item.attempt)}</span></div>
-          <div class="subtle">Due ${escapeHtml(relativeTime(item.dueAt))}</div>
-          <div class="subtle truncate">${escapeHtml(text(item.error, "No error"))}</div>
-        `)).join("") : `<div class="empty">No scheduled retries</div>`;
-      }
-
-      function renderIssues(items) {
-        const sorted = [...items].sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0)).slice(0, 16);
-        $("issue-list").innerHTML = sorted.length ? sorted.map((issue) => {
-          const status = issue.lifecycleStatus || issue.reviewStatus || issue.phase || issue.outcome || "tracked";
-          return rowButton(issue.issueIdentifier, `
-            <div class="row-top"><strong>${escapeHtml(issue.issueIdentifier)}</strong><span class="pill ${pillClass(status)}">${escapeHtml(status)}</span></div>
-            <div class="subtle truncate">${escapeHtml(text(issue.stopReason || issue.terminalReason || issue.lastError, "No local warning"))}</div>
-            <div class="subtle">${escapeHtml(relativeTime(issue.updatedAt))}</div>
-          `);
-        }).join("") : `<div class="empty">No issue state</div>`;
-      }
-
-      function renderRuns(items) {
-        const latest = [...items].sort((a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0)).slice(0, 8);
-        $("runs").innerHTML = latest.length ? latest.map((run) => `
-          <div class="row">
-            <div class="row-top"><strong>${escapeHtml(run.issueIdentifier)}</strong><span class="pill ${pillClass(run.status)}">${escapeHtml(run.status)}</span></div>
-            <div class="subtle truncate mono">${escapeHtml(run.runId)}</div>
-            <div class="subtle">${escapeHtml(relativeTime(run.finishedAt || run.lastEventAt || run.startedAt))}</div>
-          </div>
-        `).join("") : `<div class="empty">No run summaries</div>`;
-      }
-
-      function renderDetail(state) {
-        const issue = state.issues.find((candidate) => candidate.issueIdentifier === selectedIssue) || null;
-        const active = state.running.find((candidate) => candidate.identifier === selectedIssue) || null;
-        const retry = state.retrying.find((candidate) => candidate.identifier === selectedIssue) || null;
-        const runs = state.runs.filter((run) => run.issueIdentifier === selectedIssue);
-        $("detail-id").textContent = selectedIssue || "None";
-        if (!selectedIssue) {
-          $("detail").innerHTML = `<div class="empty">No selected issue</div>`;
-          return;
-        }
-        $("detail").innerHTML = [
-          kv("Phase", issue?.phase || active?.phase),
-          kv("Lifecycle", issue?.lifecycleStatus),
-          kv("Review", issue?.reviewStatus),
-          kv("Retry", retry ? `attempt ${retry.attempt} due ${relativeTime(retry.dueAt)}` : null),
-          kv("Run", active?.runId || issue?.lastRunId || runs.at(-1)?.runId),
-          kv("Updated", issue?.updatedAt ? relativeTime(issue.updatedAt) : null),
-          kv("Stop Reason", issue?.stopReason || issue?.terminalReason || issue?.lastError)
-        ].join("");
-      }
-
-      function kv(label, value) {
-        return `<div class="kv"><div class="label">${escapeHtml(label)}</div><div class="truncate">${escapeHtml(text(value))}</div></div>`;
-      }
-
-      function rowButton(identifier, inner) {
-        return `<button class="row" type="button" data-issue="${escapeHtml(identifier)}">${inner}</button>`;
-      }
-
-      function escapeHtml(value) {
-        return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
-      }
-
-      document.body.addEventListener("click", (event) => {
-        const row = event.target.closest("[data-issue]");
-        if (!row) return;
-        selectedIssue = row.dataset.issue;
-        render();
-      });
-
-      $("refresh").addEventListener("click", loadState);
-      $("reconcile").addEventListener("click", requestRefresh);
-      $("pause").addEventListener("click", () => {
-        paused = !paused;
-        $("pause").textContent = paused ? "Resume" : "Pause";
-      });
-
-      loadState();
-      setInterval(loadState, 5000);
-    </script>
   </body>
 </html>

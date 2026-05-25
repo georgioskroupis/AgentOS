@@ -220,8 +220,8 @@ orchestrator
   .command("once")
   .requiredOption("--repo <path>", "repository path")
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
-  .option("--port <number>", "start the optional loopback HTTP API on this port for the run", parsePositiveIntegerOption("port"))
-  .option("--host <host>", "loopback HTTP API host", "127.0.0.1")
+  .option("--port <number>", "start the optional monitor placeholder on this port for the run", parsePositiveIntegerOption("port"))
+  .option("--host <host>", "monitor placeholder host", "127.0.0.1")
   .action(async (options) => {
     const repo = resolve(options.repo);
     const workflow = resolve(repo, options.workflow);
@@ -231,10 +231,7 @@ orchestrator
         repoRoot: repo,
         workflowPath: workflow,
         port: options.port,
-        host: options.host,
-        onRefresh: async () => {
-          await service.runOnce(false);
-        }
+        host: options.host
       });
       try {
         await service.runOnce(true);
@@ -248,8 +245,8 @@ orchestrator
   .command("run")
   .requiredOption("--repo <path>", "repository path")
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
-  .option("--port <number>", "start the optional loopback HTTP API on this port", parsePositiveIntegerOption("port"))
-  .option("--host <host>", "loopback HTTP API host", "127.0.0.1")
+  .option("--port <number>", "start the optional monitor placeholder on this port", parsePositiveIntegerOption("port"))
+  .option("--host <host>", "monitor placeholder host", "127.0.0.1")
   .action(async (options) => {
     await withDaemonProcessLogging(async (signal) => {
       const repo = resolve(options.repo);
@@ -260,10 +257,7 @@ orchestrator
           repoRoot: repo,
           workflowPath: workflow,
           port: options.port,
-          host: options.host,
-          onRefresh: async () => {
-            await service.runOnce(false);
-          }
+          host: options.host
         });
         try {
           await service.runUntilStopped(signal);
