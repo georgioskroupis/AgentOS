@@ -787,8 +787,27 @@ describe("workflow", () => {
 
   it("keeps public template automation defaults conservative", async () => {
     const text = await readFile("templates/base-harness/WORKFLOW.md", "utf8");
+    const workflow = await loadWorkflow("templates/base-harness/WORKFLOW.md");
+    const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test", HOME: "/tmp" });
+
     expect(text).toContain("automation:");
     expect(text).toContain("profile: conservative");
     expect(text).toContain("repair_policy: conservative");
+    expect(text).not.toMatch(/\borchestrator\s+(once-registry|run-registry)\b/);
+
+    expect(config.trustMode).toBe("ci-locked");
+    expect(config.automation).toEqual({
+      profile: "conservative",
+      repairPolicy: "conservative"
+    });
+    expect(config.codex.threadSandbox).toBe("workspace-write");
+    expect(config.codex.turnSandboxPolicy).toMatchObject({
+      type: "workspaceWrite",
+      networkAccess: false
+    });
+    expect(config.github.mergeMode).toBe("manual");
+    expect(config.github.markDraftReady).toBe(false);
+    expect(config.modelRouting.mode).toBe("off");
+    expect(config.server.port).toBeNull();
   });
 });

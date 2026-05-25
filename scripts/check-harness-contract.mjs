@@ -2,12 +2,15 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import YAML from "yaml";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const failures = [];
 
 checkWorkflow("WORKFLOW.md");
 checkWorkflow("templates/base-harness/WORKFLOW.md");
+checkPublicTemplateSafety();
+checkRootDogfoodDocumentation();
 checkSkills();
 checkSetupWizard();
 checkPackageDependencies();
@@ -90,6 +93,50 @@ function checkWorkflow(path) {
     const configuredStates = stateBlock(text, block);
     const duplicates = configuredStates.filter((state, index) => configuredStates.indexOf(state) !== index);
     if (duplicates.length > 0) failures.push(`${path} repeats ${block}: ${[...new Set(duplicates)].join(", ")}`);
+  }
+}
+
+function checkPublicTemplateSafety() {
+  const path = "templates/base-harness/WORKFLOW.md";
+  const text = read(path);
+  const cfg = workflowFrontMatter(path);
+  const automation = objectAt(cfg, "automation");
+  const codex = objectAt(cfg, "codex");
+  const sandbox = objectAt(codex, "turn_sandbox_policy");
+  const github = objectAt(cfg, "github");
+  const modelRouting = objectAt(cfg, "model_routing");
+  const server = objectAt(cfg, "server");
+
+  if (cfg.trust_mode !== "ci-locked") failures.push(`${path} must keep public trust_mode: ci-locked`);
+  if (automation.profile !== "conservative") failures.push(`${path} must keep public automation.profile: conservative`);
+  if (automation.repair_policy !== "conservative") failures.push(`${path} must keep public automation.repair_policy: conservative`);
+  if (codex.thread_sandbox === "danger-full-access") failures.push(`${path} must not enable danger-full-access thread sandbox`);
+  if (sandbox.type === "dangerFullAccess" || sandbox.type === "danger-full-access") failures.push(`${path} must not enable danger-full-access turn sandbox`);
+  if (sandbox.networkAccess === true) failures.push(`${path} must not enable default Codex network access`);
+  if (github.merge_mode !== "manual") failures.push(`${path} must keep github.merge_mode: manual`);
+  if (github.mark_draft_ready !== false) failures.push(`${path} must keep github.mark_draft_ready: false`);
+  if (modelRouting.mode === "apply") failures.push(`${path} must not enable model_routing.mode: apply`);
+  if (server.port != null && server.port !== "") failures.push(`${path} must not enable the dashboard/API server port by default`);
+  if (/\borchestrator\s+(once-registry|run-registry)\b/.test(text)) failures.push(`${path} must not advertise registry-wide orchestration as the default workflow`);
+}
+
+function checkRootDogfoodDocumentation() {
+  const workflow = read("WORKFLOW.md");
+  const core = read("docs/architecture/SOURCE_FAITHFUL_CORE.md");
+  for (const snippet of [
+    "dogfood-only",
+    "templates/base-harness/WORKFLOW.md",
+    "public template"
+  ]) {
+    if (!workflow.includes(snippet)) failures.push(`WORKFLOW.md missing root dogfood-only public-template boundary wording: ${snippet}`);
+  }
+  for (const snippet of [
+    "Dogfood-Only Root Posture",
+    "`trust_mode: danger`",
+    "`automation.profile: high-throughput`",
+    "public base template remains conservative"
+  ]) {
+    if (!core.includes(snippet)) failures.push(`docs/architecture/SOURCE_FAITHFUL_CORE.md missing dogfood boundary wording: ${snippet}`);
   }
 }
 
@@ -176,6 +223,30 @@ function checkSkills() {
 
 function read(path) {
   return readFileSync(join(root, path), "utf8");
+}
+
+function workflowFrontMatter(path) {
+  const text = read(path);
+  if (!text.startsWith("---\n")) {
+    failures.push(`${path} missing workflow front matter`);
+    return {};
+  }
+  const end = text.indexOf("\n---", 4);
+  if (end === -1) {
+    failures.push(`${path} missing closing workflow front matter marker`);
+    return {};
+  }
+  const parsed = YAML.parse(text.slice(4, end));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    failures.push(`${path} workflow front matter must be a map`);
+    return {};
+  }
+  return parsed;
+}
+
+function objectAt(value, key) {
+  const found = value?.[key];
+  return found && typeof found === "object" && !Array.isArray(found) ? found : {};
 }
 
 function stateBlock(text, name) {

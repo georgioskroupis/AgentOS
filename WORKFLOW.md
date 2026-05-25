@@ -346,9 +346,12 @@ AgentOS dogfood uses `automation.profile: high-throughput` with
 `automation.repair_policy: mechanical-first` to declare the desired
 Harness-aligned behavior: prefer standard repo-local tools, CI/log inspection,
 review-feedback handling, and bounded mechanical fix loops before human
-escalation when the failure is tool-addressable. This profile does not grant
-network, tracker, merge, or approval capability by itself; generic MCP
-elicitation and user-input requests remain denied by `codex` policy.
+escalation when the failure is tool-addressable. These root settings are
+dogfood-only local posture for this repository, not public template defaults;
+`templates/base-harness/WORKFLOW.md` remains the public template source of truth
+for conservative/manual defaults. This profile does not grant network, tracker,
+merge, or approval capability by itself; generic MCP elicitation and user-input
+requests remain denied by `codex` policy.
 
 High-throughput landing is a separate switchboard for automatic approved-PR
 promotion toward merge readiness. It is enabled only when `trust_mode` permits
