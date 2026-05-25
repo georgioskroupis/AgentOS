@@ -10,6 +10,7 @@ checkLayerBoundaries();
 checkLifecycleBoundaryContracts();
 checkCoreTrackerWriteBoundaries();
 checkLifecycleControllerThinBoundary();
+checkMonitorContractBoundary();
 checkDuplicateWorkflowConcepts();
 checkDuplicateStateNames("WORKFLOW.md");
 checkDuplicateStateNames("templates/base-harness/WORKFLOW.md");
@@ -150,6 +151,89 @@ function checkLifecycleControllerThinBoundary() {
           `${path} imports disallowed ${disallowed.label} implementation ${specifier}`,
           "Keep lifecycle-controller thin: it may route lifecycle events to tracker capabilities, but extension policy must stay in extension-owned modules."
         );
+      }
+    }
+  }
+}
+
+function checkMonitorContractBoundary() {
+  const contractExports = [
+    "MonitorSink",
+    "MonitorEvent",
+    "NullMonitorSink",
+    "MonitorSnapshot",
+    "TimingRow",
+    "TimeSink",
+    "HumanAction",
+    "LauncherState",
+    "LauncherConfig",
+    "monitorSnapshotStatuses",
+    "monitorUiSections"
+  ];
+  for (const path of sourceFiles("src")) {
+    if (["src/monitor-contracts.ts", "src/monitor-extension-contracts.ts", "src/index.ts"].includes(path)) continue;
+    const text = read(path);
+    if (text == null) continue;
+    for (const token of contractExports) {
+      if (new RegExp(`export\\s+(?:type|interface|class|const)\\s+${escapeRegExp(token)}\\b`).test(text)) {
+        fail(`${path} duplicates monitor contract export ${token}`, "Reuse src/monitor-contracts.ts or src/monitor-extension-contracts.ts instead of redefining monitor schemas.");
+      }
+    }
+  }
+
+  const sourceCoreFiles = new Set([
+    "src/workflow.ts",
+    "src/lifecycle.ts",
+    "src/lifecycle-events.ts",
+    "src/lifecycle-controller.ts",
+    "src/agent-lifecycle.ts",
+    "src/tracker-boundaries.ts",
+    "src/tracker-adapters.ts",
+    "src/linear.ts",
+    "src/orchestrator-tracker-guard.ts",
+    "src/workspace.ts",
+    "src/orchestrator-workspace-bootstrap.ts",
+    "src/runner/app-server.ts",
+    "src/orchestrator.ts",
+    "src/runs.ts",
+    "src/runtime-state.ts",
+    "src/recovery.ts",
+    "src/orchestrator-terminal.ts",
+    "src/issue-state.ts",
+    "src/orchestrator-agent-owned-evidence.ts",
+    "src/agent-owned-lifecycle-evidence.ts",
+    "src/validation.ts",
+    "src/validation-profile.ts",
+    "src/orchestrator-validation.ts",
+    "src/context-budget.ts",
+    "src/context-pack.ts",
+    "src/monitor-contracts.ts",
+    "src/monitor-sink.ts",
+    "src/status.ts",
+    "src/status-diagnostics.ts"
+  ]);
+  const allowedCoreMonitorImports = new Set(["MonitorSink", "MonitorEvent", "NullMonitorSink"]);
+  const monitorSurfaceTokens = new Set([...contractExports, "MonitorStatus", "MonitorTimeClass"]);
+  for (const path of sourceCoreFiles) {
+    const text = readOptional(path);
+    if (text == null) continue;
+    for (const statement of importStatements(text)) {
+      const names = importedNames(statement.clause);
+      const monitorNames = names.filter((name) => monitorSurfaceTokens.has(name));
+      const specifier = statement.specifier;
+      if (/(^|\/)monitor-extension-contracts\.js$/.test(specifier)) {
+        fail(`${path} imports extension-only monitor contracts from ${specifier}`, "Source-core may import only MonitorSink, MonitorEvent, and NullMonitorSink from src/monitor-contracts.ts.");
+      }
+      if (/(^|\/)index\.js$/.test(specifier) && monitorNames.length > 0) {
+        fail(`${path} imports monitor contracts through the src/index.ts barrel`, "Import source-core monitor contracts directly from src/monitor-contracts.ts so the barrel cannot weaken extension boundaries.");
+      }
+      if (/(^|\/)monitor-contracts\.js$/.test(specifier)) {
+        const disallowed = monitorNames.filter((name) => !allowedCoreMonitorImports.has(name));
+        if (disallowed.length > 0 || /\*\s+as\s+/.test(statement.clause)) {
+          fail(`${path} imports disallowed source-core monitor surface ${disallowed.join(", ") || "namespace import"}`, "Source-core may import only named MonitorSink, MonitorEvent, and NullMonitorSink from src/monitor-contracts.ts.");
+        }
+      } else if (monitorNames.length > 0) {
+        fail(`${path} imports monitor contracts from ${specifier}`, "Source-core monitor imports must come directly from src/monitor-contracts.ts.");
       }
     }
   }
@@ -328,6 +412,22 @@ function readOptional(path) {
 
 function importSpecifiers(text) {
   return [...text.matchAll(/^\s*import\s+(?:[^"']+\s+from\s+)?["']([^"']+)["']/gm)].map((match) => match[1]);
+}
+
+function importStatements(text) {
+  return [...text.matchAll(/^\s*import\s+(?:type\s+)?([\s\S]*?)\s+from\s+["']([^"']+)["']/gm)].map((match) => ({
+    clause: match[1],
+    specifier: match[2]
+  }));
+}
+
+function importedNames(clause) {
+  const named = clause.match(/\{([^}]*)\}/s);
+  if (!named) return [];
+  return named[1]
+    .split(",")
+    .map((part) => part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]?.trim())
+    .filter(Boolean);
 }
 
 function fail(message, fix) {
