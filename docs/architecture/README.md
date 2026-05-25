@@ -13,3 +13,4 @@ Current architecture references:
 
 - `docs/architecture/AGENT_OS.md`
 - `docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md`
+- `docs/architecture/SOURCE_FAITHFUL_CORE.md`
