@@ -170,6 +170,12 @@ function checkMonitorContractBoundary() {
     "monitorSnapshotStatuses",
     "monitorUiSections"
   ];
+  const extensionImplementationExports = [
+    "InMemoryMonitorAggregator",
+    "MonitorRunContext",
+    "MonitorSnapshotOptions",
+    "MonitorAggregatorRetention"
+  ];
   for (const path of sourceFiles("src")) {
     if (["src/monitor-contracts.ts", "src/monitor-extension-contracts.ts", "src/index.ts"].includes(path)) continue;
     const text = read(path);
@@ -214,12 +220,14 @@ function checkMonitorContractBoundary() {
   ]);
   const allowedCoreMonitorImports = new Set(["MonitorSink", "MonitorEvent", "NullMonitorSink"]);
   const monitorSurfaceTokens = new Set([...contractExports, "MonitorStatus", "MonitorTimeClass"]);
+  const monitorExtensionImplementationTokens = new Set(extensionImplementationExports);
   for (const path of sourceCoreFiles) {
     const text = readOptional(path);
     if (text == null) continue;
     for (const statement of importStatements(text)) {
       const names = importedNames(statement.clause);
       const monitorNames = names.filter((name) => monitorSurfaceTokens.has(name));
+      const monitorImplementationNames = names.filter((name) => monitorExtensionImplementationTokens.has(name));
       const specifier = statement.specifier;
       if (/(^|\/)monitor-extension-contracts\.js$/.test(specifier)) {
         fail(`${path} imports extension-only monitor contracts from ${specifier}`, "Source-core may import only MonitorSink, MonitorEvent, and NullMonitorSink from src/monitor-contracts.ts.");
@@ -227,14 +235,16 @@ function checkMonitorContractBoundary() {
       if (/(^|\/)monitor-aggregator\.js$/.test(specifier)) {
         fail(`${path} imports extension-only monitor aggregator from ${specifier}`, "Source-core may emit monitor events, but snapshot aggregation must stay extension-owned.");
       }
-      if (/(^|\/)index\.js$/.test(specifier) && monitorNames.length > 0) {
-        fail(`${path} imports monitor contracts through the src/index.ts barrel`, "Import source-core monitor contracts directly from src/monitor-contracts.ts so the barrel cannot weaken extension boundaries.");
+      if (/(^|\/)index\.js$/.test(specifier) && (monitorNames.length > 0 || monitorImplementationNames.length > 0)) {
+        fail(`${path} imports monitor contracts or extension implementations through the src/index.ts barrel`, "Import source-core monitor contracts directly from src/monitor-contracts.ts so the barrel cannot weaken extension boundaries.");
       }
       if (/(^|\/)monitor-contracts\.js$/.test(specifier)) {
         const disallowed = monitorNames.filter((name) => !allowedCoreMonitorImports.has(name));
         if (disallowed.length > 0 || /\*\s+as\s+/.test(statement.clause)) {
           fail(`${path} imports disallowed source-core monitor surface ${disallowed.join(", ") || "namespace import"}`, "Source-core may import only named MonitorSink, MonitorEvent, and NullMonitorSink from src/monitor-contracts.ts.");
         }
+      } else if (monitorImplementationNames.length > 0) {
+        fail(`${path} imports extension-only monitor implementation ${monitorImplementationNames.join(", ")} from ${specifier}`, "Source-core may emit monitor events, but snapshot aggregation must stay extension-owned.");
       } else if (monitorNames.length > 0) {
         fail(`${path} imports monitor contracts from ${specifier}`, "Source-core monitor imports must come directly from src/monitor-contracts.ts.");
       }
