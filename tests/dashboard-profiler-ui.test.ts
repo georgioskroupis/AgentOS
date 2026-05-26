@@ -58,6 +58,11 @@ describe("dashboard live profiler UI", () => {
     expect(html).toContain("Human action");
     expect(html).toContain("Supervisor decision required");
     expect(html).toContain("Review validation evidence");
+    expect(html).toContain("Stopped because");
+    expect(html).toContain("You should");
+    expect(html).toContain("Manual test");
+    expect(html).toContain("Expected result");
+    expect(html).toContain("Recommended next step");
     expect(html).not.toContain("<button");
   });
 

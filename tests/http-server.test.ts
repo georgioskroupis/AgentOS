@@ -83,7 +83,7 @@ describe("AgentOS monitor API", () => {
     monitor.emit(event("human", "human_action_required", "Needs review", "2026-05-26T00:00:03.000Z", { result: "Supervisor decision required" }));
     await expect(fetchJson(`${server!.url}/api/monitor/v1/snapshot`)).resolves.toMatchObject({
       status: "human_action",
-      run: { humanAction: { required: true, recommendedNextStep: "Needs review" } }
+      run: { humanAction: { required: true, recommendedNextStep: "Record the requested human input, then continue the run from the latest evidence." } }
     });
 
     monitor.emit(event("run", "run_failed", "Run failed", "2026-05-26T00:00:04.000Z", { result: "Validation failed", status: "failed" }));

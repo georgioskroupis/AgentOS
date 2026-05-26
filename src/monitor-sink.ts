@@ -32,6 +32,7 @@ export function createMonitorEmitter(input: { sink: MonitorSink; logger: JsonlLo
           ...(derived.model ? { model: derived.model } : {}),
           ...(derived.iteration ? { iteration: derived.iteration } : {}),
           ...(derived.validation ? { validation: derived.validation } : {}),
+          ...(derived.humanAction ? { humanAction: derived.humanAction } : {}),
           ...(derived.result ? { result: derived.result } : {})
         };
         try {
@@ -51,7 +52,7 @@ export function createMonitorEmitter(input: { sink: MonitorSink; logger: JsonlLo
   };
 }
 
-type MonitorDerivedEvent = Partial<Pick<MonitorEvent, "spanId" | "parentSpanId" | "label" | "status" | "timeClass" | "model" | "iteration" | "validation" | "result">> & {
+type MonitorDerivedEvent = Partial<Pick<MonitorEvent, "spanId" | "parentSpanId" | "label" | "status" | "timeClass" | "model" | "iteration" | "validation" | "humanAction" | "result">> & {
   kind: MonitorEventKind;
 };
 
@@ -183,6 +184,7 @@ function monitorHints(event: AgentEvent): Partial<MonitorDerivedEvent> {
     ...(hints.model && typeof hints.model.name === "string" ? { model: hints.model } : {}),
     ...(hints.iteration && typeof hints.iteration.current === "number" ? { iteration: hints.iteration } : {}),
     ...(hints.validation && typeof hints.validation.command === "string" ? { validation: hints.validation } : {}),
+    ...(monitorHumanAction(hints.humanAction) ? { humanAction: monitorHumanAction(hints.humanAction) } : {}),
     ...(typeof hints.result === "string" ? { result: hints.result } : {})
   };
 }
@@ -428,6 +430,46 @@ function isMonitorStatus(value: unknown): value is MonitorEventStatus {
 
 function isMonitorTimeClass(value: unknown): value is MonitorTimeClass {
   return value === "agent" || value === "validation" || value === "scheduler" || value === "external-wait" || value === "human-wait" || value === "tool";
+}
+
+function monitorHumanAction(value: unknown): MonitorEvent["humanAction"] | undefined {
+  if (typeof value !== "object" || value == null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const reasonCode = isMonitorReasonCode(record.reasonCode) ? record.reasonCode : undefined;
+  const changedSurfaces = stringList(record.changedSurfaces).filter(isMonitorChangedSurface);
+  const changedFiles = stringList(record.changedFiles);
+  const details = typeof record.details === "string" ? record.details : undefined;
+  if (!reasonCode && changedSurfaces.length === 0 && changedFiles.length === 0 && !details) return undefined;
+  return {
+    ...(reasonCode ? { reasonCode } : {}),
+    ...(changedSurfaces.length ? { changedSurfaces } : {}),
+    ...(changedFiles.length ? { changedFiles } : {}),
+    ...(details ? { details } : {})
+  };
+}
+
+function isMonitorReasonCode(value: unknown): value is NonNullable<MonitorEvent["humanAction"]>["reasonCode"] {
+  return (
+    value === "none" ||
+    value === "validation_failed" ||
+    value === "ci_failed" ||
+    value === "review_findings" ||
+    value === "architecture_check_failed" ||
+    value === "workflow_config_changed" ||
+    value === "human_review" ||
+    value === "needs_input" ||
+    value === "blocked" ||
+    value === "capacity_wait" ||
+    value === "unknown"
+  );
+}
+
+function isMonitorChangedSurface(value: string): value is NonNullable<NonNullable<MonitorEvent["humanAction"]>["changedSurfaces"]>[number] {
+  return value === "docs" || value === "workflow-config" || value === "architecture-check" || value === "ui" || value === "tests" || value === "source" || value === "unknown";
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 }
 
 function numberValue(value: unknown): number | undefined {
