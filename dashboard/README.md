@@ -25,6 +25,21 @@ does not render mutation controls. Standalone mode can be previewed with
 `/?mode=standalone`; it adds only the launcher status strip outside the seven
 profiler sections.
 
+## macOS Dock App
+
+Install or update the standalone app bundle with:
+
+```bash
+bin/agent-os monitor install-macos --repo . --workflow WORKFLOW.md --port 4317
+```
+
+The command writes
+`~/Library/Application Support/AgentOS Monitor/config.json` and creates
+`~/Applications/AgentOS Monitor.app` by default. Drag the generated app into the
+Dock, or open it once and choose Options > Keep in Dock. Closing the standalone
+window exits only the Electron shell; a launcher-owned AgentOS process keeps
+running until Stop is pressed.
+
 ## Local Helper
 
 ```bash

@@ -98,6 +98,12 @@ to the configured local AgentOS monitor endpoint, and exposes launcher status.
 It does not reconstruct run state on the client and does not become a scheduler
 control plane.
 
+`agent-os monitor install-macos --repo <repo> --workflow <workflow> --port
+<port>` generates or updates a real `AgentOS Monitor.app` bundle and the
+matching launcher config. The app bundle is Dock-runnable and contains only a
+minimal Electron main/preload shell; the profiler itself remains the static
+read-only browser UI served by the local monitor listener.
+
 ## Launcher Boundary
 
 `LauncherConfig` is stored as JSON at:
@@ -118,6 +124,10 @@ from `LauncherConfig`, waits for `GET /api/monitor/v1/health` before reporting
 `attached` state. Stop is enabled only when the launcher owns the child process
 it started. Shutdown sends `SIGTERM` first and escalates to `SIGKILL` only after
 the documented graceful timeout expires.
+
+Closing the standalone window does not stop a launcher-owned AgentOS process.
+The Stop action is the only standalone UI path that terminates a process started
+by the launcher. Attached external daemons are never stopped by the app.
 
 ## UI Contract
 

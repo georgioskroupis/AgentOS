@@ -7,9 +7,11 @@ const failures = [];
 const indexPath = join(root, "dashboard", "index.html");
 const contractPath = join(root, "docs", "architecture", "LEAN_MONITOR_CONTRACT.md");
 const manifestPath = join(root, "docs", "architecture", "MONITOR_DELETION_MANIFEST.md");
+const macosAppPath = join(root, "src", "monitor-macos-app.ts");
 
 const html = existsSync(indexPath) ? readFileSync(indexPath, "utf8") : "";
 const contract = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : "";
+const macosApp = existsSync(macosAppPath) ? readFileSync(macosAppPath, "utf8") : "";
 
 if (!html) failures.push("dashboard/index.html is required");
 if (!html.includes("AgentOS Monitor")) failures.push("dashboard/index.html must keep a visible monitor title");
@@ -69,6 +71,10 @@ if (!html.includes("Not needed")) failures.push("dashboard/index.html must rende
 
 if (!existsSync(contractPath)) failures.push("docs/architecture/LEAN_MONITOR_CONTRACT.md is required for the lean monitor boundary");
 if (!existsSync(manifestPath)) failures.push("docs/architecture/MONITOR_DELETION_MANIFEST.md is required as the historical deletion manifest");
+if (!macosApp) failures.push("src/monitor-macos-app.ts is required for the standalone macOS monitor app installer");
+for (const token of ["AgentOS Monitor.app", "BrowserWindow", "contextBridge.exposeInMainWorld", "agentos-launcher:start", "LauncherConfig"]) {
+  if (!macosApp.includes(token)) failures.push(`src/monitor-macos-app.ts must include standalone app token ${token}`);
+}
 
 const forbiddenTerms = [
   { term: "POST /api/v1/refresh", regex: /POST\s+\/api\/v1\/refresh/ },

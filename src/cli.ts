@@ -42,6 +42,7 @@ import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "
 import { Orchestrator } from "./orchestrator.js";
 import { startHttpServerIfConfigured } from "./http-server-cli.js";
 import { InMemoryMonitorAggregator } from "./monitor-aggregator.js";
+import { installMacosMonitorApp } from "./monitor-macos-app.js";
 import { formatOperatorRecoveryRecord, recordOperatorRecovery } from "./recovery.js";
 import { RegistryOrchestrator } from "./registry-orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
@@ -457,6 +458,21 @@ daemon
   .option("--workflow <path>", "workflow path", "WORKFLOW.md")
   .action((options) => {
     console.log(daemonLaunchCommand(options.repo, options.workflow));
+  });
+
+const monitor = program.command("monitor").description("Install and inspect optional AgentOS monitor launchers");
+
+monitor
+  .command("install-macos")
+  .requiredOption("--repo <path>", "repository path the monitor should run")
+  .option("--workflow <path>", "workflow path relative to the repo", "WORKFLOW.md")
+  .requiredOption("--port <number>", "local monitor port", parsePositiveIntegerOption("port"))
+  .option("--app <path>", "AgentOS Monitor.app install path")
+  .option("--config <path>", "LauncherConfig path")
+  .option("--command <command>", "optional AgentOS command override stored in LauncherConfig")
+  .action(async (options) => {
+    const result = await installMacosMonitorApp({ repo: options.repo, workflow: options.workflow, port: options.port, appPath: options.app, configPath: options.config, command: options.command });
+    console.log([`AgentOS Monitor.app: ${result.appPath}`, `LauncherConfig: ${result.configPath}`, `Monitor URL: ${result.url}`, "Dock setup: drag AgentOS Monitor.app to the Dock, or open it once and choose Options > Keep in Dock."].join("\n"));
   });
 
 const runs = program.command("runs").description("Inspect AgentOS run artifacts");
