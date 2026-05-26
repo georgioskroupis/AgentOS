@@ -161,6 +161,9 @@ const net = require("node:net");
 const path = require("node:path");
 
 const healthPath = "/api/monitor/v1/health";
+const launcherGracefulShutdownSignal = "SIGTERM";
+const launcherEscalationSignal = "SIGKILL";
+const gracefulShutdownMs = 3000;
 const configPath = process.argv[2] || path.join(app.getPath("home"), "Library", "Application Support", "AgentOS Monitor", "config.json");
 let manager;
 let windowRef;
@@ -218,6 +221,25 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function childExited(child) {
+  return child.exitCode != null || child.signalCode != null;
+}
+
+function waitForExit(child, timeoutMs) {
+  if (childExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.off?.("exit", onExit);
+      resolve(false);
+    }, timeoutMs);
+    child.once("exit", onExit);
+  });
+}
+
 class LauncherManager {
   constructor(config) {
     this.config = config;
@@ -272,7 +294,14 @@ class LauncherManager {
   async stopOwned() {
     const child = this.child;
     if (!child) return;
-    if (child.exitCode == null && child.signalCode == null) child.kill("SIGTERM");
+    if (!childExited(child)) {
+      child.kill(launcherGracefulShutdownSignal);
+      const exited = await waitForExit(child, gracefulShutdownMs);
+      if (!exited && !childExited(child)) {
+        child.kill(launcherEscalationSignal);
+        await waitForExit(child, 100);
+      }
+    }
     this.child = undefined;
   }
 

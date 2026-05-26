@@ -203,6 +203,14 @@ describe("AgentOS monitor launcher process manager", () => {
     expect(main).toContain('ipcMain.handle("agentos-launcher:stop"');
   });
 
+  it("keeps generated standalone Stop aligned with launcher graceful shutdown semantics", () => {
+    const main = monitorElectronMain();
+
+    expect(main).toContain('const launcherGracefulShutdownSignal = "SIGTERM"');
+    expect(main).toContain('const launcherEscalationSignal = "SIGKILL"');
+    expect(main).toContain("waitForExit(child, gracefulShutdownMs)");
+  });
+
   it("detects a non-monitor process already using the configured port", async () => {
     const manager = new AgentOsLauncherProcessManager({
       fetch: async () => health(false),
