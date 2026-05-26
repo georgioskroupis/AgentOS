@@ -3,7 +3,7 @@ import { detectCapacityWait } from "./capacity-wait.js";
 import { reviewerRole } from "./model-routing.js";
 import { readReviewArtifactResult, reviewArtifactSnapshot, reviewRunnerFailureArtifact, writeReviewArtifact } from "./review.js";
 import { isHumanInputStop } from "./run-errors.js";
-import type { AgentRunResult, AgentRunner, Issue, ModelTelemetryEntry, ReviewRunnerFailure, ServiceConfig, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, Issue, ModelTelemetryEntry, ReviewRunnerFailure, ServiceConfig, Workspace } from "./types.js";
 import type { JsonlLogger } from "./logging.js";
 import type { ReviewArtifactFailure, ReviewerArtifact } from "./review.js";
 
@@ -33,6 +33,7 @@ export async function runReviewerWithArtifactRetry(input: {
   runner: AgentRunner;
   logger: JsonlLogger;
   onActivity: (issueId: string, timestamp: string) => void;
+  writeRunEvent?: (runId: string, entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }) => Promise<void>;
 }): Promise<ReviewerRunOutcome> {
   const failures: ReviewRunnerFailure[] = [];
   const maxAttempts = input.config.agent.maxRetryAttempts + 1;
@@ -56,8 +57,18 @@ export async function runReviewerWithArtifactRetry(input: {
       onEvent: (event) => {
         input.onActivity(input.issue.id, event.timestamp);
         void input.logger.write({ ...event, type: `review_${event.type}` });
+        if (input.runId && input.writeRunEvent) void input.writeRunEvent(input.runId, { ...event, type: `review_${event.type}` });
       }
     });
+    if (result.modelTelemetry && input.runId && input.writeRunEvent) {
+      await input.writeRunEvent(input.runId, {
+        type: "review_model_finished",
+        issueId: input.issue.id,
+        issueIdentifier: input.issue.identifier,
+        message: `${input.reviewer} review model finished`,
+        payload: { ...result.modelTelemetry, role: reviewerRole(input.reviewer), reviewer: input.reviewer, attempt: reviewerAttempt, status: result.status }
+      });
+    }
     const terminalRunnerFailure = nonMechanicalRunnerFailure(input, result, reviewerAttempt, maxAttempts);
     tokenTotal += result.totalTokens ?? 0;
     if (result.modelTelemetry) modelTelemetryEntries.push(result.modelTelemetry);

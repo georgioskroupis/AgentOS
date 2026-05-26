@@ -30,6 +30,7 @@ import { recordSingletonPreflightFailure } from "./orchestrator-singleton-prefli
 import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
 import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
+import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
 import { markDraftPullRequestReadyIfConfigured } from "./orchestrator-pr-ready.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
@@ -1184,6 +1185,7 @@ export class Orchestrator {
           const validationVerificationStartedAt = new Date().toISOString();
           try {
             validation = await verifyHandoffValidationEvidence({ config: this.config, issue, handoff, workspacePath: workspace.path, runId });
+            await writeValidationCommandMonitorEvents({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, validation });
             await this.writePhaseTimingEvent(issue, {
               phase: "validation",
               status: validation.state.status === "passed" ? "completed" : "failed",
@@ -1311,6 +1313,7 @@ export class Orchestrator {
       }
       await this.recordIssueState(issue, { phase: "streaming-turn" });
       const implementationTiming = await this.startRunPhase(runId, issue, "implementation", `implementation turn ${turnNumber}`, { turnNumber, maxTurns: this.config.agent.maxTurns });
+      await writeTurnStartedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: implementationTiming, label: `implementation turn ${turnNumber}`, current: turnNumber, max: this.config.agent.maxTurns });
       try {
         result = await this.runner.run({
           issue,
@@ -1328,14 +1331,9 @@ export class Orchestrator {
         await this.finishRunPhase(runId, issue, implementationTiming, "failed", { turnNumber, error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
+      await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result, role: "implementation", attempt: turnNumber });
+      await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: implementationTiming, label: `implementation turn ${turnNumber}`, current: turnNumber, result, max: this.config.agent.maxTurns });
       await this.finishRunPhase(runId, issue, implementationTiming, timingStatusForRunResult(result), { turnNumber, resultStatus: result.status });
-      await this.writeRunEvent(runId, {
-        type: "turn_completed",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: `turn ${turnNumber} ${result.status}`,
-        payload: { turnNumber, maxTurns: this.config.agent.maxTurns, result }
-      });
       if (result.status !== "succeeded") return result;
       if (await readHandoff(workspace.path, issue.identifier)) return result;
 
@@ -1764,13 +1762,9 @@ export class Orchestrator {
       const reviewerConcurrency = reviewerConcurrencyFor(this.config, reviewers.length);
       const parallelReviewers = reviewerConcurrency > 1;
 
-      await this.logger.write({
-        type: "review_started",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: `iteration ${iteration}`,
-        payload: { prUrls: reviewTargetUrls, reviewers, reviewerConcurrency, mode: parallelReviewers ? "parallel" : "sequential" }
-      });
+      const reviewIterationEvent = reviewIterationStartedMonitorEvent({ runId, issue, iteration, maxIterations: this.config.review.maxIterations, prUrls: reviewTargetUrls, reviewers, reviewerConcurrency, parallelReviewers });
+      if (runId) await this.writeRunEvent(runId, reviewIterationEvent);
+      else await this.logger.write(reviewIterationEvent);
 
       const reviewerResult = await runReviewerIteration({
         issue,
@@ -1789,7 +1783,8 @@ export class Orchestrator {
         config: this.config,
         runner: this.runner,
         logger: this.logger,
-        onActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
+        onActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp),
+        writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry)
       });
       reviewRunnerFailures = [...reviewRunnerFailures, ...reviewerResult.reviewRunnerFailures];
       reviewTokenTotal += reviewerResult.tokenTotal;
@@ -1862,13 +1857,9 @@ export class Orchestrator {
         ...(reviewerResult.contextBudget ? { contextBudget: reviewerResult.contextBudget } : {})
       });
 
-      await this.logger.write({
-        type: status === "approved" ? "review_approved" : "review_iteration_complete",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: reviewIterationLogMessage(iteration, status, budgetDecision.shouldRecommendSplit),
-        payload: { blocking: blocking.length, repeated }
-      });
+      const reviewCompleteEvent = reviewIterationFinishedMonitorEvent({ runId, issue, iteration, maxIterations: this.config.review.maxIterations, status, message: reviewIterationLogMessage(iteration, status, budgetDecision.shouldRecommendSplit), blocking: blocking.length, repeated });
+      if (runId) await this.writeRunEvent(runId, reviewCompleteEvent);
+      else await this.logger.write(reviewCompleteEvent);
 
       if (status === "approved") {
         let advisorySplitRecommendation = budgetDecision.splitRecommendation;
@@ -1955,8 +1946,9 @@ export class Orchestrator {
       await this.recordIssueState(issue, { phase: "fix", reviewStatus: "changes_requested" });
       const fixTiming = runId ? await this.startRunPhase(runId, issue, "fixer-turn", `fixer turn ${iteration}`, { iteration, blockingFindings: blocking.length }) : null;
       let fixResult: AgentRunResult;
+      let fixContextKind: "ci-repair" | "fixer" = "fixer";
       try {
-        const fixContextKind = blocking.some((finding) => finding.reviewer === "checks") ? "ci-repair" : "fixer";
+        fixContextKind = blocking.some((finding) => finding.reviewer === "checks") ? "ci-repair" : "fixer";
         const fixerPrompt = fixPrompt({
           issue,
           prUrl: reviewPr,
@@ -1980,6 +1972,7 @@ export class Orchestrator {
           if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, "failed", { iteration, reason: "context_budget_exceeded" });
           return latestState;
         }
+        if (runId && fixTiming) await writeTurnStartedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: fixTiming, label: `fixer turn ${iteration}`, current: iteration, max: this.config.review.maxIterations });
         fixResult = await this.runner.run({
           issue,
           prompt: fixerPrompt,
@@ -1996,6 +1989,8 @@ export class Orchestrator {
         if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, "failed", { iteration, error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
+      if (runId) await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result: fixResult, role: fixContextKind, attempt: iteration });
+      if (runId && fixTiming) await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: fixTiming, label: `fixer turn ${iteration}`, current: iteration, result: fixResult, max: this.config.review.maxIterations });
       if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, timingStatusForRunResult(fixResult), { iteration, resultStatus: fixResult.status });
       reviewTokenTotal += fixResult.totalTokens ?? 0;
       if (fixResult.status !== "succeeded") {
@@ -2046,6 +2041,7 @@ export class Orchestrator {
           return latestState;
         }
         const validation = await verifyHandoffValidationEvidence({ config: this.config, issue, handoff: updatedHandoff, workspacePath: workspace.path, runId, selectedHeadSha: joinedHeadShas(githubContext.entries) });
+        if (runId) await writeValidationCommandMonitorEvents({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, validation });
         const updated = issueStateFromHandoff(issue, updatedHandoff);
         const fixPatch = { phase: "fix" as const, reviewIteration: iteration, lastFixedSha: joinedHeadShas(githubContext.entries), reviewTargetMode, validation: validation.state };
         if (updated) {

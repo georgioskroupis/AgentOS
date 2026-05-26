@@ -1,5 +1,6 @@
 export type MonitorTimeClass = "agent" | "validation" | "scheduler" | "external-wait" | "human-wait" | "tool";
 export type MonitorStatus = "active" | "done" | "failed" | "waiting" | "pass" | "skipped";
+export type MonitorValidationStatus = "pass" | "fail" | "skipped";
 
 export type MonitorSink = {
   emit(event: MonitorEvent): void | Promise<void>;
@@ -40,5 +41,6 @@ export type MonitorEvent = {
   timeClass?: MonitorTimeClass;
   model?: { name: string; role: "implementation" | "review" | "fix" | "summary" | "validation" | "other" };
   iteration?: { current: number; max?: number; label: string };
+  validation?: { command: string; durationMs?: number; status: MonitorValidationStatus; exitCode?: number };
   result?: string;
 };

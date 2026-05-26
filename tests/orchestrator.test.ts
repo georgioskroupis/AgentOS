@@ -191,7 +191,11 @@ describe("orchestrator", () => {
     const implementationEvents = emitted.filter((event) => event.label === "implementation turn 1");
     expect(implementationEvents.some((event) => event.kind === "stage_started")).toBe(true);
     expect(implementationEvents.some((event) => event.kind === "stage_finished")).toBe(true);
-    expect(implementationEvents.every((event) => event.parentSpanId === runEvents[0].spanId)).toBe(true);
+    expect(implementationEvents.filter((event) => event.kind === "stage_started" || event.kind === "stage_finished").every((event) => event.parentSpanId === runEvents[0].spanId)).toBe(true);
+    expect(implementationEvents.some((event) => event.kind === "step_started" && event.parentSpanId !== runEvents[0].spanId)).toBe(true);
+    expect(emitted.findIndex((event) => event.label === "implementation turn 1" && event.kind === "step_finished")).toBeLessThan(
+      emitted.findIndex((event) => event.label === "implementation turn 1" && event.kind === "stage_finished")
+    );
     expect(implementationEvents.every((event) => event.timeClass === "agent")).toBe(true);
     expect((await logger.tail(50)).some((entry) => entry.type === "monitor_sink_warning" && entry.message === "monitor sink unavailable")).toBe(true);
   });
