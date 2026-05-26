@@ -8,10 +8,16 @@ const indexPath = join(root, "dashboard", "index.html");
 const contractPath = join(root, "docs", "architecture", "LEAN_MONITOR_CONTRACT.md");
 const manifestPath = join(root, "docs", "architecture", "MONITOR_DELETION_MANIFEST.md");
 const macosAppPath = join(root, "src", "monitor-macos-app.ts");
+const dashboardReadmePath = join(root, "dashboard", "README.md");
+const rolloutRunbookPath = join(root, "docs", "runbooks", "ROLLOUT.md");
+const workflowPath = join(root, "WORKFLOW.md");
 
 const html = existsSync(indexPath) ? readFileSync(indexPath, "utf8") : "";
 const contract = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : "";
 const macosApp = existsSync(macosAppPath) ? readFileSync(macosAppPath, "utf8") : "";
+const dashboardReadme = existsSync(dashboardReadmePath) ? readFileSync(dashboardReadmePath, "utf8") : "";
+const rolloutRunbook = existsSync(rolloutRunbookPath) ? readFileSync(rolloutRunbookPath, "utf8") : "";
+const workflow = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") : "";
 
 if (!html) failures.push("dashboard/index.html is required");
 if (!html.includes("AgentOS Monitor")) failures.push("dashboard/index.html must keep a visible monitor title");
@@ -29,6 +35,9 @@ if (JSON.stringify(initialSections) !== JSON.stringify(profilerSections)) {
 
 for (const route of ["/api/monitor/v1/snapshot", "/api/monitor/v1/stream"]) {
   if (!html.includes(route)) failures.push(`dashboard/index.html must read ${route}`);
+}
+for (const route of ["/api/monitor/v1/snapshot", "/api/monitor/v1/stream", "/api/monitor/v1/health"]) {
+  if (!workflow.includes(route)) failures.push(`WORKFLOW.md must document read-only monitor route ${route}`);
 }
 
 for (const token of [
@@ -75,6 +84,17 @@ if (!macosApp) failures.push("src/monitor-macos-app.ts is required for the stand
 for (const token of ["AgentOS Monitor.app", "BrowserWindow", "contextBridge.exposeInMainWorld", "agentos-launcher:start", "LauncherConfig"]) {
   if (!macosApp.includes(token)) failures.push(`src/monitor-macos-app.ts must include standalone app token ${token}`);
 }
+for (const [path, text] of [
+  ["dashboard/README.md", dashboardReadme],
+  ["docs/runbooks/ROLLOUT.md", rolloutRunbook]
+]) {
+  if (!text.includes("browser") || !text.includes("read-only")) failures.push(`${path} must document read-only browser mode`);
+  if (!text.includes("Dock")) failures.push(`${path} must document Dock setup`);
+  if (!text.includes("launcher-owned")) failures.push(`${path} must document launcher-owned process behavior`);
+  if (!text.includes("externally managed")) failures.push(`${path} must document externally managed process behavior`);
+  if (!text.includes("Stop")) failures.push(`${path} must document Stop behavior`);
+}
+if (workflow.includes("runtime snapshot serving belongs to future")) failures.push("WORKFLOW.md must not describe monitor snapshot serving as future work");
 
 const forbiddenTerms = [
   { term: "POST /api/v1/refresh", regex: /POST\s+\/api\/v1\/refresh/ },

@@ -480,10 +480,11 @@ action `git pull && bin/agent-os daemon restart --repo <repo> --workflow WORKFLO
 The optional monitor listener is disabled unless `server.port` is set or the
 daemon is launched with `--port <number>`. When enabled,
 `agent-os orchestrator run --repo <repo> --workflow WORKFLOW.md --port 4317`
-serves only the static lean monitor shell on `GET /`. The removed JSON monitor
-surface is not a compatibility contract; runtime snapshot serving belongs to
-future monitor-extension work. Binding defaults to `127.0.0.1`; startup
-failures disable only the monitor listener and do not stop orchestration.
+serves the static lean monitor shell on `GET /` plus the read-only
+`/api/monitor/v1/snapshot`, `/api/monitor/v1/stream`, and
+`/api/monitor/v1/health` routes. The removed JSON monitor surface is not a
+compatibility contract. Binding defaults to `127.0.0.1`; startup failures
+disable only the monitor listener and do not stop orchestration.
 
 Review targets are selected by `review.target_mode`: the default
 `merge-eligible` reviews `primary` and `docs` PRs, while `primary` reviews only
