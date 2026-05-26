@@ -9,6 +9,7 @@ export function recoverablePartialWorkStatePatch(message: string): Partial<Issue
     lastError: message,
     errorCategory: "workspace",
     stopReason: message,
+    activeRunId: undefined,
     nextRetryAt: undefined,
     retryAttempt: undefined
   };
@@ -37,9 +38,4 @@ export function sleep(ms: number, signal: AbortSignal): Promise<void> {
       resolvePromise();
     }, { once: true });
   });
-}
-
-export function isRecoverablePartialWorkState(state: IssueState): boolean {
-  const error = state.lastError?.toLowerCase() ?? "";
-  return state.phase === "needs-input" || state.phase === "human-required" || state.lifecycleStatus === "implementation_failure" || state.reviewStatus === "human_required" || Boolean(state.nextRetryAt) || error.includes("stall") || error.includes("missing_handoff");
 }
