@@ -30,3 +30,4 @@ export * from "./monitor-contracts.js";
 export * from "./monitor-extension-contracts.js";
 export * from "./monitor-generated-text.js";
 export * from "./monitor-aggregator.js";
+export * from "./monitor-launcher.js";
