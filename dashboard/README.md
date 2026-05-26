@@ -1,8 +1,9 @@
 # AgentOS Monitor
 
-Static lean monitor shell for the optional AgentOS local monitor listener.
-Linear remains the control plane. Runtime snapshot rendering is intentionally
-not implemented in this slice.
+Static Lean Live Work Profiler for the optional AgentOS local monitor listener.
+Linear remains the control plane. The page is read-only in browser mode and
+renders `MonitorSnapshot` data from `/api/monitor/v1/snapshot` plus live
+`monitor_snapshot` events from `/api/monitor/v1/stream`.
 
 ## Start
 
@@ -19,7 +20,10 @@ passing `--port`. The host defaults to `127.0.0.1`.
 - `GET /`
 
 The dashboard has no build step, no package manager, and no CDN dependency. It
-is a static `index.html` served by the AgentOS monitor root route.
+is a static `index.html` served by the AgentOS monitor root route. Browser mode
+does not render mutation controls. Standalone mode can be previewed with
+`/?mode=standalone`; it adds only the launcher status strip outside the seven
+profiler sections.
 
 ## Local Helper
 
