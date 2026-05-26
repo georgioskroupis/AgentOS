@@ -111,6 +111,14 @@ It stores `repo`, `workflow`, `host`, `port`, and optional `command`.
 override to start AgentOS, but the monitor contract does not define process
 management behavior beyond `LauncherState`.
 
+The extension-owned local process manager constructs the default command as
+`bin/agent-os orchestrator run --repo <repo> --workflow <workflow> --port <port>`
+from `LauncherConfig`, waits for `GET /api/monitor/v1/health` before reporting
+`running`, and treats an already-healthy monitor endpoint as read-only
+`attached` state. Stop is enabled only when the launcher owns the child process
+it started. Shutdown sends `SIGTERM` first and escalates to `SIGKILL` only after
+the documented graceful timeout expires.
+
 ## UI Contract
 
 The monitor has exactly these seven UI sections:

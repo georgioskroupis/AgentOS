@@ -77,6 +77,7 @@ export type LauncherState = {
   startedAt?: string;
   lastError?: string;
   managedByLauncher: boolean;
+  stopEnabled?: boolean;
 };
 
 export type LauncherConfig = {
