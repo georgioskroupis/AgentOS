@@ -458,6 +458,8 @@ function isMonitorReasonCode(value: unknown): value is NonNullable<MonitorEvent[
     value === "workflow_config_changed" ||
     value === "human_review" ||
     value === "needs_input" ||
+    value === "planning_required" ||
+    value === "recovery_needed" ||
     value === "blocked" ||
     value === "capacity_wait" ||
     value === "unknown"

@@ -150,6 +150,46 @@ describe("in-memory monitor aggregator", () => {
     });
   });
 
+  it("surfaces pre-dispatch planning pauses as human-action wait snapshots", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    emitAll(aggregator, [
+      event("pre_dispatch_VER-164:run", "run_started", "Preserve PR and validation metadata", "2026-05-25T00:00:00.000Z", {
+        runId: "pre_dispatch_VER-164",
+        issueId: "VER-164"
+      }),
+      event("pre_dispatch_VER-164:needs-input", "wait_started", "Planning/decomposition required", "2026-05-25T00:00:00.000Z", {
+        runId: "pre_dispatch_VER-164",
+        issueId: "VER-164",
+        parentSpanId: "pre_dispatch_VER-164:run",
+        status: "waiting",
+        timeClass: "human-wait"
+      }),
+      event("pre_dispatch_VER-164:human-action", "human_action_required", "Planning/decomposition required", "2026-05-25T00:00:00.000Z", {
+        runId: "pre_dispatch_VER-164",
+        issueId: "VER-164",
+        humanAction: {
+          reasonCode: "planning_required",
+          details: "likely-large scope needs planning or decomposition before implementation dispatch"
+        }
+      })
+    ]);
+
+    const snapshot = aggregator.snapshot({ serverNow: "2026-05-25T00:00:05.000Z" });
+
+    expect(snapshot.status).toBe("human_action");
+    expect(snapshot.run?.issue.id).toBe("VER-164");
+    expect(snapshot.run?.currentActivity).toMatchObject({
+      stage: "Preserve PR and validation metadata",
+      step: "Planning/decomposition required",
+      stepElapsedMs: 5000
+    });
+    expect(snapshot.run?.humanAction).toMatchObject({
+      required: true,
+      stoppedBecause: "likely-large scope needs planning or decomposition before implementation dispatch",
+      recommendedNextStep: "Add a bounded Active Scope or split follow-up issues, then return the issue to an active state."
+    });
+  });
+
   it.each([
     ["docs-only", ["docs/product/README.md"], "Manual test could not be inferred from docs-only changes.", "Docs accurately describe the implemented behavior."],
     ["workflow/config", ["WORKFLOW.md"], "Run the affected workflow/config check or inspect the policy path manually.", "Workflow/config behavior matches the intended policy."],

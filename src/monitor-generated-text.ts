@@ -156,6 +156,8 @@ function stoppedBecause(facts: HumanActionFacts): string {
     workflow_config_changed: "Stopped because workflow/config changes need human confirmation.",
     human_review: "Stopped for human review.",
     needs_input: "Stopped because human input is required.",
+    planning_required: "Stopped because planning or decomposition is required.",
+    recovery_needed: "Stopped because existing workspace work needs recovery.",
     blocked: "Stopped because the run is blocked.",
     capacity_wait: "Stopped because capacity is unavailable until a later retry.",
     unknown: "Stopped because the monitor does not have a specific reason code."
@@ -170,6 +172,8 @@ function youShould(reasonCode: MonitorHumanActionReasonCode, surface: MonitorCha
   if (surface === "docs") return "Review the docs diff and confirm the wording is correct.";
   if (reasonCode === "validation_failed") return "Inspect the failing validation output.";
   if (reasonCode === "review_findings") return "Resolve or explicitly accept the blocking review findings.";
+  if (reasonCode === "planning_required") return "Create or attach a bounded planning/decomposition artifact before continuing.";
+  if (reasonCode === "recovery_needed") return "Resume the existing workspace, preserve its changes, validate, then record recovery.";
   return "Review the latest run evidence before continuing.";
 }
 
@@ -199,6 +203,8 @@ function recommendedNextStep(reasonCode: MonitorHumanActionReasonCode): string {
     workflow_config_changed: "Confirm the workflow policy change, then rerun the affected validation.",
     human_review: "Record the supervisor decision and continue through the configured lifecycle.",
     needs_input: "Record the requested human input, then continue the run from the latest evidence.",
+    planning_required: "Add a bounded Active Scope or split follow-up issues, then return the issue to an active state.",
+    recovery_needed: "Commit or push the recovered workspace evidence, then run the documented recovery command.",
     blocked: "Clear the blocker or split follow-up work before continuing.",
     capacity_wait: "Wait for capacity to recover, then retry without changing source state.",
     unknown: "Decide the next action from validation, handoff, and PR evidence."
