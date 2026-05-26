@@ -22,7 +22,45 @@ if (args[0] === "auth" && args[1] === "status") {
 }
 
 if (args[0] === "pr" && args[1] === "view") {
-  console.log(JSON.stringify(state.view));
+  const target = args[2];
+  if (state.viewErrors?.[target]) {
+    console.error(state.viewErrors[target]);
+    process.exit(1);
+  }
+  if (state.viewError) {
+    console.error(state.viewError);
+    process.exit(1);
+  }
+  console.log(JSON.stringify(state.views?.[target] ?? state.view));
+  process.exit(0);
+}
+
+if (args[0] === "pr" && args[1] === "create") {
+  if (state.createError) {
+    console.error(state.createError);
+    process.exit(1);
+  }
+  const valueAfter = (name) => {
+    const index = args.indexOf(name);
+    return index >= 0 ? args[index + 1] : null;
+  };
+  const url = state.createUrl ?? "https://github.com/o/r/pull/99";
+  const headRefName = valueAfter("--head");
+  const baseRefName = valueAfter("--base");
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" });
+  const headRefOid = state.createHeadRefOid ?? (head.status === 0 ? head.stdout.trim() : null);
+  state.createdPrs = [...(state.createdPrs ?? []), { args: args.slice(2), url }];
+  state.view = state.afterCreateView ?? {
+    ...(state.view ?? {}),
+    url,
+    state: "OPEN",
+    isDraft: args.includes("--draft"),
+    baseRefName,
+    headRefName,
+    headRefOid
+  };
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  console.log(url);
   process.exit(0);
 }
 
