@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { AgentOsLauncherProcessManager, buildLauncherCommand, defaultLauncherConfigPath, defaultMonitorAppPath, installMacosMonitorApp, launcherEscalationSignal, launcherGracefulShutdownSignal, monitorElectronMain, parseLauncherConfig, type LauncherCommand } from "../src/index.js";
@@ -73,6 +73,10 @@ describe("AgentOS monitor launcher process manager", () => {
     await expect(readFile(join(appPath, "Contents", "Resources", "preload.cjs"), "utf8")).resolves.toContain("contextBridge.exposeInMainWorld");
     const executable = join(appPath, "Contents", "MacOS", "AgentOS Monitor");
     expect((await stat(executable)).mode & 0o111).toBeGreaterThan(0);
+    const executableText = await readFile(executable, "utf8");
+    expect(executableText).toContain(dirname(process.execPath));
+    expect(executableText).toContain('export PATH="$INSTALL_NODE_BIN:$PATH"');
+    expect(executableText).toContain('source "$HOME/.nvm/nvm.sh"');
     await rm(dir, { recursive: true, force: true });
   });
 

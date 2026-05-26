@@ -13,6 +13,7 @@ export type MonitorMacosInstallOptions = {
   configPath?: string;
   command?: string;
   homeDir?: string;
+  nodeBinPath?: string;
 };
 
 export type MonitorMacosInstallResult = {
@@ -47,7 +48,7 @@ export async function installMacosMonitorApp(options: MonitorMacosInstallOptions
   const configPath = resolve(options.configPath ?? defaultLauncherConfigPath(options.homeDir));
 
   await writeLauncherConfig(configPath, config);
-  await writeMonitorAppBundle(appPath, configPath);
+  await writeMonitorAppBundle(appPath, configPath, options.nodeBinPath);
 
   return { appPath, configPath, config, url: launcherUrl(config) };
 }
@@ -57,7 +58,7 @@ export async function writeLauncherConfig(path: string, config: LauncherConfig):
   await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
-export async function writeMonitorAppBundle(appPath: string, configPath = defaultLauncherConfigPath()): Promise<void> {
+export async function writeMonitorAppBundle(appPath: string, configPath = defaultLauncherConfigPath(), nodeBinPath = dirname(process.execPath)): Promise<void> {
   await removePath(appPath);
   const contents = join(appPath, "Contents");
   const macos = join(contents, "MacOS");
@@ -67,7 +68,7 @@ export async function writeMonitorAppBundle(appPath: string, configPath = defaul
 
   await writeFile(join(contents, "Info.plist"), monitorInfoPlist(), "utf8");
   await writeFile(join(contents, "PkgInfo"), "APPL????\n", "utf8");
-  await writeFile(join(macos, appName), monitorAppExecutable(configPath), "utf8");
+  await writeFile(join(macos, appName), monitorAppExecutable(configPath, nodeBinPath), "utf8");
   await chmod(join(macos, appName), 0o755);
   await writeFile(join(resources, "main.cjs"), monitorElectronMain(), "utf8");
   await writeFile(join(resources, "preload.cjs"), monitorElectronPreload(), "utf8");
@@ -101,8 +102,9 @@ export function monitorInfoPlist(): string {
 `;
 }
 
-export function monitorAppExecutable(configPath: string): string {
+export function monitorAppExecutable(configPath: string, nodeBinPath = dirname(process.execPath)): string {
   const safeConfigPath = configPath.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  const safeNodeBinPath = nodeBinPath.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
   return `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -110,6 +112,24 @@ APP_EXECUTABLE="$0"
 APP_CONTENTS="$(cd "$(dirname "$APP_EXECUTABLE")/.." && pwd)"
 RESOURCES="$APP_CONTENTS/Resources"
 CONFIG_PATH="\${AGENTOS_MONITOR_CONFIG:-${safeConfigPath}}"
+INSTALL_NODE_BIN="${safeNodeBinPath}"
+
+if [[ -n "$INSTALL_NODE_BIN" && -d "$INSTALL_NODE_BIN" ]]; then
+  export PATH="$INSTALL_NODE_BIN:$PATH"
+fi
+
+for candidate in /opt/homebrew/bin /usr/local/bin; do
+  if [[ -d "$candidate" ]]; then
+    export PATH="$candidate:$PATH"
+  fi
+done
+
+if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+  # Dock-launched apps do not load shell startup files, so nvm-provided node/npx
+  # are otherwise invisible.
+  # shellcheck disable=SC1090
+  source "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
+fi
 
 if [[ -n "\${AGENTOS_MONITOR_ELECTRON:-}" ]]; then
   exec "\${AGENTOS_MONITOR_ELECTRON}" "$RESOURCES/main.cjs" "$CONFIG_PATH"
