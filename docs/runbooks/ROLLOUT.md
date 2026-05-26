@@ -103,3 +103,30 @@ while applying global/per-project concurrency and project runner locks:
 bin/agent-os orchestrator run-registry --registry agent-os.yml --max-concurrency 2
 bin/agent-os status --registry
 ```
+
+## Monitor Modes
+
+Browser mode is enabled by launching the normal orchestrator with a monitor
+port, for example:
+
+```bash
+bin/agent-os orchestrator run --repo . --workflow WORKFLOW.md --port 4317
+open http://127.0.0.1:4317/
+```
+
+The browser surface is read-only. It serves the Lean Live Work Profiler and
+`/api/monitor/v1/*` snapshot, stream, and health routes, but it has no Start or
+Stop controls and does not manage the AgentOS process.
+
+Standalone Mac mode is installed with:
+
+```bash
+bin/agent-os monitor install-macos --repo . --workflow WORKFLOW.md --port 4317
+```
+
+Drag `~/Applications/AgentOS Monitor.app` into the Dock, or open it once and
+choose Options > Keep in Dock. If AgentOS is stopped, the app starts the
+configured local monitor command and Stop applies only to that launcher-owned
+child process. If AgentOS is already running externally on the configured
+health endpoint, the app attaches in read-only externally managed mode, disables
+Stop, and closing the window leaves the external process untouched.
