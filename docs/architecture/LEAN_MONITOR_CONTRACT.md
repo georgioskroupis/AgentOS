@@ -50,6 +50,29 @@ extension-owned `MonitorSink` implementation that combines monitor events and
 current run context into `MonitorSnapshot`; source-core modules must not import
 it.
 
+## Read-Only HTTP API
+
+The optional listener in `src/http-server.ts` exposes exactly these monitor API
+routes when a monitor port is configured:
+
+- `GET /api/monitor/v1/snapshot`
+- `GET /api/monitor/v1/stream`
+- `GET /api/monitor/v1/health`
+
+`/api/monitor/v1/snapshot` returns the current `MonitorSnapshot`.
+`/api/monitor/v1/stream` is an SSE stream that emits `monitor_snapshot` events
+after monitor state changes and `heartbeat` events while connected. Clients
+reconnect by refetching `/api/monitor/v1/snapshot`; the stream is not an event
+replay API.
+
+`/api/monitor/v1/health` stays tiny: `ok`, `status`, `serverNow`, and current
+run identity when a run is known. The API exposes snapshots only. It must not
+serve raw logs, raw monitor events, prompts, or mutation controls.
+
+All non-GET methods on the defined monitor API routes return `405`. Mutation
+routes such as `start`, `stop`, `restart`, and `refresh` are not part of the
+monitor API.
+
 ## Modes
 
 Browser mode reads an already-running monitor endpoint and renders the current
