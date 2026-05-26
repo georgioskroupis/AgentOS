@@ -558,7 +558,7 @@ export class Orchestrator {
       : null;
     if (recovery?.recoverable) {
       recovery = await publishCleanRecoveryBranchIfSafe({ issue, recovery, state, repoRoot: this.options.repoRoot, logger: this.logger });
-      if (await this.tryAutoRecoverPushedWork(issue, recovery, `${reason}; recovered clean pushed work`)) {
+      if (await this.tryAutoRecoverPushedWork(issue, recovery, `${reason}; recovered clean pushed work`, state?.activeRunId ?? state?.lastRunId ?? runId ?? null)) {
         if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; recovered clean pushed work`).catch(() => undefined);
         messages.push(`recovered clean pushed work for stale run ${issue.identifier}`);
         return { stale: true, terminal: false, retryRebuilt: false, messages };
@@ -799,7 +799,7 @@ export class Orchestrator {
     let recovery = await this.dispatchRecoveryDiagnostics(issue, state, scopeReport);
     if (recovery?.recoverable && (state ? isRecoverablePartialWorkState(state) : true)) {
       recovery = await publishCleanRecoveryBranchIfSafe({ issue, recovery, state, repoRoot: this.options.repoRoot, logger: this.logger });
-      if (await this.tryAutoRecoverPushedWork(issue, recovery, "dispatch recovery: clean pushed work was reconstructed before redispatch")) {
+      if (await this.tryAutoRecoverPushedWork(issue, recovery, "dispatch recovery: clean pushed work was reconstructed before redispatch", state?.activeRunId ?? state?.lastRunId ?? null)) {
         return true;
       }
       const message = `recoverable partial work found: ${recovery.reasons.join("; ")}`;
@@ -2665,13 +2665,14 @@ export class Orchestrator {
     });
   }
 
-  private async tryAutoRecoverPushedWork(issue: Issue, recovery: WorkspaceRecoveryDiagnostics, reason: string): Promise<boolean> {
+  private async tryAutoRecoverPushedWork(issue: Issue, recovery: WorkspaceRecoveryDiagnostics, reason: string, runId: string | null = null): Promise<boolean> {
     return autoRecoverPushedWork({
       issue,
       recovery,
       reason,
       repoRoot: this.options.repoRoot,
-      githubCommand: this.config.github.command,
+      config: this.config,
+      runId,
       logger: this.logger,
       markSucceeded: async (workspace, handoff, state) => {
         await this.markLinearSucceeded(issue, workspace, handoff, state);

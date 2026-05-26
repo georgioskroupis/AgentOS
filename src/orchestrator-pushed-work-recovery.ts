@@ -1,17 +1,22 @@
+import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { exists, readText } from "./fs-utils.js";
+import { readText, writeTextEnsuringDir } from "./fs-utils.js";
 import { GitHubClient, type PullRequestStatus } from "./github.js";
+import { extractOutcome, extractPullRequestRefs } from "./issue-state.js";
 import { inspectWorkspaceRecovery, publishCleanNoUpstreamRecoveryBranch, recordOperatorRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
+import { validationEvidencePath, verifyValidationEvidence, writeValidationEvidence, type ValidationCommandEvidence } from "./validation.js";
+import { validationReuseProfileForConfig } from "./validation-profile.js";
 import { workspaceKey } from "./workspace.js";
 import type { JsonlLogger } from "./logging.js";
-import type { Issue, IssueState, Workspace } from "./types.js";
+import type { Issue, IssueState, ServiceConfig, Workspace } from "./types.js";
 
 export interface AutoRecoverPushedWorkInput {
   issue: Issue;
   recovery: WorkspaceRecoveryDiagnostics;
   reason: string;
   repoRoot: string;
-  githubCommand: string;
+  config: ServiceConfig;
+  runId?: string | null;
   logger: JsonlLogger;
   markSucceeded: (workspace: Workspace, handoff: string | null, state: IssueState) => Promise<void>;
 }
@@ -59,29 +64,19 @@ export async function publishCleanRecoveryBranchIfSafe(input: PublishCleanRecove
 export async function autoRecoverPushedWork(input: AutoRecoverPushedWorkInput): Promise<boolean> {
   const { issue, recovery } = input;
   if (!recovery.exists || !recovery.branch || !recovery.headSha || !recovery.cleanPushedWork) return false;
+  if (recovery.branch !== `agent/${issue.identifier}`) return false;
 
   const repoRoot = resolve(input.repoRoot);
   const handoffPath = join(recovery.workspacePath, ".agent-os", `handoff-${issue.identifier}.md`);
-  const handoffExists = await exists(handoffPath);
-  const pullRequest = handoffExists ? null : await recoveryPullRequestForBranch(input.githubCommand, repoRoot, recovery).catch(() => null);
-  if (!handoffExists && !pullRequest?.url) return false;
-  if (pullRequest?.headSha && pullRequest.headSha.toLowerCase() !== recovery.headSha.toLowerCase()) {
-    await input.logger.write({
-      type: "pushed_work_recovery_skipped",
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      message: "pull request head did not match clean pushed branch head",
-      payload: { branch: recovery.branch, headSha: recovery.headSha, prUrl: pullRequest.url, prHeadSha: pullRequest.headSha }
-    });
-    return false;
-  }
+  const finalized = await finalizeCleanPushedWorkEvidence(input, handoffPath);
+  if (!finalized) return false;
 
   try {
     const result = await recordOperatorRecovery({
       repoRoot,
       issueIdentifier: issue.identifier,
       workspacePath: recovery.workspacePath,
-      syntheticHandoff: handoffExists ? undefined : { outcome: "implemented", pullRequestUrl: pullRequest?.url ?? null }
+      ...(input.runId ? { runId: input.runId } : {})
     });
     const handoff = await readText(resolve(repoRoot, result.handoffPath)).catch(() => null);
     await input.markSucceeded({ path: result.workspacePath, workspaceKey: workspaceKey(issue.identifier), createdNow: false }, handoff, result.state);
@@ -111,9 +106,210 @@ export async function autoRecoverPushedWork(input: AutoRecoverPushedWorkInput): 
   }
 }
 
+async function finalizeCleanPushedWorkEvidence(input: AutoRecoverPushedWorkInput, handoffPath: string): Promise<boolean> {
+  const { issue, recovery } = input;
+  const repoRoot = resolve(input.repoRoot);
+  const headSha = recovery.headSha;
+  if (!headSha || !recovery.branch) return false;
+
+  const handoffBefore = (await readText(handoffPath).catch(() => null)) ?? null;
+  const handoffPrs = handoffBefore ? extractPullRequestRefs(handoffBefore) : [];
+  if (handoffPrs.length > 1) {
+    await logPushedWorkRecoverySkipped(input, "handoff pull request evidence is ambiguous", { prs: handoffPrs });
+    return false;
+  }
+
+  const handoffPrUrl = handoffPrs[0]?.url ?? null;
+  const pullRequest = handoffPrUrl ? await recoveryPullRequestFromHandoff(input, handoffPrUrl) : await recoveryPullRequestForBranch(input.config.github.command, repoRoot, recovery).catch(() => null);
+  if (handoffPrUrl && !pullRequest) return false;
+  if (pullRequest && !pullRequestHeadMatches(pullRequest, headSha)) {
+    await logPushedWorkRecoverySkipped(input, "pull request head did not match clean pushed branch head", {
+      branch: recovery.branch,
+      headSha,
+      prUrl: pullRequest.url,
+      prHeadSha: pullRequest.headSha
+    });
+    return false;
+  }
+
+  const prUrl = pullRequest?.url ?? (await createRecoveryPullRequest(input, handoffPath).catch(async (error: Error) => {
+    await logPushedWorkRecoverySkipped(input, `pull request creation failed: ${error.message}`, { branch: recovery.branch, headSha });
+    return null;
+  }));
+  if (!prUrl) return false;
+
+  const createdPullRequest = pullRequest ? pullRequest : await verifiedRecoveryPullRequest(input, prUrl).catch(() => null);
+  if (createdPullRequest && !pullRequestHeadMatches(createdPullRequest, headSha)) {
+    await logPushedWorkRecoverySkipped(input, "created pull request head did not match clean pushed branch head", {
+      branch: recovery.branch,
+      headSha,
+      prUrl,
+      prHeadSha: createdPullRequest.headSha
+    });
+    return false;
+  }
+
+  await repairRecoveryHandoff(handoffPath, issue.identifier, prUrl);
+  const handoff = await readText(handoffPath);
+  const validation = await verifyValidationEvidence({
+    issue,
+    handoff,
+    workspacePath: recovery.workspacePath,
+    ...(input.runId ? { runId: input.runId } : {}),
+    allowReusableRunEvidence: true,
+    validationBudget: input.config.validationBudget,
+    reuseProfile: validationReuseProfileForConfig(input.config)
+  });
+  if (validation.state.status === "passed") return true;
+
+  const rerun = await runRecoveryValidation(input.config.validationBudget.fullValidationCommand, recovery.workspacePath);
+  const refreshed = await inspectWorkspaceRecovery(repoRoot, {
+    issueIdentifier: issue.identifier,
+    workspacePath: recovery.workspacePath,
+    headSha
+  }).catch(() => null);
+  if (!refreshed?.cleanPushedWork || refreshed.headSha?.toLowerCase() !== headSha.toLowerCase()) {
+    await logPushedWorkRecoverySkipped(input, "validation changed the recovery workspace head or branch state", {
+      beforeHeadSha: headSha,
+      afterHeadSha: refreshed?.headSha ?? null,
+      reasons: refreshed?.reasons ?? []
+    });
+    return false;
+  }
+
+  const validationPath = resolve(recovery.workspacePath, validationEvidencePath(handoff) ?? `.agent-os/validation/${issue.identifier}.json`);
+  if (!validationPath.startsWith(resolve(recovery.workspacePath))) {
+    await logPushedWorkRecoverySkipped(input, "validation evidence path escapes recovery workspace", { validationPath });
+    return false;
+  }
+  await writeValidationEvidence(validationPath, {
+    schemaVersion: 1,
+    issueIdentifier: issue.identifier,
+    runId: input.runId ?? `recovery_${issue.identifier}`,
+    repoHead: headSha,
+    reuseProfile: validationReuseProfileForConfig(input.config),
+    status: rerun.exitCode === 0 ? "passed" : "failed",
+    finalResult: {
+      status: rerun.exitCode === 0 ? "passed" : "failed",
+      command: input.config.validationBudget.fullValidationCommand,
+      exitCode: rerun.exitCode,
+      startedAt: rerun.startedAt,
+      finishedAt: rerun.finishedAt
+    },
+    commands: [rerun]
+  });
+  if (rerun.exitCode !== 0) {
+    await logPushedWorkRecoverySkipped(input, "validation command failed for clean pushed recovery finalization", {
+      command: input.config.validationBudget.fullValidationCommand,
+      exitCode: rerun.exitCode
+    });
+    return false;
+  }
+  return true;
+}
+
 async function recoveryPullRequestForBranch(githubCommand: string, repoRoot: string, recovery: WorkspaceRecoveryDiagnostics): Promise<PullRequestStatus | null> {
   if (!recovery.branch) return null;
   const github = new GitHubClient(githubCommand);
   const pr = await github.getPullRequest(recovery.branch, repoRoot);
   return pr.state && pr.state.toUpperCase() !== "CLOSED" ? pr : null;
+}
+
+async function verifiedRecoveryPullRequest(input: AutoRecoverPushedWorkInput, url: string): Promise<PullRequestStatus | null> {
+  const pr = await new GitHubClient(input.config.github.command).getPullRequest(url, resolve(input.repoRoot));
+  return pr.state && pr.state.toUpperCase() !== "CLOSED" ? pr : null;
+}
+
+async function recoveryPullRequestFromHandoff(input: AutoRecoverPushedWorkInput, url: string): Promise<PullRequestStatus | null> {
+  try {
+    return await verifiedRecoveryPullRequest(input, url);
+  } catch (error) {
+    await logPushedWorkRecoverySkipped(input, "handoff pull request could not be verified", {
+      prUrl: url,
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
+
+function pullRequestHeadMatches(pullRequest: PullRequestStatus, expectedHeadSha: string): boolean {
+  return Boolean(pullRequest.headSha && pullRequest.headSha.toLowerCase() === expectedHeadSha.toLowerCase());
+}
+
+async function createRecoveryPullRequest(input: AutoRecoverPushedWorkInput, handoffPath: string): Promise<string | null> {
+  const { issue, recovery } = input;
+  if (!recovery.branch) return null;
+  const bodyPath = join(recovery.workspacePath, ".agent-os", `recovery-pr-${issue.identifier}.md`);
+  await writeTextEnsuringDir(
+    bodyPath,
+    [
+      `Recovery finalization for ${issue.identifier}.`,
+      "",
+      "AgentOS reconstructed this pull request from a clean pushed branch after Codex App Server closed before durable handoff evidence was complete.",
+      "",
+      `Handoff: ${handoffPath}`
+    ].join("\n")
+  );
+  const raw = await runShell(
+    `${input.config.github.command} pr create --title ${shellQuote(`${issue.identifier}: ${issue.title}`)} --body-file ${shellQuote(bodyPath)} --base ${shellQuote(input.config.github.baseBranch)} --head ${shellQuote(recovery.branch)} --draft`,
+    recovery.workspacePath
+  );
+  return raw.match(/https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+/)?.[0] ?? raw.trim().split(/\r?\n/).find((line) => line.trim())?.trim() ?? null;
+}
+
+async function repairRecoveryHandoff(handoffPath: string, issueIdentifier: string, pullRequestUrl: string): Promise<void> {
+  const existing = (await readText(handoffPath).catch(() => "")) ?? "";
+  const lines: string[] = [];
+  if (!extractOutcome(existing)) lines.push("AgentOS-Outcome: implemented");
+  lines.push(...existing.trimEnd().split(/\r?\n/).filter((line) => line.length > 0));
+  if (!validationEvidencePath(lines.join("\n"))) lines.push(`Validation-JSON: .agent-os/validation/${issueIdentifier}.json`);
+  if (extractPullRequestRefs(lines.join("\n")).length === 0) lines.push(`Primary PR: ${pullRequestUrl}`);
+  if (!lines.some((line) => /^Recovery-Summary:/i.test(line))) {
+    lines.push("Recovery-Summary: reconstructed after Codex app-server/session closure from a clean pushed branch and validation evidence.");
+  }
+  await writeTextEnsuringDir(handoffPath, `${lines.join("\n")}\n`);
+}
+
+async function runRecoveryValidation(command: string, cwd: string): Promise<ValidationCommandEvidence> {
+  const startedAt = new Date().toISOString();
+  const exitCode = await runShellExitCode(command, cwd);
+  const finishedAt = new Date().toISOString();
+  return { name: command, exitCode, startedAt, finishedAt };
+}
+
+function runShellExitCode(command: string, cwd: string): Promise<number> {
+  return new Promise((resolveExitCode) => {
+    const child = spawn("bash", ["-lc", command], { cwd, stdio: ["ignore", "ignore", "ignore"] });
+    child.on("error", () => resolveExitCode(1));
+    child.on("close", (code) => resolveExitCode(code ?? 1));
+  });
+}
+
+function runShell(command: string, cwd: string): Promise<string> {
+  return new Promise((resolveOutput, reject) => {
+    const child = spawn("bash", ["-lc", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolveOutput(stdout.trim());
+      else reject(new Error(stderr.trim() || `command_failed: ${command}`));
+    });
+  });
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+async function logPushedWorkRecoverySkipped(input: AutoRecoverPushedWorkInput, message: string, payload: Record<string, unknown>): Promise<void> {
+  await input.logger.write({
+    type: "pushed_work_recovery_skipped",
+    issueId: input.issue.id,
+    issueIdentifier: input.issue.identifier,
+    message,
+    payload
+  });
 }
