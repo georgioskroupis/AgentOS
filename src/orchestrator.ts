@@ -32,6 +32,7 @@ import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
 import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
 import { markDraftPullRequestReadyIfConfigured } from "./orchestrator-pr-ready.js";
+import { moveIssueToRunningState } from "./orchestrator-run-start-state-sync.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
@@ -2550,7 +2551,7 @@ export class Orchestrator {
   }
 
   private async markLinearStarted(issue: Issue, workspace: Workspace, attempt: number | null): Promise<boolean> {
-    const moveResult = await this.moveIssue(issue, this.config.tracker.runningState);
+    const moveResult = await moveIssueToRunningState({ config: this.config, lifecycleController: this.lifecycleController, issue, moveIssue: (targetIssue, stateName) => this.moveIssue(targetIssue, stateName) });
     if (moveResult === "blocked") return false;
     await this.commentIssue(issue, runStartedCommentBody(workspace, displayAttempt(attempt)), "run_started");
     return true;

@@ -332,6 +332,7 @@ function checkNoHiddenLifecyclePolicy() {
     "src/orchestrator-workspace-bootstrap.ts",
     "src/orchestrator-lifecycle-comments.ts",
     "src/orchestrator-recovery-actions.ts",
+    "src/orchestrator-run-start-state-sync.ts",
     "src/orchestrator-state-drift.ts",
     "src/orchestrator-terminal.ts",
     "src/run-artifact-names.ts",

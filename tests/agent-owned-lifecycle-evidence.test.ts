@@ -293,7 +293,7 @@ describe("agent-owned lifecycle evidence", () => {
     const evidence = JSON.parse(await readFile(join(repo, ".agent-os", "runs", summary.runId, "agent-owned-lifecycle-evidence.json"), "utf8"));
     expect(evidence.status).toBe("passed");
     expect(tracker.schedulerComments).toEqual([]);
-    expect(tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+    expect(tracker.moveCalls).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
 
     const second = await new Orchestrator({
       repoRoot: repo,
@@ -309,7 +309,7 @@ describe("agent-owned lifecycle evidence", () => {
     }).runOnce(true);
     expect(second.dispatched).toBe(0);
     expect(tracker.schedulerComments).toEqual([]);
-    expect(tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+    expect(tracker.moveCalls).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
   });
 
   it("marks missing agent-owned evidence human-required without duplicating lifecycle writes and remains stable after restart", async () => {
@@ -339,8 +339,13 @@ describe("agent-owned lifecycle evidence", () => {
     expect(summary.status).toBe("failed");
     expect(summary.error).toContain("agent_owned_lifecycle_missing_evidence");
     expect(tracker.schedulerComments).toEqual([]);
-    expect(tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
-    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual([]);
+    expect(tracker.moveCalls).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual([
+      expect.objectContaining({
+        message: "run_started_state_sync:move:applied",
+        payload: expect.objectContaining({ requestedState: "In Progress" })
+      })
+    ]);
   });
 
   it("keeps start-only partial evidence human-required and stable after restart", async () => {
@@ -644,7 +649,7 @@ async function expectMissingEvidenceAfterRestart(input: { repo: string; workflow
   expect(summary.status).toBe("failed");
   expect(summary.error).toContain("agent_owned_lifecycle_missing_evidence");
   expect(input.tracker.schedulerComments).toEqual([]);
-  expect(input.tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+  expect(input.tracker.moveCalls).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
 
   const second = await new Orchestrator({
     repoRoot: input.repo,
@@ -660,7 +665,7 @@ async function expectMissingEvidenceAfterRestart(input: { repo: string; workflow
   }).runOnce(true);
   expect(second.dispatched).toBe(0);
   expect(input.tracker.schedulerComments).toEqual([]);
-  expect(input.tracker.moveCalls).toEqual(["AG-1 -> Human Review"]);
+  expect(input.tracker.moveCalls).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
 }
 
 async function writePassingHandoff(workspacePath: string, issueIdentifier: string, prompt: string, body: string): Promise<void> {
