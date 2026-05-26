@@ -125,7 +125,7 @@ function monitorStatus(event: AgentEvent, kind: MonitorEventKind): MonitorEventS
 
 function monitorTimeClass(event: AgentEvent, kind: MonitorEventKind): MonitorTimeClass | undefined {
   const phase = timingPhase(event);
-  if (kind === "model_started" || kind === "model_finished") return "tool";
+  if (kind === "model_started" || kind === "model_finished") return "agent";
   if (kind === "validation_started" || kind === "validation_finished") return "validation";
   if (kind === "wait_started" || kind === "wait_finished") return phase === "human-wait" || phase === "needs-input" ? "human-wait" : "external-wait";
   if (phase === "implementation" || phase === "automated-review" || phase === "fixer-turn") return "agent";

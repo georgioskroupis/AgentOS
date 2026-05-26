@@ -52,6 +52,14 @@ describe("monitor emitter", () => {
       payload: { role: "implementation", model: "gpt-5.5", attempt: 1, status: "succeeded" }
     });
     await emitter.emit("run-1", {
+      type: "review_model_finished",
+      issueId: "AG-1",
+      issueIdentifier: "AG-1",
+      message: "tests review model finished",
+      timestamp: "2026-05-25T00:00:04.000Z",
+      payload: { role: "tests-review", model: "gpt-5.5-mini", reviewer: "tests", attempt: 1, status: "succeeded" }
+    });
+    await emitter.emit("run-1", {
       type: "validation_command_finished",
       issueId: "AG-1",
       issueIdentifier: "AG-1",
@@ -75,6 +83,7 @@ describe("monitor emitter", () => {
       "step_started",
       "model_started",
       "model_finished",
+      "model_finished",
       "validation_finished",
       "wait_started"
     ]);
@@ -85,7 +94,11 @@ describe("monitor emitter", () => {
     });
     expect(emitted.find((event) => event.kind === "model_started")).toMatchObject({
       model: { name: "gpt-5.5", role: "implementation" },
-      timeClass: "tool"
+      timeClass: "agent"
+    });
+    expect(emitted.find((event) => event.label === "review model finished")).toMatchObject({
+      model: { name: "gpt-5.5-mini", role: "review" },
+      timeClass: "agent"
     });
     expect(emitted.find((event) => event.kind === "validation_finished")).toMatchObject({
       status: "failed",

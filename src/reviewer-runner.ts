@@ -66,7 +66,7 @@ export async function runReviewerWithArtifactRetry(input: {
         issueId: input.issue.id,
         issueIdentifier: input.issue.identifier,
         message: `${input.reviewer} review model finished`,
-        payload: { ...result.modelTelemetry, attempt: reviewerAttempt, status: result.status }
+        payload: { ...result.modelTelemetry, role: reviewerRole(input.reviewer), reviewer: input.reviewer, attempt: reviewerAttempt, status: result.status }
       });
     }
     const terminalRunnerFailure = nonMechanicalRunnerFailure(input, result, reviewerAttempt, maxAttempts);

@@ -1332,8 +1332,8 @@ export class Orchestrator {
         throw error;
       }
       await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result, role: "implementation", attempt: turnNumber });
-      await this.finishRunPhase(runId, issue, implementationTiming, timingStatusForRunResult(result), { turnNumber, resultStatus: result.status });
       await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: implementationTiming, label: `implementation turn ${turnNumber}`, current: turnNumber, result, max: this.config.agent.maxTurns });
+      await this.finishRunPhase(runId, issue, implementationTiming, timingStatusForRunResult(result), { turnNumber, resultStatus: result.status });
       if (result.status !== "succeeded") return result;
       if (await readHandoff(workspace.path, issue.identifier)) return result;
 
@@ -1990,8 +1990,8 @@ export class Orchestrator {
         throw error;
       }
       if (runId) await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result: fixResult, role: fixContextKind, attempt: iteration });
-      if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, timingStatusForRunResult(fixResult), { iteration, resultStatus: fixResult.status });
       if (runId && fixTiming) await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: fixTiming, label: `fixer turn ${iteration}`, current: iteration, result: fixResult, max: this.config.review.maxIterations });
+      if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, timingStatusForRunResult(fixResult), { iteration, resultStatus: fixResult.status });
       reviewTokenTotal += fixResult.totalTokens ?? 0;
       if (fixResult.status !== "succeeded") {
         latestState = await this.recordIssueState(issue, {
