@@ -11107,6 +11107,85 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "pushed_work_recovery_skipped" && entry.message?.includes("pull request head did not match"))).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("pauses clean pushed finalization when handoff pull request cannot be verified", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-pr-unreadable-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const { workspacePath } = await createCleanPushedIssueWorkspace(repo);
+    await mkdir(join(workspacePath, ".agent-os"), { recursive: true });
+    await writeFile(
+      join(workspacePath, ".agent-os", "handoff-AG-1.md"),
+      [
+        "AgentOS-Outcome: implemented",
+        "Validation-JSON: .agent-os/validation/AG-1.json",
+        "Primary PR: https://github.com/o/r/pull/79"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        viewErrors: { "https://github.com/o/r/pull/79": "api unavailable" },
+        createUrl: "https://github.com/o/r/pull/80"
+      }),
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "implementation_failure",
+      lastError: "codex_app_server_closed: exit 0",
+      workspacePath,
+      updatedAt: "2026-05-21T10:00:00.000Z"
+    });
+    const comments: string[] = [];
+    const moves: string[] = [];
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: {
+        async fetchCandidates() {
+          return [readyIssue];
+        },
+        async fetchIssueStates() {
+          return new Map([[readyIssue.id, readyIssue]]);
+        },
+        async comment(_issue, body) {
+          comments.push(body);
+        },
+        async move(issue, state) {
+          moves.push(`${issue} -> ${state}`);
+        }
+      },
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("AgentOS recovery needed");
+    const ghFinal = JSON.parse(await readFile(ghState, "utf8"));
+    expect(ghFinal.createdPrs).toBeUndefined();
+    const logs = await new JsonlLogger(repo).tail(20);
+    expect(logs.some((entry) => entry.type === "pushed_work_recovery_skipped" && entry.message === "handoff pull request could not be verified")).toBe(true);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("does not treat a clean no-upstream branch at the base commit as recoverable partial work", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-no-upstream-"));
     const workflowPath = join(repo, "WORKFLOW.md");

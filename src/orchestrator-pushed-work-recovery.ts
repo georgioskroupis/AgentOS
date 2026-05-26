@@ -119,9 +119,9 @@ async function finalizeCleanPushedWorkEvidence(input: AutoRecoverPushedWorkInput
     return false;
   }
 
-  const pullRequest = handoffPrs[0]?.url
-    ? await verifiedRecoveryPullRequest(input, handoffPrs[0].url)
-    : await recoveryPullRequestForBranch(input.config.github.command, repoRoot, recovery).catch(() => null);
+  const handoffPrUrl = handoffPrs[0]?.url ?? null;
+  const pullRequest = handoffPrUrl ? await recoveryPullRequestFromHandoff(input, handoffPrUrl) : await recoveryPullRequestForBranch(input.config.github.command, repoRoot, recovery).catch(() => null);
+  if (handoffPrUrl && !pullRequest) return false;
   if (pullRequest && !pullRequestHeadMatches(pullRequest, headSha)) {
     await logPushedWorkRecoverySkipped(input, "pull request head did not match clean pushed branch head", {
       branch: recovery.branch,
@@ -218,6 +218,18 @@ async function recoveryPullRequestForBranch(githubCommand: string, repoRoot: str
 async function verifiedRecoveryPullRequest(input: AutoRecoverPushedWorkInput, url: string): Promise<PullRequestStatus | null> {
   const pr = await new GitHubClient(input.config.github.command).getPullRequest(url, resolve(input.repoRoot));
   return pr.state && pr.state.toUpperCase() !== "CLOSED" ? pr : null;
+}
+
+async function recoveryPullRequestFromHandoff(input: AutoRecoverPushedWorkInput, url: string): Promise<PullRequestStatus | null> {
+  try {
+    return await verifiedRecoveryPullRequest(input, url);
+  } catch (error) {
+    await logPushedWorkRecoverySkipped(input, "handoff pull request could not be verified", {
+      prUrl: url,
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
 }
 
 function pullRequestHeadMatches(pullRequest: PullRequestStatus, expectedHeadSha: string): boolean {
