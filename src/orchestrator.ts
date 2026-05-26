@@ -31,6 +31,8 @@ import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
 import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
 import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
+import { emitPreDispatchMonitorPause } from "./orchestrator-pre-dispatch-monitor.js";
+import { markLinearPlanningRecommended } from "./orchestrator-planning-guardrail.js";
 import { markDraftPullRequestReadyIfConfigured } from "./orchestrator-pr-ready.js";
 import { moveIssueToRunningState } from "./orchestrator-run-start-state-sync.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
@@ -38,7 +40,6 @@ import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrato
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
-import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
 import { autoRecoverPushedWork, publishCleanRecoveryBranchIfSafe } from "./orchestrator-pushed-work-recovery.js";
 import { isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
@@ -815,13 +816,28 @@ export class Orchestrator {
         message,
         payload: recovery
       });
+      await emitPreDispatchMonitorPause({
+        monitorEmitter: this.monitorEmitter,
+        issue,
+        label: "Workspace recovery needed",
+        message,
+        reasonCode: "recovery_needed"
+      });
       return true;
     }
 
     if (!allowImplementationContinuation && scopeReport?.dispatchAdvice.shouldBlock) {
       const message = scopeReport.dispatchAdvice.reason ?? "pre-dispatch scope guardrail blocked implementation dispatch";
       if (scopeReport.likelyLarge || scopeReport.evidence.planningReentry.status === "missing") {
-        await this.markLinearPlanningRecommended(issue, scopeReport);
+        await markLinearPlanningRecommended({
+          issue,
+          report: scopeReport,
+          config: this.config,
+          lifecycleController: this.lifecycleController,
+          monitorEmitter: this.monitorEmitter,
+          recordDispatchGuardrailStop: (targetIssue, stopMessage, patch) => this.recordDispatchGuardrailStop(targetIssue, stopMessage, patch),
+          writePhaseTimingEvent: (targetIssue, event) => this.writePhaseTimingEvent(targetIssue, event)
+        });
       } else {
         await this.recordDispatchGuardrailStop(issue, message, {
           phase: "needs-input",
@@ -890,31 +906,6 @@ export class Orchestrator {
       await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "pre_dispatch_safety_block" });
       return false;
     }
-  }
-
-  private async markLinearPlanningRecommended(issue: Issue, report: PreDispatchScopeReport): Promise<void> {
-    const message = report.dispatchAdvice.reason ?? "likely-large scope needs planning or decomposition before implementation dispatch";
-    await this.recordDispatchGuardrailStop(issue, message, {
-      phase: "needs-input",
-      lifecycleStatus: "planning_required",
-      lastError: message,
-      errorCategory: "prompt",
-      stopReason: message,
-      scopeReport: scopeReportStateFromReport(report)
-    });
-    await schedulerSafetyCommentIssue({ controller: this.lifecycleController, issue, body: planningRecommendedCommentBody(report), key: "planning_recommended", safetyReason: "pre_dispatch_safety_block" });
-    await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.needsInputState, safetyReason: "pre_dispatch_safety_block" });
-    await this.writePhaseTimingEvent(issue, {
-      phase: "needs-input",
-      status: "waiting",
-      label: "planning/decomposition pause started",
-      metadata: {
-        needsInputState: this.config.tracker.needsInputState,
-        reason: message,
-        scopeSize: report.scopeSize,
-        likelyLarge: report.likelyLarge
-      }
-    });
   }
 
   private async preTurnCheck(issue: Issue): Promise<string | null> {

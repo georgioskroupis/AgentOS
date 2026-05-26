@@ -11,6 +11,8 @@ export type MonitorHumanActionReasonCode =
   | "workflow_config_changed"
   | "human_review"
   | "needs_input"
+  | "planning_required"
+  | "recovery_needed"
   | "blocked"
   | "capacity_wait"
   | "unknown";

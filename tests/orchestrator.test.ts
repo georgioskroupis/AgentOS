@@ -227,6 +227,7 @@ describe("orchestrator", () => {
     );
     const comments: string[] = [];
     let runnerCalled = false;
+    const monitorEvents: MonitorEvent[] = [];
 
     await new Orchestrator({
       repoRoot: repo,
@@ -247,6 +248,11 @@ describe("orchestrator", () => {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
           return { status: "succeeded" };
+        }
+      },
+      monitorSink: {
+        emit(event) {
+          monitorEvents.push(event);
         }
       },
       logger: new JsonlLogger(repo),
@@ -353,6 +359,7 @@ describe("orchestrator", () => {
     let runnerCalled = false;
     const moves: string[] = [];
     const comments: string[] = [];
+    const monitorEvents: MonitorEvent[] = [];
     const logger = new JsonlLogger(repo);
 
     const result = await new Orchestrator({
@@ -364,6 +371,11 @@ describe("orchestrator", () => {
           runnerCalled = true;
           await writePassingHandoff(input.workspace.path, broadIssue.identifier, input.prompt, "AgentOS-Outcome: already-satisfied");
           return { status: "succeeded" };
+        }
+      },
+      monitorSink: {
+        emit(event) {
+          monitorEvents.push(event);
         }
       },
       logger,
@@ -389,6 +401,27 @@ describe("orchestrator", () => {
       lifecycleStatus: "planning_required",
       stopReason: "likely-large scope needs planning or decomposition before implementation dispatch"
     });
+    const monitorRun = monitorEvents.find((event) => event.kind === "run_started" && event.runId.startsWith("pre_dispatch_AG-1_"));
+    expect(monitorRun).toMatchObject({ issueId: "AG-1", label: broadIssue.title });
+    expect(monitorEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: monitorRun?.runId,
+          kind: "wait_started",
+          label: "Planning/decomposition required",
+          status: "waiting",
+          timeClass: "human-wait"
+        }),
+        expect.objectContaining({
+          runId: monitorRun?.runId,
+          kind: "human_action_required",
+          humanAction: expect.objectContaining({
+            reasonCode: "planning_required",
+            details: expect.stringContaining("likely-large scope needs planning")
+          })
+        })
+      ])
+    );
     expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ message: "pre_dispatch_safety_block:comment:applied", payload: expect.objectContaining({ reason: "pre_dispatch_safety_block" }) }),
@@ -10776,6 +10809,7 @@ describe("orchestrator", () => {
       }
     };
     let runnerCalled = false;
+    const monitorEvents: MonitorEvent[] = [];
 
     const result = await new Orchestrator({
       repoRoot: repo,
@@ -10785,6 +10819,11 @@ describe("orchestrator", () => {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
           return { status: "succeeded" };
+        }
+      },
+      monitorSink: {
+        emit(event) {
+          monitorEvents.push(event);
         }
       },
       logger: new JsonlLogger(repo),
@@ -10797,6 +10836,27 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).toContain("recoverable partial work");
     expect(comments.join("\n")).toContain("workspace has uncommitted changes");
     expect(comments.join("\n")).toContain(`resume ${workspacePath}`);
+    const monitorRun = monitorEvents.find((event) => event.kind === "run_started" && event.runId.startsWith("pre_dispatch_AG-1_"));
+    expect(monitorRun).toBeDefined();
+    expect(monitorEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: monitorRun?.runId,
+          kind: "wait_started",
+          label: "Workspace recovery needed",
+          status: "waiting",
+          timeClass: "human-wait"
+        }),
+        expect.objectContaining({
+          runId: monitorRun?.runId,
+          kind: "human_action_required",
+          humanAction: expect.objectContaining({
+            reasonCode: "recovery_needed",
+            details: expect.stringContaining("recoverable partial work")
+          })
+        })
+      ])
+    );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("surfaces dirty active workspace recovery in Linear even when local state is not already paused", async () => {
