@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { exists, readText } from "./fs-utils.js";
 import { GitHubClient, type PullRequestStatus } from "./github.js";
-import { recordOperatorRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
+import { inspectWorkspaceRecovery, publishCleanNoUpstreamRecoveryBranch, recordOperatorRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { workspaceKey } from "./workspace.js";
 import type { JsonlLogger } from "./logging.js";
 import type { Issue, IssueState, Workspace } from "./types.js";
@@ -14,6 +14,46 @@ export interface AutoRecoverPushedWorkInput {
   githubCommand: string;
   logger: JsonlLogger;
   markSucceeded: (workspace: Workspace, handoff: string | null, state: IssueState) => Promise<void>;
+}
+
+export interface PublishCleanRecoveryBranchInput {
+  issue: Issue;
+  recovery: WorkspaceRecoveryDiagnostics;
+  state?: IssueState | null;
+  repoRoot: string;
+  logger: JsonlLogger;
+}
+
+export async function publishCleanRecoveryBranchIfSafe(input: PublishCleanRecoveryBranchInput): Promise<WorkspaceRecoveryDiagnostics> {
+  const { issue, recovery } = input;
+  if (!recovery.cleanUnpushedWork) return recovery;
+  try {
+    const pushed = await publishCleanNoUpstreamRecoveryBranch(issue.identifier, recovery);
+    if (!pushed) return recovery;
+    const refreshed = await inspectWorkspaceRecovery(resolve(input.repoRoot), {
+      issueIdentifier: issue.identifier,
+      workspacePath: recovery.workspacePath,
+      headSha: input.state?.headSha ?? null,
+      validation: input.state?.validation
+    }).catch(() => null);
+    await input.logger.write({
+      type: "recovery_branch_pushed",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: "published clean local recovery branch before recovery reconciliation",
+      payload: { branch: recovery.branch, headSha: recovery.headSha, workspacePath: recovery.workspacePath }
+    });
+    return refreshed ?? recovery;
+  } catch (error) {
+    await input.logger.write({
+      type: "recovery_branch_push_failed",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: error instanceof Error ? error.message : String(error),
+      payload: { branch: recovery.branch, headSha: recovery.headSha, workspacePath: recovery.workspacePath }
+    });
+    return recovery;
+  }
 }
 
 export async function autoRecoverPushedWork(input: AutoRecoverPushedWorkInput): Promise<boolean> {

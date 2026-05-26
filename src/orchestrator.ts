@@ -38,7 +38,7 @@ import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
 import { planningRecommendedCommentBody } from "./orchestrator-planning-comments.js";
-import { autoRecoverPushedWork } from "./orchestrator-pushed-work-recovery.js";
+import { autoRecoverPushedWork, publishCleanRecoveryBranchIfSafe } from "./orchestrator-pushed-work-recovery.js";
 import { isRecoverablePartialWorkState, isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { schedulerSafetyCommentIssue, schedulerSafetyMoveIssue } from "./orchestrator-scheduler-safety.js";
@@ -548,7 +548,7 @@ export class Orchestrator {
       messages.push(`marked stale run for ${issue.identifier}: workspace is missing`);
     }
 
-    const recovery = workspacePath
+    let recovery = workspacePath
       ? await inspectWorkspaceRecovery(resolve(this.options.repoRoot), {
           issueIdentifier: issue.identifier,
           workspacePath,
@@ -557,6 +557,7 @@ export class Orchestrator {
         }).catch(() => null)
       : null;
     if (recovery?.recoverable) {
+      recovery = await publishCleanRecoveryBranchIfSafe({ issue, recovery, state, repoRoot: this.options.repoRoot, logger: this.logger });
       if (await this.tryAutoRecoverPushedWork(issue, recovery, `${reason}; recovered clean pushed work`)) {
         if (runId) await this.runArtifacts.markRunCanceled(runId, `${reason}; recovered clean pushed work`).catch(() => undefined);
         messages.push(`recovered clean pushed work for stale run ${issue.identifier}`);
@@ -795,8 +796,9 @@ export class Orchestrator {
       return true;
     }
 
-    const recovery = await this.dispatchRecoveryDiagnostics(issue, state, scopeReport);
+    let recovery = await this.dispatchRecoveryDiagnostics(issue, state, scopeReport);
     if (recovery?.recoverable && (state ? isRecoverablePartialWorkState(state) : true)) {
+      recovery = await publishCleanRecoveryBranchIfSafe({ issue, recovery, state, repoRoot: this.options.repoRoot, logger: this.logger });
       if (await this.tryAutoRecoverPushedWork(issue, recovery, "dispatch recovery: clean pushed work was reconstructed before redispatch")) {
         return true;
       }

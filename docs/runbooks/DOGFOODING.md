@@ -116,10 +116,13 @@ Before returning a stalled or exhausted issue to an active state, inspect it:
 bin/agent-os inspect <issue> --repo .
 ```
 
-If the output reports recoverable partial work, resume the existing workspace,
-preserve the dirty or unpushed branch, rerun validation, and commit/push before
-updating the handoff or PR. Do not start a duplicate implementation until the
-existing workspace and PR state have been reconciled.
+If the output reports recoverable partial work, resume the existing workspace
+and preserve the dirty worktree or branch state. AgentOS automatically publishes
+a clean `agent/<issue>` branch that has committed work but no upstream before it
+tries pushed-work recovery; dirty workspaces, detached branches, diverged
+branches, or branches that do not match the issue still require operator
+reconciliation. Do not start a duplicate implementation until the existing
+workspace and PR state have been reconciled.
 
 ## Dirty Source Worktree Recovery
 
@@ -146,7 +149,7 @@ When the recovered branch is clean and pushed, record the recovery locally:
 bin/agent-os recovery record <issue> --repo .
 ```
 
-The command refuses dirty, missing, detached, unpushed, or ambiguous worktree
+The command refuses dirty, missing, detached, diverged, or ambiguous worktree
 evidence and records the branch, handoff, validation, and proof artifacts so the
 old failure remains historical in `status` and `inspect`.
 
