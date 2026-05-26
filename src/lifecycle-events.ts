@@ -20,6 +20,7 @@ export const schedulerSafetyWriteReasons = [
   "bootstrap_failed_before_agent_start",
   "pre_dispatch_safety_block",
   "retry_budget_exhausted",
+  "run_started_state_sync",
   "stale_run_recovery_required",
   "terminal_cleanup_reconciliation",
   "agent_owned_lifecycle_missing_evidence"

@@ -532,6 +532,95 @@ describe("orchestrator", () => {
     expect(comments.join("\n")).not.toContain("planning recommended");
   });
 
+  it("syncs agent-owned planning re-entry continuations from Todo to the running state", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-planning-reentry-state-sync-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\nlifecycle:\n  mode: agent-owned\n  allowed_tracker_tools:\n    - scripts/agent-linear-comment.sh\n    - scripts/agent-linear-move.sh\n    - scripts/agent-linear-pr.sh\n    - scripts/agent-linear-handoff.sh\n  idempotency_marker_format: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"\n  allowed_state_transitions:\n    - Todo -> In Progress\n    - Todo -> Human Review\n    - In Progress -> Human Review\n  duplicate_comment_behavior: upsert\n  fallback_behavior: write handoff and stop human_required\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Todo]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const issue: Issue = {
+      ...readyIssue,
+      state: "Todo",
+      ...supervisorAssignee,
+      title: "MVP roadmap orchestration work",
+      description: [
+        "Bootstrap a compact slice.",
+        "",
+        "Background:",
+        "- Roadmap orchestration across Linear, GitHub, runtime, validation, docs, and workspaces.",
+        "- Migrate every workflow and architecture guardrail.",
+        "- Decompose dependencies across all projects.",
+        "- Update every runbook."
+      ].join("\n")
+    };
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "planning_required",
+      stopReason: "likely-large scope needs planning or decomposition before implementation dispatch",
+      updatedAt: "2026-05-08T00:00:00.000Z"
+    });
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const logger = new JsonlLogger(repo);
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [issue];
+      },
+      async fetchIssueStates() {
+        return new Map([[issue.id, issue]]);
+      },
+      async fetchIssueComments() {
+        return [
+          {
+            id: "comment-active-scope",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-08T00:01:00.000Z",
+            body: planningReentryDecisionBody()
+          }
+        ];
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "canceled", error: "supervisor_continuation_active" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(1);
+    expect(runnerCalled).toBe(true);
+    expect(moves[0]).toBe("AG-1 -> In Progress");
+    expect(comments.join("\n")).not.toContain("planning recommended");
+    expect((await logger.tail(100)).filter((entry) => entry.type === "scheduler_safety")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "run_started_state_sync:move:applied",
+          payload: expect.objectContaining({ requestedState: "In Progress" })
+        })
+      ])
+    );
+  });
+
   it("allows planning re-entry when the trusted active-scope comment is older than the recent comment slice", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-planning-reentry-full-comments-"));
     const workflowPath = join(repo, "WORKFLOW.md");
