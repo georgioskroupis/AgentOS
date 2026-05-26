@@ -108,6 +108,7 @@ the cross-boundary assertion.
 | `tests/daemon-identity.test.ts` | Unit | Daemon identity metadata is deterministic, repo-scoped, and stale-safe |
 | `tests/daemon-lifecycle.test.ts` | Boundary | Daemon start/stop/restart/status commands prevent parallel daemons and attach safely |
 | `tests/daemon-log.test.ts` | Boundary | Daemon crash and stop markers are timestamped and append-only |
+| `tests/dashboard-profiler-ui.test.ts` | Unit | Live profiler renders idle, active, waiting, human-action, failed, completed, links, ticking durations, and standalone launcher states |
 | `tests/env.test.ts` | Unit | Repo-local environment loading reports missing, malformed, placeholder, and override cases |
 | `tests/github-context.test.ts` | Unit | GitHub check diagnostics survive into review context in bounded form |
 | `tests/github.test.ts` | Boundary | GitHub CLI boundary, PR status, CI diagnostics, branch updates, readiness, merge, and cleanup semantics |

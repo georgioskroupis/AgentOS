@@ -13,9 +13,20 @@ const contract = existsSync(contractPath) ? readFileSync(contractPath, "utf8") :
 
 if (!html) failures.push("dashboard/index.html is required");
 if (!html.includes("AgentOS Monitor")) failures.push("dashboard/index.html must keep a visible monitor title");
-for (const section of ["Run Header", "Tiny Summary", "Current Activity", "Nested Timing Table", "Top Time Sinks", "Human Action", "Links"]) {
+const profilerSections = ["Run Header", "Tiny Summary", "Current Activity", "Nested Timing Table", "Top Time Sinks", "Human Action", "Links"];
+for (const section of profilerSections) {
   if (!html.includes(section)) failures.push(`dashboard/index.html must render lean monitor section ${section}`);
   if (!contract.includes(section)) failures.push(`lean monitor contract must define UI section ${section}`);
+}
+
+const initialMain = html.match(/<main[^>]*id=["']profiler["'][^>]*>([\s\S]*?)<\/main>/i)?.[1] ?? "";
+const initialSections = [...initialMain.matchAll(/<h2>([^<]+)<\/h2>/g)].map((match) => match[1].trim());
+if (JSON.stringify(initialSections) !== JSON.stringify(profilerSections)) {
+  failures.push(`dashboard/index.html must render exactly seven profiler sections in order; found ${initialSections.join(", ") || "none"}`);
+}
+
+for (const route of ["/api/monitor/v1/snapshot", "/api/monitor/v1/stream"]) {
+  if (!html.includes(route)) failures.push(`dashboard/index.html must read ${route}`);
 }
 
 for (const token of [
@@ -38,15 +49,23 @@ for (const forbidden of ["https://cdn.", "https://unpkg.com", "tailwind", "React
 
 const dashboardHtmlForbidden = [
   { label: "old monitor API route", regex: /\/api\/v1\// },
-  { label: "browser fetch state reconstruction", regex: /\bfetch\s*\(/ },
   { label: "old refresh control", regex: /\b(refresh|reconcile|pause|resume)\b/i },
-  { label: "browser mutation control", regex: /<button\b|method=["']post["']|type=["']submit["']/i },
+  { label: "browser form mutation control", regex: /method=["']post["']|type=["']submit["']/i },
   { label: "legacy live monitor support", regex: /\.live\b/ }
 ];
 
 for (const forbidden of dashboardHtmlForbidden) {
   if (forbidden.regex.test(html)) failures.push(`dashboard/index.html must not contain ${forbidden.label}`);
 }
+
+for (const forbidden of ["tablist", "side nav", "history", "analytics", "evidence page", "debug page", "prompt viewer", "raw log viewer"]) {
+  if (html.toLowerCase().includes(forbidden)) failures.push(`dashboard/index.html must not contain ${forbidden}`);
+}
+
+if (!html.includes("data-mode=\"browser\"")) failures.push("dashboard/index.html must default to browser mode");
+if (!html.includes("mode\") === \"standalone\"")) failures.push("dashboard/index.html must gate the launcher strip to standalone mode");
+if ((html.match(/aria-disabled=["']true["']/g) ?? []).length < 4) failures.push("dashboard/index.html must render disabled placeholders for missing links");
+if (!html.includes("Not needed")) failures.push("dashboard/index.html must render Human Action as Not needed by default");
 
 if (!existsSync(contractPath)) failures.push("docs/architecture/LEAN_MONITOR_CONTRACT.md is required for the lean monitor boundary");
 if (!existsSync(manifestPath)) failures.push("docs/architecture/MONITOR_DELETION_MANIFEST.md is required as the historical deletion manifest");

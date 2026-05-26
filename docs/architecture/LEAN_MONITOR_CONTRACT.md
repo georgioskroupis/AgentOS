@@ -110,6 +110,12 @@ The monitor has exactly these seven UI sections:
 6. Human Action
 7. Links
 
+The browser UI is the static `dashboard/index.html` profiler. It renders
+snapshots from `/api/monitor/v1/snapshot`, applies `monitor_snapshot` stream
+updates from `/api/monitor/v1/stream`, keeps active displayed durations ticking
+from the authoritative `serverNow`, and renders missing Linear, PR, handoff,
+and validation links as disabled placeholders.
+
 Snapshot status is exactly one of:
 
 - `idle`

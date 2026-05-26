@@ -7,13 +7,21 @@
     <style>
       :root {
         color-scheme: light;
-        --bg: #f5f6f8;
+        --bg: #f4f6f8;
         --panel: #ffffff;
-        --text: #1f2328;
+        --panel-soft: #f8faf9;
+        --text: #18212b;
         --muted: #667085;
-        --line: #d7dce2;
-        --accent: #246b5a;
-        --wait: #8a5a13;
+        --line: #d8dee6;
+        --accent: #236856;
+        --accent-soft: #e7f2ee;
+        --wait: #8b5e16;
+        --wait-soft: #fff4d8;
+        --fail: #a13d33;
+        --fail-soft: #fdecea;
+        --done: #355f9f;
+        --done-soft: #edf3ff;
+        --shadow: 0 14px 36px rgba(18, 33, 43, 0.08);
       }
 
       * { box-sizing: border-box; }
@@ -28,137 +36,671 @@
       }
 
       .shell {
-        min-height: 100vh;
-        display: grid;
-        grid-template-rows: auto 1fr;
-      }
-
-      header {
-        padding: 18px 22px;
-        border-bottom: 1px solid var(--line);
-        background: var(--panel);
-      }
-
-      h1, h2, p {
-        margin: 0;
-      }
-
-      h1 {
-        font-size: 18px;
-        font-weight: 650;
-      }
-
-      h2 {
-        font-size: 14px;
-        font-weight: 650;
-      }
-
-      .status {
-        display: inline-flex;
-        align-items: center;
-        min-height: 24px;
-        margin-top: 8px;
-        padding: 0 9px;
-        border: 1px solid color-mix(in srgb, var(--wait) 30%, var(--line));
-        border-radius: 999px;
-        color: var(--wait);
-        background: #fff7e8;
-        font-size: 12px;
-      }
-
-      main {
-        width: min(1120px, calc(100vw - 32px));
+        width: min(1240px, calc(100vw - 28px));
         margin: 0 auto;
-        padding: 18px 0 28px;
-        display: grid;
-        grid-template-columns: repeat(7, minmax(120px, 1fr));
-        gap: 12px;
+        padding: 14px 0 28px;
       }
 
-      section {
-        min-height: 132px;
-        padding: 14px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--panel);
-        display: grid;
-        align-content: space-between;
-        gap: 18px;
-      }
-
-      .label {
+      .launcher-strip {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        min-height: 34px;
+        margin-bottom: 10px;
         color: var(--muted);
         font-size: 12px;
       }
 
-      .empty {
-        min-height: 8px;
+      .launcher-strip[hidden] {
+        display: none;
+      }
+
+      .launcher-status {
+        margin-right: auto;
+        color: var(--text);
+        font-weight: 650;
+      }
+
+      .launcher-strip button,
+      .launcher-strip a {
+        min-height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--text);
+        font: inherit;
+        font-size: 12px;
+        text-decoration: none;
+      }
+
+      .launcher-strip button:disabled {
+        color: var(--muted);
+        background: #f1f3f5;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 12px;
+        align-items: stretch;
+      }
+
+      .profiler-section {
+        min-width: 0;
+        min-height: 146px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .run-header,
+      .tiny-summary,
+      .current-activity {
+        grid-column: span 4;
+      }
+
+      .timing-section {
+        grid-column: 1 / -1;
+        min-height: 330px;
+      }
+
+      .top-sinks,
+      .human-action,
+      .links-section {
+        grid-column: span 4;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h2 {
+        margin-bottom: 12px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .run-title {
+        display: grid;
+        gap: 6px;
+      }
+
+      .run-title h1 {
+        overflow-wrap: anywhere;
+        font-size: 24px;
+        line-height: 1.16;
+      }
+
+      .meta-row,
+      .summary-grid,
+      .activity-grid,
+      .action-grid,
+      .links-grid {
+        display: grid;
+        gap: 8px;
+      }
+
+      .meta-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-top: 14px;
+      }
+
+      .summary-grid,
+      .activity-grid,
+      .action-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .metric {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-soft);
+      }
+
+      .metric-label {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric-value {
+        display: block;
+        margin-top: 4px;
+        overflow-wrap: anywhere;
+        font-weight: 650;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        min-height: 26px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
         border-radius: 999px;
-        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 700;
       }
 
-      @media (max-width: 980px) {
-        main {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+      .status-pill[data-status="waiting"],
+      .status-pill[data-status="human_action"] {
+        background: var(--wait-soft);
+        color: var(--wait);
+      }
+
+      .status-pill[data-status="failed"] {
+        background: var(--fail-soft);
+        color: var(--fail);
+      }
+
+      .status-pill[data-status="completed"] {
+        background: var(--done-soft);
+        color: var(--done);
+      }
+
+      .timing-table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      table {
+        width: 100%;
+        min-width: 760px;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 10px 11px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eef2f5;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .timing-label {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        min-width: 260px;
+      }
+
+      .depth {
+        flex: 0 0 auto;
+        width: calc(var(--depth) * 18px);
+        height: 1px;
+      }
+
+      .row-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--accent);
+      }
+
+      .row-dot[data-status="waiting"] {
+        background: var(--wait);
+      }
+
+      .row-dot[data-status="failed"] {
+        background: var(--fail);
+      }
+
+      .row-dot[data-status="done"],
+      .row-dot[data-status="pass"] {
+        background: var(--done);
+      }
+
+      .duration {
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+
+      .sink-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .sink {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .sink-bar {
+        grid-column: 1 / -1;
+        height: 6px;
+        border-radius: 999px;
+        background: #e7ebef;
+        overflow: hidden;
+      }
+
+      .sink-bar span {
+        display: block;
+        width: var(--width);
+        height: 100%;
+        background: var(--accent);
+      }
+
+      .links-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .link-item {
+        min-height: 48px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--text);
+        text-decoration: none;
+      }
+
+      .link-item[aria-disabled="true"] {
+        color: var(--muted);
+        background: #f1f3f5;
+        pointer-events: none;
+      }
+
+      .empty-state {
+        display: grid;
+        min-height: 94px;
+        place-items: center;
+        color: var(--muted);
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        background: var(--panel-soft);
+      }
+
+      @media (max-width: 920px) {
+        .run-header,
+        .tiny-summary,
+        .current-activity,
+        .top-sinks,
+        .human-action,
+        .links-section {
+          grid-column: 1 / -1;
         }
       }
 
-      @media (max-width: 540px) {
-        header {
-          padding: 16px;
+      @media (max-width: 560px) {
+        .shell {
+          width: calc(100vw - 20px);
+          padding-top: 10px;
         }
 
-        main {
-          width: calc(100vw - 24px);
+        .launcher-strip {
+          justify-content: flex-start;
+          flex-wrap: wrap;
+        }
+
+        .launcher-status {
+          width: 100%;
+        }
+
+        .meta-row,
+        .links-grid {
           grid-template-columns: 1fr;
-          padding-top: 12px;
+        }
+
+        .run-title h1 {
+          font-size: 20px;
         }
       }
     </style>
   </head>
-  <body>
+  <body data-mode="browser">
     <div class="shell">
-      <header>
-        <h1>AgentOS Monitor</h1>
-        <p class="status">Lean monitor shell</p>
-      </header>
-      <main aria-label="Monitor sections">
-        <section>
+      <div id="launcher-strip" class="launcher-strip" hidden></div>
+      <main id="profiler" aria-label="Lean Live Work Profiler">
+        <section class="profiler-section run-header">
           <h2>Run Header</h2>
-          <div class="empty"></div>
-          <p class="label">Idle</p>
+          <div class="run-title">
+            <span class="status-pill" data-status="idle">Idle</span>
+            <h1>AgentOS Monitor</h1>
+          </div>
         </section>
-        <section>
+        <section class="profiler-section tiny-summary">
           <h2>Tiny Summary</h2>
-          <div class="empty"></div>
-          <p class="label">Idle</p>
+          <div class="empty-state">Waiting for a monitor snapshot</div>
         </section>
-        <section>
+        <section class="profiler-section current-activity">
           <h2>Current Activity</h2>
-          <div class="empty"></div>
-          <p class="label">Idle</p>
+          <div class="empty-state">Idle</div>
         </section>
-        <section>
+        <section class="profiler-section timing-section">
           <h2>Nested Timing Table</h2>
-          <div class="empty"></div>
-          <p class="label">Idle</p>
+          <div class="empty-state">No timing rows</div>
         </section>
-        <section>
+        <section class="profiler-section top-sinks">
           <h2>Top Time Sinks</h2>
-          <div class="empty"></div>
-          <p class="label">Idle</p>
+          <div class="empty-state">No time sinks</div>
         </section>
-        <section>
+        <section class="profiler-section human-action">
           <h2>Human Action</h2>
-          <div class="empty"></div>
-          <p class="label">Not needed</p>
+          <div class="metric"><span class="metric-value">Not needed</span></div>
         </section>
-        <section>
+        <section class="profiler-section links-section">
           <h2>Links</h2>
-          <div class="empty"></div>
-          <p class="label">None</p>
+          <div class="links-grid">
+            <span class="link-item" aria-disabled="true">Linear</span>
+            <span class="link-item" aria-disabled="true">PR</span>
+            <span class="link-item" aria-disabled="true">Handoff</span>
+            <span class="link-item" aria-disabled="true">Validation</span>
+          </div>
         </section>
       </main>
     </div>
+    <script>
+      (() => {
+        "use strict";
+
+        const sectionNames = ["Run Header", "Tiny Summary", "Current Activity", "Nested Timing Table", "Top Time Sinks", "Human Action", "Links"];
+        const linkNames = [
+          ["linear", "Linear"],
+          ["pr", "PR"],
+          ["handoff", "Handoff"],
+          ["validation", "Validation"]
+        ];
+        let currentSnapshot = null;
+        let snapshotRenderedAtMs = 0;
+        let tickTimer = null;
+
+        function escapeHtml(value) {
+          return String(value ?? "").replace(/[&<>"']/g, (char) => {
+            const escapes = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+            return escapes[char];
+          });
+        }
+
+        function parseTime(value) {
+          const parsed = Date.parse(value ?? "");
+          return Number.isFinite(parsed) ? parsed : Date.now();
+        }
+
+        function effectiveServerNow(snapshot, options = {}) {
+          if (options.serverNow) return parseTime(options.serverNow);
+          const base = parseTime(snapshot?.serverNow);
+          const renderedAt = options.renderedAtMs ?? snapshotRenderedAtMs;
+          const now = options.nowMs ?? Date.now();
+          return base + Math.max(0, now - renderedAt);
+        }
+
+        function roundedSeconds(ms) {
+          return Math.max(0, Math.round((Number(ms) || 0) / 1000));
+        }
+
+        function formatSeconds(ms) {
+          return `${roundedSeconds(ms)}s`;
+        }
+
+        function isActiveRow(row) {
+          return row && !row.endedAt && row.status !== "done" && row.status !== "failed" && row.status !== "pass" && row.status !== "skipped";
+        }
+
+        function rowDuration(row, serverNowMs) {
+          if (!row) return 0;
+          if (!isActiveRow(row)) return Math.max(0, Number(row.durationMs) || 0);
+          return Math.max(0, serverNowMs - parseTime(row.startedAt));
+        }
+
+        function rowSelf(row, serverNowMs) {
+          if (!row) return 0;
+          if (!isActiveRow(row)) return Math.max(0, Number(row.selfMs) || 0);
+          const childDuration = (row.children ?? []).reduce((total, child) => total + rowDuration(child, serverNowMs), 0);
+          return Math.max(0, rowDuration(row, serverNowMs) - childDuration);
+        }
+
+        function rowWait(row, serverNowMs) {
+          const childWait = (row?.children ?? []).reduce((total, child) => total + rowWait(child, serverNowMs), 0);
+          const ownWait = row?.timeClass === "external-wait" || row?.timeClass === "human-wait" ? rowSelf(row, serverNowMs) : Number(row?.waitMs) || 0;
+          return Math.max(0, ownWait + childWait);
+        }
+
+        function statusLabel(status) {
+          const labels = {
+            idle: "Idle",
+            active: "Active",
+            waiting: "Waiting",
+            human_action: "Human action",
+            failed: "Failed",
+            completed: "Completed"
+          };
+          return labels[status] ?? "Idle";
+        }
+
+        function flattenRows(rows, depth = 0) {
+          const result = [];
+          for (const row of rows ?? []) {
+            result.push({ row, depth });
+            result.push(...flattenRows(row.children ?? [], depth + 1));
+          }
+          return result;
+        }
+
+        function metric(label, value, attrs = "") {
+          return `<div class="metric"${attrs}><span class="metric-label">${escapeHtml(label)}</span><span class="metric-value">${escapeHtml(value)}</span></div>`;
+        }
+
+        function section(name, className, body) {
+          return `<section class="profiler-section ${className}" data-section="${escapeHtml(name)}"><h2>${escapeHtml(name)}</h2>${body}</section>`;
+        }
+
+        function renderHeader(snapshot, run, serverNowMs) {
+          const title = run ? `${run.issue?.id ?? run.runId}: ${run.issue?.title ?? "Untitled run"}` : "AgentOS Monitor";
+          const elapsed = run ? formatSeconds(tickingDuration(run.runElapsedMs, snapshot, serverNowMs)) : "0s";
+          const attempt = run?.attempt ? `${run.attempt.current}${run.attempt.max != null ? ` / ${run.attempt.max}` : ""}` : "None";
+          return section(
+            sectionNames[0],
+            "run-header",
+            `<div class="run-title"><span class="status-pill" data-status="${escapeHtml(snapshot.status)}">${escapeHtml(statusLabel(snapshot.status))}</span><h1>${escapeHtml(title)}</h1></div>` +
+              `<div class="meta-row">${metric("Run", run?.runId ?? "No active run")}${metric("Attempt", attempt)}${metric("Elapsed", elapsed, ` data-ms="${run ? Math.max(0, tickingDuration(run.runElapsedMs, snapshot, serverNowMs)) : 0}"`)}${metric("Model", run?.currentModel ?? "None")}</div>`
+          );
+        }
+
+        function tickingDuration(baseMs, snapshot, serverNowMs) {
+          if (snapshot.status === "active" || snapshot.status === "waiting" || snapshot.status === "human_action") {
+            return (Number(baseMs) || 0) + Math.max(0, serverNowMs - parseTime(snapshot.serverNow));
+          }
+          return Number(baseMs) || 0;
+        }
+
+        function renderSummary(run) {
+          const summary = run?.summary;
+          return section(
+            sectionNames[1],
+            "tiny-summary",
+            `<div class="summary-grid">${metric("Why", summary?.why ?? "Waiting for a run")}${metric("Build", summary?.build ?? "No snapshot yet")}${metric("Done", summary?.done ?? "Not started")}</div>`
+          );
+        }
+
+        function renderActivity(snapshot, run, serverNowMs) {
+          const activity = run?.currentActivity;
+          const stepElapsed = activity ? tickingDuration(activity.stepElapsedMs, snapshot, serverNowMs) : 0;
+          const loopElapsed = activity?.loopElapsedMs != null ? tickingDuration(activity.loopElapsedMs, snapshot, serverNowMs) : null;
+          return section(
+            sectionNames[2],
+            "current-activity",
+            `<div class="activity-grid">${metric("Stage", activity?.stage ?? "Idle")}${metric("Step", activity?.step ?? "None")}${metric("Step elapsed", formatSeconds(stepElapsed), ` data-ms="${stepElapsed}"`)}${metric("Loop", activity?.loop ?? "None")}${metric("Loop elapsed", loopElapsed == null ? "None" : formatSeconds(loopElapsed), loopElapsed == null ? "" : ` data-ms="${loopElapsed}"`)}${metric("Last event age", activity ? formatSeconds(activity.lastEventAgeMs) : "None")}</div>`
+          );
+        }
+
+        function renderTiming(run, serverNowMs) {
+          const rows = flattenRows(run?.timing ?? []);
+          if (rows.length === 0) return section(sectionNames[3], "timing-section", `<div class="empty-state">No timing rows</div>`);
+          const body = rows
+            .map(({ row, depth }) => {
+              const durationMs = rowDuration(row, serverNowMs);
+              const selfMs = rowSelf(row, serverNowMs);
+              const waitMs = rowWait(row, serverNowMs);
+              return `<tr data-row-id="${escapeHtml(row.id)}">
+                <td><div class="timing-label"><span class="depth" style="--depth:${depth}"></span><span class="row-dot" data-status="${escapeHtml(row.status)}"></span><span>${escapeHtml(row.label)}</span></div></td>
+                <td>${escapeHtml(row.timeClass)}</td>
+                <td>${escapeHtml(row.status)}</td>
+                <td class="duration" data-ms="${durationMs}">${formatSeconds(durationMs)}</td>
+                <td class="duration" data-ms="${selfMs}">${formatSeconds(selfMs)}</td>
+                <td class="duration" data-ms="${waitMs}">${formatSeconds(waitMs)}</td>
+                <td>${escapeHtml(row.model ?? row.iteration ?? row.result ?? "")}</td>
+              </tr>`;
+            })
+            .join("");
+          return section(
+            sectionNames[3],
+            "timing-section",
+            `<div class="timing-table-wrap"><table><thead><tr><th>Work</th><th>Class</th><th>Status</th><th>Total</th><th>Self</th><th>Wait</th><th>Context</th></tr></thead><tbody>${body}</tbody></table></div>`
+          );
+        }
+
+        function renderTopSinks(run, serverNowMs) {
+          const rowsById = new Map(flattenRows(run?.timing ?? []).map(({ row }) => [row.id, row]));
+          const sinks = (run?.topTimeSinks ?? []).map((sink) => {
+            const row = rowsById.get(sink.id);
+            return { ...sink, selfMs: row ? rowSelf(row, serverNowMs) : Number(sink.selfMs) || 0 };
+          });
+          if (sinks.length === 0) return section(sectionNames[4], "top-sinks", `<div class="empty-state">No time sinks</div>`);
+          const max = Math.max(...sinks.map((sink) => sink.selfMs), 1);
+          const body = sinks
+            .map((sink) => {
+              const width = Math.max(4, Math.round((sink.selfMs / max) * 100));
+              return `<div class="sink"><span>${escapeHtml(sink.label)}</span><span class="duration" data-ms="${sink.selfMs}">${formatSeconds(sink.selfMs)}</span><div class="sink-bar"><span style="--width:${width}%"></span></div></div>`;
+            })
+            .join("");
+          return section(sectionNames[4], "top-sinks", `<div class="sink-list">${body}</div>`);
+        }
+
+        function renderHumanAction(run) {
+          const action = run?.humanAction;
+          if (!action?.required) return section(sectionNames[5], "human-action", `<div class="metric"><span class="metric-value">Not needed</span></div>`);
+          return section(
+            sectionNames[5],
+            "human-action",
+            `<div class="action-grid">${metric("Stopped because", action.stoppedBecause)}${metric("You should", action.youShould)}${metric("Manual test", action.manualTest)}${metric("Expected result", action.expectedResult)}${metric("Recommended next step", action.recommendedNextStep)}</div>`
+          );
+        }
+
+        function renderLinks(run) {
+          const links = run?.links ?? {};
+          const body = linkNames
+            .map(([key, label]) => {
+              const href = links[key];
+              return href
+                ? `<a class="link-item" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+                : `<span class="link-item" aria-disabled="true">${escapeHtml(label)}</span>`;
+            })
+            .join("");
+          return section(sectionNames[6], "links-section", `<div class="links-grid">${body}</div>`);
+        }
+
+        function renderSnapshot(snapshot, options = {}) {
+          const normalized = snapshot && typeof snapshot === "object" ? snapshot : { serverNow: new Date().toISOString(), status: "idle" };
+          const serverNowMs = effectiveServerNow(normalized, options);
+          const run = normalized.run ?? null;
+          return [
+            renderHeader(normalized, run, serverNowMs),
+            renderSummary(run),
+            renderActivity(normalized, run, serverNowMs),
+            renderTiming(run, serverNowMs),
+            renderTopSinks(run, serverNowMs),
+            renderHumanAction(run),
+            renderLinks(run)
+          ].join("");
+        }
+
+        function applySnapshot(snapshot) {
+          currentSnapshot = snapshot && typeof snapshot === "object" ? snapshot : { serverNow: new Date().toISOString(), status: "idle" };
+          snapshotRenderedAtMs = Date.now();
+          const root = document.querySelector("#profiler");
+          if (root) root.innerHTML = renderSnapshot(currentSnapshot, { renderedAtMs: snapshotRenderedAtMs, nowMs: Date.now() });
+          scheduleTick();
+        }
+
+        function scheduleTick() {
+          if (tickTimer) clearInterval(tickTimer);
+          if (!currentSnapshot || !["active", "waiting", "human_action"].includes(currentSnapshot.status)) return;
+          tickTimer = setInterval(() => {
+            const root = document.querySelector("#profiler");
+            if (root && currentSnapshot) root.innerHTML = renderSnapshot(currentSnapshot, { renderedAtMs: snapshotRenderedAtMs, nowMs: Date.now() });
+          }, 1000);
+        }
+
+        function setStandaloneMode(enabled, launcherState = {}) {
+          const strip = document.querySelector("#launcher-strip");
+          if (!strip) return;
+          if (!enabled) {
+            strip.hidden = true;
+            strip.innerHTML = "";
+            document.body.dataset.mode = "browser";
+            return;
+          }
+          const status = launcherState.status ?? "attached";
+          strip.hidden = false;
+          document.body.dataset.mode = "standalone";
+          strip.innerHTML = `<span class="launcher-status">Launcher: ${escapeHtml(status)}</span><button type="button" disabled>Start</button><button type="button" disabled>Stop</button><a href="/" aria-label="Reload or open monitor">Reload/Open</a>`;
+        }
+
+        async function refetchSnapshot() {
+          const response = await fetch("/api/monitor/v1/snapshot", { cache: "no-store" });
+          if (!response.ok) throw new Error(`snapshot fetch failed: ${response.status}`);
+          applySnapshot(await response.json());
+        }
+
+        function connectStream() {
+          if (typeof EventSource !== "function") return;
+          const stream = new EventSource("/api/monitor/v1/stream");
+          stream.addEventListener("monitor_snapshot", (event) => applySnapshot(JSON.parse(event.data)));
+          stream.addEventListener("error", () => {
+            stream.close();
+            setTimeout(() => {
+              refetchSnapshot().catch(() => {});
+              connectStream();
+            }, 1500);
+          });
+        }
+
+        function boot() {
+          const params = new URLSearchParams(window.location.search);
+          setStandaloneMode(params.get("mode") === "standalone");
+          refetchSnapshot().catch(() => applySnapshot({ serverNow: new Date().toISOString(), status: "idle" }));
+          connectStream();
+        }
+
+        window.__AgentOSMonitorProfiler = {
+          sectionNames,
+          linkNames,
+          formatSeconds,
+          renderSnapshot,
+          applySnapshot,
+          setStandaloneMode
+        };
+
+        if (!window.__AGENTOS_MONITOR_TEST__) boot();
+      })();
+    </script>
   </body>
 </html>
