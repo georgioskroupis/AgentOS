@@ -106,6 +106,98 @@ describe("in-memory monitor aggregator", () => {
     expect(stage?.children.map((child) => child.id)).toEqual(["child-a", "child-b"]);
     expect(stage?.children.map((child) => child.durationMs)).toEqual([2000, 3000]);
   });
+
+  it("generates deterministic summary lines without using supplied prose as source of truth", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext({
+      ...runContext,
+      summary: { why: "caller supplied why", build: "caller supplied build", done: "caller supplied done" },
+      changedFiles: ["docs/quality/TEST_SUITE.md"]
+    });
+    emitAll(aggregator, [event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z")]);
+
+    const summary = aggregator.snapshot({ serverNow: "2026-05-25T00:00:05.000Z" }).run?.summary;
+
+    expect(Object.keys(summary ?? {})).toEqual(["why", "build", "done"]);
+    expect(summary).toEqual({
+      why: "Work on VER-153: Add monitor reducer",
+      build: "Docs-only changes are in scope.",
+      done: "Current step: Run"
+    });
+  });
+
+  it("derives required human action from reason code and changed surface rules", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext({
+      ...runContext,
+      humanAction: {
+        reasonCode: "architecture_check_failed",
+        changedFiles: ["scripts/check-architecture.mjs"]
+      }
+    });
+    emitAll(aggregator, [event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z")]);
+
+    const snapshot = aggregator.snapshot({ serverNow: "2026-05-25T00:00:05.000Z" });
+
+    expect(snapshot.status).toBe("human_action");
+    expect(snapshot.run?.humanAction).toEqual({
+      required: true,
+      stoppedBecause: "Stopped because the architecture check needs attention.",
+      youShould: "Inspect the architecture check output and the affected boundary.",
+      manualTest: "Run npm run check:architecture.",
+      expectedResult: "Architecture validation passes or reports only accepted findings.",
+      recommendedNextStep: "Align the architecture boundary or update the contract, then rerun the architecture check."
+    });
+  });
+
+  it.each([
+    ["docs-only", ["docs/product/README.md"], "Manual test could not be inferred from docs-only changes.", "Docs accurately describe the implemented behavior."],
+    ["workflow/config", ["WORKFLOW.md"], "Run the affected workflow/config check or inspect the policy path manually.", "Workflow/config behavior matches the intended policy."],
+    ["UI", ["dashboard/index.html"], "Open the monitor UI and verify the changed view renders correctly.", "The monitor UI renders the changed state without layout or data regressions."]
+  ])("covers %s human-action changed-surface wording", (_label, changedFiles, manualTest, expectedResult) => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext({
+      ...runContext,
+      humanAction: {
+        reasonCode: "needs_input",
+        changedFiles
+      }
+    });
+    emitAll(aggregator, [event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z")]);
+
+    const action = aggregator.snapshot({ serverNow: "2026-05-25T00:00:05.000Z" }).run?.humanAction;
+
+    expect(action?.manualTest).toBe(manualTest);
+    expect(action?.expectedResult).toBe(expectedResult);
+  });
+
+  it("keeps human action present and compact when no action is needed", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext({ ...runContext, changedFiles: ["src/monitor-aggregator.ts"] });
+    emitAll(aggregator, [event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z")]);
+
+    expect(aggregator.snapshot({ serverNow: "2026-05-25T00:00:05.000Z" }).run?.humanAction).toEqual({
+      required: false,
+      stoppedBecause: "Not needed",
+      youShould: "Not needed",
+      manualTest: "Not needed",
+      expectedResult: "Not needed",
+      recommendedNextStep: "Not needed"
+    });
+  });
+
+  it("invalidates generated text when changed surfaces change during the run", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext({ ...runContext, changedFiles: ["docs/README.md"] });
+    emitAll(aggregator, [event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z")]);
+
+    const docs = aggregator.snapshot({ serverNow: "2026-05-25T00:00:05.000Z" }).run?.summary.build;
+    aggregator.updateRunContext({ ...runContext, changedFiles: ["dashboard/index.html"] });
+    const ui = aggregator.snapshot({ serverNow: "2026-05-25T00:00:06.000Z" }).run?.summary.build;
+
+    expect(docs).toBe("Docs-only changes are in scope.");
+    expect(ui).toBe("UI behavior is in scope.");
+  });
 });
 
 function emitAll(aggregator: InMemoryMonitorAggregator, events: MonitorEvent[]): void {

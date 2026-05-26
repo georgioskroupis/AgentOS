@@ -50,6 +50,19 @@ extension-owned `MonitorSink` implementation that combines monitor events and
 current run context into `MonitorSnapshot`; source-core modules must not import
 it.
 
+The reducer generates Tiny Summary and Human Action text deterministically. It
+does not call a model, and generated text is presentation-only: validation
+evidence, tracker state, PR metadata, and run artifacts remain the source of
+truth. Tiny Summary always contains exactly `Why`, `Build`, and `Done`. Human
+Action always contains exactly `Stopped because`, `You should`, `Manual test`,
+`Expected result`, and `Recommended next step`, plus the `required` boolean.
+Reason codes and changed-surface facts drive the wording, with explicit rules
+for docs-only, workflow/config, architecture-check, and UI changes. If a manual
+test or expected result cannot be inferred from those facts, the reducer says so
+plainly instead of inventing one. Generated text is cached in memory per run and
+is regenerated when relevant run context, monitor events, reason code, or
+changed-surface facts change.
+
 ## Read-Only HTTP API
 
 The optional listener in `src/http-server.ts` exposes exactly these monitor API

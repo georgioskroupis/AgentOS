@@ -1,6 +1,19 @@
 export type MonitorTimeClass = "agent" | "validation" | "scheduler" | "external-wait" | "human-wait" | "tool";
 export type MonitorStatus = "active" | "done" | "failed" | "waiting" | "pass" | "skipped";
 export type MonitorValidationStatus = "pass" | "fail" | "skipped";
+export type MonitorChangedSurface = "docs" | "workflow-config" | "architecture-check" | "ui" | "tests" | "source" | "unknown";
+export type MonitorHumanActionReasonCode =
+  | "none"
+  | "validation_failed"
+  | "ci_failed"
+  | "review_findings"
+  | "architecture_check_failed"
+  | "workflow_config_changed"
+  | "human_review"
+  | "needs_input"
+  | "blocked"
+  | "capacity_wait"
+  | "unknown";
 
 export type MonitorSink = {
   emit(event: MonitorEvent): void | Promise<void>;
@@ -42,5 +55,11 @@ export type MonitorEvent = {
   model?: { name: string; role: "implementation" | "review" | "fix" | "summary" | "validation" | "other" };
   iteration?: { current: number; max?: number; label: string };
   validation?: { command: string; durationMs?: number; status: MonitorValidationStatus; exitCode?: number };
+  humanAction?: {
+    reasonCode?: MonitorHumanActionReasonCode;
+    changedSurfaces?: MonitorChangedSurface[];
+    changedFiles?: string[];
+    details?: string;
+  };
   result?: string;
 };

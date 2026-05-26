@@ -1,14 +1,14 @@
+import { fallbackMonitorSummary, monitorGeneratedText, type GeneratedMonitorText, type MonitorTextRunContext } from "./monitor-generated-text.js";
 import type { MonitorEvent, MonitorSink, MonitorStatus, MonitorTimeClass } from "./monitor-contracts.js";
-import type { HumanAction, MonitorSnapshot, TimeSink, TimingRow } from "./monitor-extension-contracts.js";
+import type { MonitorSnapshot, TimeSink, TimingRow } from "./monitor-extension-contracts.js";
 
 type SnapshotRun = NonNullable<MonitorSnapshot["run"]>;
 
-export type MonitorRunContext = {
+export type MonitorRunContext = MonitorTextRunContext & {
   runId: string;
   issue: SnapshotRun["issue"];
   attempt: SnapshotRun["attempt"];
   links?: Partial<SnapshotRun["links"]>;
-  summary?: Partial<SnapshotRun["summary"]>;
   currentModel?: string;
 };
 
@@ -54,19 +54,8 @@ type BuiltRow = {
   startedMs: number;
 };
 
-const defaultSummary: SnapshotRun["summary"] = {
-  why: "Monitor snapshot",
-  build: "In-memory monitor reducer",
-  done: "Run is still active"
-};
-
-const notNeededHumanAction: HumanAction = {
-  required: false,
-  stoppedBecause: "Not needed",
-  youShould: "Not needed",
-  manualTest: "Not needed",
-  expectedResult: "Not needed",
-  recommendedNextStep: "Not needed"
+type GeneratedTextCacheEntry = Omit<GeneratedMonitorText, "key"> & {
+  key: string;
 };
 
 export class InMemoryMonitorAggregator implements MonitorSink {
@@ -75,12 +64,16 @@ export class InMemoryMonitorAggregator implements MonitorSink {
   private events: StoredMonitorEvent[] = [];
   private terminalSnapshot: MonitorSnapshot | undefined;
   private listeners = new Set<MonitorSnapshotListener>();
+  private generatedTextCache = new Map<string, GeneratedTextCacheEntry>();
   private sequence = 0;
 
   emit(event: MonitorEvent): void {
     if (event.kind === "run_started" && this.activeRunId !== event.runId) {
       this.activeRunId = event.runId;
       this.events = [];
+      for (const runId of this.generatedTextCache.keys()) {
+        if (runId !== event.runId) this.generatedTextCache.delete(runId);
+      }
     }
 
     if (!this.activeRunId) this.activeRunId = event.runId;
@@ -141,7 +134,7 @@ export class InMemoryMonitorAggregator implements MonitorSink {
       issue: { id: event.issueId ?? event.runId, title: event.label },
       attempt: { current: 0 },
       links: {},
-      summary: defaultSummary
+      summary: fallbackMonitorSummary
     };
   }
 
@@ -214,11 +207,8 @@ export class InMemoryMonitorAggregator implements MonitorSink {
     const runElapsedMs = runRow ? rowDurationMs(runRow, serverNowMs) : Math.max(0, serverNowMs - firstEventMs);
     const activeSpans = [...spans.values()].filter((span) => span.endedAt == null).sort(compareSpans);
     const activity = currentActivity(activeSpans, serverNowMs, lastEventMs, terminalEvent, currentModel);
-    const status = snapshotStatus(terminalEvent, humanActionEvent, activeSpans);
-    const summary = { ...defaultSummary, ...run.summary };
-
-    if (status === "completed") summary.done = terminalEvent?.result ?? "Run completed";
-    if (status === "failed") summary.done = terminalEvent?.result ?? "Run failed";
+    const status = run.humanAction?.reasonCode && run.humanAction.reasonCode !== "none" ? snapshotStatus(terminalEvent, humanActionEvent, activeSpans, true) : snapshotStatus(terminalEvent, humanActionEvent, activeSpans);
+    const generatedText = this.generatedText(run, status, terminalEvent, humanActionEvent, orderedEvents);
 
     return {
       serverNow,
@@ -230,13 +220,27 @@ export class InMemoryMonitorAggregator implements MonitorSink {
         runElapsedMs,
         ...(currentModel ? { currentModel } : {}),
         links: { ...run.links },
-        summary,
+        summary: generatedText.summary,
         currentActivity: activity,
         timing: roots.map((root) => root.row),
         topTimeSinks: topTimeSinks(flatRows, spans, topTimeSinkLimit),
-        humanAction: humanAction(humanActionEvent)
+        humanAction: generatedText.humanAction
       }
     };
+  }
+
+  private generatedText(
+    run: MonitorRunContext,
+    status: MonitorSnapshot["status"],
+    terminalEvent: MonitorEvent | undefined,
+    humanActionEvent: MonitorEvent | undefined,
+    orderedEvents: StoredMonitorEvent[]
+  ): Omit<GeneratedMonitorText, "key"> {
+    const generated = monitorGeneratedText({ run, status, terminalEvent, humanActionEvent, orderedEvents });
+    const cached = this.generatedTextCache.get(run.runId);
+    if (cached?.key === generated.key) return { summary: cached.summary, humanAction: cached.humanAction };
+    this.generatedTextCache.set(run.runId, generated);
+    return generated;
   }
 }
 
@@ -338,24 +342,12 @@ function flattenRows(rows: TimingRow[]): TimingRow[] {
   return rows.flatMap((row) => [row, ...flattenRows(row.children)]);
 }
 
-function snapshotStatus(terminalEvent: MonitorEvent | undefined, humanActionEvent: MonitorEvent | undefined, activeSpans: SpanState[]): MonitorSnapshot["status"] {
+function snapshotStatus(terminalEvent: MonitorEvent | undefined, humanActionEvent: MonitorEvent | undefined, activeSpans: SpanState[], runHumanActionRequired = false): MonitorSnapshot["status"] {
   if (terminalEvent?.kind === "run_failed") return "failed";
   if (terminalEvent?.kind === "run_finished") return "completed";
-  if (humanActionEvent) return "human_action";
+  if (humanActionEvent || runHumanActionRequired) return "human_action";
   if (activeSpans.some((span) => isWaitClass(span.timeClass) || span.status === "waiting")) return "waiting";
   return activeSpans.length > 0 ? "active" : "idle";
-}
-
-function humanAction(event: MonitorEvent | undefined): HumanAction {
-  if (!event) return notNeededHumanAction;
-  return {
-    required: true,
-    stoppedBecause: event.result ?? event.label,
-    youShould: event.label,
-    manualTest: event.result ?? event.label,
-    expectedResult: event.result ?? event.label,
-    recommendedNextStep: event.label
-  };
 }
 
 function closeSpan(span: SpanState, event: MonitorEvent): void {
