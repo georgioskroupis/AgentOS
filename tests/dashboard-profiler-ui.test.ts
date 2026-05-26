@@ -42,6 +42,15 @@ describe("dashboard live profiler UI", () => {
     expect(linkLabels(html)).toEqual(["Linear", "PR", "Handoff", "Validation"]);
   });
 
+  it("does not double-count server-provided wait time for finished parent rows", () => {
+    const { profiler } = loadProfiler();
+    const html = profiler.renderSnapshot(nestedWaitSnapshot(), { serverNow: "2026-05-26T00:00:10.000Z" });
+
+    expect(rowHtml(html, "parent")).toContain('data-ms="4000"');
+    expect(rowHtml(html, "parent")).not.toContain('data-ms="8000"');
+    expect(rowHtml(html, "wait")).toContain('data-ms="4000"');
+  });
+
   it("renders required Human Action details only when action is required", () => {
     const { profiler } = loadProfiler();
     const html = profiler.renderSnapshot(humanActionSnapshot(), { serverNow: "2026-05-26T00:00:08.000Z" });
@@ -189,6 +198,39 @@ function terminalSnapshot(status: "failed" | "completed"): Record<string, unknow
   return snapshot;
 }
 
+function nestedWaitSnapshot(): Record<string, unknown> {
+  const snapshot = activeSnapshot("completed");
+  const run = snapshot.run as Record<string, unknown>;
+  run.timing = [
+    {
+      id: "parent",
+      label: "Validation",
+      status: "done",
+      timeClass: "validation",
+      startedAt: "2026-05-26T00:00:00.000Z",
+      endedAt: "2026-05-26T00:00:10.000Z",
+      durationMs: 10000,
+      selfMs: 6000,
+      waitMs: 4000,
+      children: [
+        {
+          id: "wait",
+          label: "Waiting for CI",
+          status: "done",
+          timeClass: "external-wait",
+          startedAt: "2026-05-26T00:00:02.000Z",
+          endedAt: "2026-05-26T00:00:06.000Z",
+          durationMs: 4000,
+          selfMs: 4000,
+          waitMs: 4000,
+          children: []
+        }
+      ]
+    }
+  ];
+  return snapshot;
+}
+
 function notNeededAction(): Record<string, unknown> {
   return {
     required: false,
@@ -207,6 +249,10 @@ function sectionNames(html: string): string[] {
 function linkLabels(html: string): string[] {
   const section = html.match(/data-section="Links"[\s\S]*?<div class="links-grid">([\s\S]*?)<\/div>/)?.[1] ?? "";
   return [...section.matchAll(/(?:<a|<span)[^>]*>([^<]+)</g)].map((match) => decodeHtml(match[1]));
+}
+
+function rowHtml(html: string, rowId: string): string {
+  return html.match(new RegExp(`<tr data-row-id="${rowId}"[\\s\\S]*?<\\/tr>`))?.[0] ?? "";
 }
 
 function decodeHtml(value: string): string {

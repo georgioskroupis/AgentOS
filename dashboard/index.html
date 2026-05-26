@@ -478,8 +478,10 @@
         }
 
         function rowWait(row, serverNowMs) {
-          const childWait = (row?.children ?? []).reduce((total, child) => total + rowWait(child, serverNowMs), 0);
-          const ownWait = row?.timeClass === "external-wait" || row?.timeClass === "human-wait" ? rowSelf(row, serverNowMs) : Number(row?.waitMs) || 0;
+          if (!row) return 0;
+          if (!isActiveRow(row)) return Math.max(0, Number(row.waitMs) || 0);
+          const childWait = (row.children ?? []).reduce((total, child) => total + rowWait(child, serverNowMs), 0);
+          const ownWait = row.timeClass === "external-wait" || row.timeClass === "human-wait" ? rowSelf(row, serverNowMs) : 0;
           return Math.max(0, ownWait + childWait);
         }
 
