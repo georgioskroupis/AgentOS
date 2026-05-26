@@ -34,6 +34,7 @@ export interface WorkspaceRecoveryDiagnostics {
   behindCount: number;
   stalePrHead: boolean;
   staleCiHead: boolean;
+  cleanUnpushedWork: boolean;
   cleanPushedWork: boolean;
   recoverable: boolean;
   reasons: string[];
@@ -91,6 +92,7 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
       behindCount: 0,
       stalePrHead: false,
       staleCiHead: false,
+      cleanUnpushedWork: false,
       cleanPushedWork: false,
       recoverable: false,
       reasons: ["workspace is missing"],
@@ -113,6 +115,7 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
       behindCount: 0,
       stalePrHead: false,
       staleCiHead: false,
+      cleanUnpushedWork: false,
       cleanPushedWork: false,
       recoverable: false,
       reasons: gitRoot ? ["workspace path is inside another git worktree"] : ["workspace is not a git worktree"],
@@ -135,6 +138,7 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
   const ciHeadSha = issue.validation?.githubCi?.headSha ?? null;
   const staleCiHead = Boolean(ciHeadSha && headSha && ciHeadSha !== headSha);
   const cleanBaseWithoutUpstream = Boolean(upstreamMissing && !dirty && headSha && baseSha && headSha === baseSha);
+  const cleanUnpushedWork = Boolean(upstreamMissing && !dirty && headSha && baseSha && headSha !== baseSha);
   const cleanPushedWork = Boolean(branch && branch !== "HEAD" && upstreamSha && !dirty && aheadCount === 0 && behindCount === 0 && headSha && baseSha && headSha !== baseSha);
   const branchSyncReason =
     aheadCount > 0 && behindCount > 0
@@ -166,6 +170,7 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
     behindCount,
     stalePrHead,
     staleCiHead,
+    cleanUnpushedWork,
     cleanPushedWork,
     recoverable,
     reasons,
@@ -175,6 +180,15 @@ export async function inspectWorkspaceRecovery(repoRoot: string, issue: Pick<Iss
         ? `resume ${workspacePath}, preserve existing changes, run validation, then commit and push the existing branch before updating the handoff or PR`
       : `reuse ${workspacePath} for any follow-up; rerun validation before changing Linear state`
   };
+}
+
+export async function publishCleanNoUpstreamRecoveryBranch(issueIdentifier: string, diagnostics: WorkspaceRecoveryDiagnostics): Promise<boolean> {
+  const expectedBranch = `agent/${issueIdentifier}`;
+  if (!diagnostics.cleanUnpushedWork || diagnostics.dirty || diagnostics.branch !== expectedBranch || !diagnostics.headSha || !diagnostics.baseSha) return false;
+  const origin = await gitOutput(diagnostics.workspacePath, ["remote", "get-url", "origin"]);
+  if (!origin) return false;
+  await execFileAsync("git", ["push", "-u", "origin", `${expectedBranch}:${expectedBranch}`], { cwd: diagnostics.workspacePath });
+  return true;
 }
 
 export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput): Promise<OperatorRecoveryRecordResult> {

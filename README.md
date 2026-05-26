@@ -174,7 +174,10 @@ planning/decomposition before implementation, and keep decomposed parent issues
 out of implementation while child issues remain active or need parent closeout.
 `status` and `inspect` also report recoverable partial work such as dirty
 workspaces, unpushed branch heads, stale PR heads, and CI evidence recorded for
-a different local head, including a next safe action for the operator. Terminal
+a different local head, including a next safe action for the operator. During
+recovery, AgentOS publishes clean committed `agent/<issue>` branches that are
+missing an upstream before attempting pushed-work reconstruction, while still
+leaving dirty, detached, or diverged workspaces for operator review. Terminal
 state contradictions and post-merge cleanup drift are surfaced as status
 warnings so operators can reconcile durable state without starting duplicate
 work. They also surface context-budget estimates, validation reuse/budget
