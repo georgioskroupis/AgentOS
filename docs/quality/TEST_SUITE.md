@@ -126,6 +126,7 @@ the cross-boundary assertion.
 | `tests/model-routing.test.ts` | Unit | Per-role model policy defaults, configured reviewer routes, promotion/refusal rules, and telemetry |
 | `tests/monitor-aggregator.test.ts` | Unit | Extension-owned monitor reducer timing math, event ordering, nested rows, terminal closure, and bounded retention |
 | `tests/monitor-contracts.test.ts` | Unit | Lean monitor event, snapshot, UI-section, human-action, and launcher-boundary contracts |
+| `tests/monitor-sink.test.ts` | Unit | Source-core monitor emitter derives plain-label run, stage, step, loop, model, validation, and wait events |
 | `tests/orchestrator-startup-preflight.test.ts` | Integration | Startup singleton preflight refuses competing daemons without blocking safe ownership cases |
 | `tests/orchestrator.test.ts` | Integration | End-to-end orchestration across issue states, workspaces, runner turns, review, CI, recovery, merge, and guardrails |
 | `tests/phase-timing.test.ts` | Unit | Phase timing redacts validation commands and preserves artifact hashes |

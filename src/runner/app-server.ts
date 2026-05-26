@@ -31,7 +31,7 @@ export class CodexAppServerRunner implements AgentRunner {
       issueId: input.issue.id,
       issueIdentifier: input.issue.identifier,
       message: `${route.role}: ${route.applied ? route.model : route.proposedModel ? `${route.mode} ${route.proposedModel}` : "inherited"}`,
-      payload: route,
+      payload: { ...route, attempt: input.modelRouting?.attempt ?? null },
       timestamp: new Date().toISOString()
     });
     const support = await verifyCodexAppServer(input.config.codex.command);

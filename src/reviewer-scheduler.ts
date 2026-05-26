@@ -7,7 +7,7 @@ import type { JsonlLogger } from "./logging.js";
 import { joinedHeadShas } from "./orchestrator-review-helpers.js";
 import { blockingFindings, reviewArtifactPath, reviewArtifactRelativePath, reviewerPrompt, reviewRunnerFailureArtifact, writeReviewArtifact } from "./review.js";
 import { runReviewerWithArtifactRetry, type ReviewerRunOutcome } from "./reviewer-runner.js";
-import type { AgentRunner, ContextBudgetState, Issue, IssueState, ReviewRunnerFailure, ReviewStateReviewer, ServiceConfig, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunner, ContextBudgetState, Issue, IssueState, ReviewRunnerFailure, ReviewStateReviewer, ServiceConfig, Workspace } from "./types.js";
 import type { ReviewerArtifact } from "./review.js";
 
 interface OrderedReviewerOutcome extends ReviewerRunOutcome {
@@ -41,6 +41,7 @@ export async function runReviewerIteration(input: {
   runner: AgentRunner;
   logger: JsonlLogger;
   onActivity: (issueId: string, timestamp: string) => void;
+  writeRunEvent?: (runId: string, entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }) => Promise<void>;
 }): Promise<ReviewerIterationResult> {
   const reviewerConcurrency = reviewerConcurrencyFor(input.config, input.reviewers.length);
   const parallelReviewers = reviewerConcurrency > 1;
@@ -135,7 +136,8 @@ export async function runReviewerIteration(input: {
         config: input.config,
         runner: input.runner,
         logger: input.logger,
-        onActivity: input.onActivity
+        onActivity: input.onActivity,
+        writeRunEvent: input.writeRunEvent
       });
       return { ...outcome, reviewer };
     };
