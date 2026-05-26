@@ -127,7 +127,7 @@ the cross-boundary assertion.
 | `tests/model-routing.test.ts` | Unit | Per-role model policy defaults, configured reviewer routes, promotion/refusal rules, and telemetry |
 | `tests/monitor-aggregator.test.ts` | Unit | Extension-owned monitor reducer timing math, event ordering, nested rows, terminal closure, and bounded retention |
 | `tests/monitor-contracts.test.ts` | Unit | Lean monitor event, snapshot, UI-section, human-action, and launcher-boundary contracts |
-| `tests/monitor-launcher.test.ts` | Unit | Extension-owned macOS launcher process manager command construction, owned start/stop, read-only attach, failure handling, and source-core import boundary |
+| `tests/monitor-launcher.test.ts` | Unit | Extension-owned macOS launcher process manager command construction, app bundle/config generation, CLI install, owned start/stop, read-only attach, failure handling, and source-core import boundary |
 | `tests/monitor-sink.test.ts` | Unit | Source-core monitor emitter derives plain-label run, stage, step, loop, model, validation, and wait events |
 | `tests/orchestrator-startup-preflight.test.ts` | Integration | Startup singleton preflight refuses competing daemons without blocking safe ownership cases |
 | `tests/orchestrator.test.ts` | Integration | End-to-end orchestration across issue states, workspaces, runner turns, review, CI, recovery, merge, and guardrails |

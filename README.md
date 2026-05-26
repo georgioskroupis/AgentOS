@@ -187,6 +187,20 @@ Codex plugin manifest/cache warnings are retained in run events as bounded
 diagnostics and omitted from active warning summaries; use `runs inspect` only
 when that raw stderr is needed for debugging.
 
+### `monitor install-macos`
+
+Generates or updates a Dock-runnable `AgentOS Monitor.app` bundle and writes the
+local launcher config used by the standalone monitor window.
+
+```bash
+bin/agent-os monitor install-macos --repo . --workflow WORKFLOW.md --port 4317
+```
+
+The app opens a standalone Electron window, starts AgentOS with the configured
+monitor port when no monitor is running, and attaches read-only when the local
+health endpoint is already available. Add it to the macOS Dock by dragging the
+generated app into the Dock, or open it once and choose Options > Keep in Dock.
+
 ### `recovery record <issue>`
 
 Records supervisor/operator recovery for clean partial work after a failed run.

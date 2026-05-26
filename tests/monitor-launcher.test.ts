@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { AgentOsLauncherProcessManager, buildLauncherCommand, defaultLauncherConfigPath, launcherEscalationSignal, launcherGracefulShutdownSignal, parseLauncherConfig, type LauncherCommand } from "../src/index.js";
+import { AgentOsLauncherProcessManager, buildLauncherCommand, defaultLauncherConfigPath, defaultMonitorAppPath, installMacosMonitorApp, launcherEscalationSignal, launcherGracefulShutdownSignal, monitorElectronMain, parseLauncherConfig, type LauncherCommand } from "../src/index.js";
 import type { LauncherConfig } from "../src/index.js";
 
 const config: LauncherConfig = {
@@ -13,6 +14,7 @@ const config: LauncherConfig = {
   host: "127.0.0.1",
   port: 4317
 };
+const cliScript = resolve("src/cli.ts");
 
 describe("AgentOS monitor launcher process manager", () => {
   it("constructs the owned AgentOS monitor command from LauncherConfig", () => {
@@ -38,6 +40,84 @@ describe("AgentOS monitor launcher process manager", () => {
 
     expect(defaultLauncherConfigPath("/Users/me")).toBe("/Users/me/Library/Application Support/AgentOS Monitor/config.json");
     await expect(manager.readConfig()).resolves.toEqual(config);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("generates an installable macOS app bundle and LauncherConfig", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agentos-monitor-app-"));
+    const repo = join(dir, "repo");
+    const appPath = join(dir, "Applications", "AgentOS Monitor.app");
+    const configPath = join(dir, "config", "config.json");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "WORKFLOW.md"), "---\ntracker:\n  kind: linear\n---\n", "utf8");
+
+    const result = await installMacosMonitorApp({
+      repo,
+      workflow: "WORKFLOW.md",
+      port: 4317,
+      appPath,
+      configPath,
+      command: "bin/agent-os"
+    });
+
+    expect(result).toMatchObject({ appPath, configPath, url: "http://127.0.0.1:4317" });
+    await expect(readFile(configPath, "utf8").then((raw) => parseLauncherConfig(JSON.parse(raw)))).resolves.toEqual({
+      repo,
+      workflow: "WORKFLOW.md",
+      host: "127.0.0.1",
+      port: 4317,
+      command: "bin/agent-os"
+    });
+    await expect(readFile(join(appPath, "Contents", "Info.plist"), "utf8")).resolves.toContain("<string>AgentOS Monitor</string>");
+    await expect(readFile(join(appPath, "Contents", "Resources", "main.cjs"), "utf8")).resolves.toContain("new BrowserWindow");
+    await expect(readFile(join(appPath, "Contents", "Resources", "preload.cjs"), "utf8")).resolves.toContain("contextBridge.exposeInMainWorld");
+    const executable = join(appPath, "Contents", "MacOS", "AgentOS Monitor");
+    expect((await stat(executable)).mode & 0o111).toBeGreaterThan(0);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("uses the user Applications folder as the default Dock-runnable app path", () => {
+    expect(defaultMonitorAppPath("/Users/me")).toBe("/Users/me/Applications/AgentOS Monitor.app");
+  });
+
+  it("installs the macOS monitor app through the CLI command", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agentos-monitor-app-cli-"));
+    const repo = join(dir, "repo");
+    const appPath = join(dir, "AgentOS Monitor.app");
+    const configPath = join(dir, "config.json");
+    await mkdir(repo, { recursive: true });
+    await writeFile(join(repo, "WORKFLOW.md"), "---\ntracker:\n  kind: linear\n---\n", "utf8");
+
+    const result = await execOk(process.execPath, [
+      "--import",
+      "tsx",
+      cliScript,
+      "monitor",
+      "install-macos",
+      "--repo",
+      repo,
+      "--workflow",
+      "WORKFLOW.md",
+      "--port",
+      "4317",
+      "--app",
+      appPath,
+      "--config",
+      configPath
+    ]);
+
+    expect(result.stdout).toContain(`AgentOS Monitor.app: ${appPath}`);
+    expect(result.stdout).toContain(`LauncherConfig: ${configPath}`);
+    expect(result.stdout).toContain("Dock setup:");
+    await expect(readFile(join(appPath, "Contents", "Resources", "main.cjs"), "utf8")).resolves.toContain("agentos-launcher:start");
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("rejects missing monitor repo or workflow during app installation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agentos-monitor-app-missing-"));
+    await expect(installMacosMonitorApp({ repo: join(dir, "missing"), workflow: "WORKFLOW.md", port: 4317 })).rejects.toThrow("Monitor repo does not exist");
+    await mkdir(join(dir, "repo"), { recursive: true });
+    await expect(installMacosMonitorApp({ repo: join(dir, "repo"), workflow: "WORKFLOW.md", port: 4317 })).rejects.toThrow("Monitor workflow does not exist");
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -114,6 +194,23 @@ describe("AgentOS monitor launcher process manager", () => {
     expect(child.signals).toEqual([]);
   });
 
+  it("keeps the generated standalone window close path from stopping the owned process", () => {
+    const main = monitorElectronMain();
+    const closeHandler = main.match(/app\.on\("window-all-closed"[\s\S]*?\n}\);/)?.[0] ?? "";
+
+    expect(closeHandler).toContain("app.quit()");
+    expect(closeHandler).not.toContain("stop");
+    expect(main).toContain('ipcMain.handle("agentos-launcher:stop"');
+  });
+
+  it("keeps generated standalone Stop aligned with launcher graceful shutdown semantics", () => {
+    const main = monitorElectronMain();
+
+    expect(main).toContain('const launcherGracefulShutdownSignal = "SIGTERM"');
+    expect(main).toContain('const launcherEscalationSignal = "SIGKILL"');
+    expect(main).toContain("waitForExit(child, gracefulShutdownMs)");
+  });
+
   it("detects a non-monitor process already using the configured port", async () => {
     const manager = new AgentOsLauncherProcessManager({
       fetch: async () => health(false),
@@ -178,6 +275,18 @@ function health(ok: boolean) {
       return { ok };
     }
   };
+}
+
+async function execOk(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(command, args, (error, stdout, stderr) => {
+      if (error) {
+        reject(Object.assign(error, { stdout, stderr }));
+        return;
+      }
+      resolvePromise({ stdout, stderr });
+    });
+  });
 }
 
 class FakeChild extends EventEmitter {

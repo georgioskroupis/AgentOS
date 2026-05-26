@@ -651,6 +651,33 @@
           }, 1000);
         }
 
+        function launcherApi() {
+          const api = window.agentOsLauncher;
+          if (!api || typeof api !== "object") return null;
+          return api;
+        }
+
+        function renderLauncherStrip(strip, launcherState = {}) {
+          const api = launcherApi();
+          const status = launcherState.status ?? "attached";
+          const startDisabled = !api || ["starting", "running", "attached"].includes(status);
+          const stopDisabled = !api || !launcherState.stopEnabled;
+          strip.innerHTML = `<span class="launcher-status">Launcher: ${escapeHtml(status)}</span><button type="button" data-launcher-action="start"${startDisabled ? " disabled" : ""}>Start</button><button type="button" data-launcher-action="stop"${stopDisabled ? " disabled" : ""}>Stop</button><button type="button" data-launcher-action="reload-open"${api ? "" : " disabled"}>Reload/Open</button>`;
+          if (!api || typeof strip.querySelectorAll !== "function") return;
+          for (const button of strip.querySelectorAll("[data-launcher-action]")) {
+            button.addEventListener("click", async () => {
+              const action = button.getAttribute("data-launcher-action");
+              try {
+                if (action === "start" && typeof api.start === "function") setStandaloneMode(true, await api.start());
+                if (action === "stop" && typeof api.stop === "function") setStandaloneMode(true, await api.stop());
+                if (action === "reload-open" && typeof api.reloadOpen === "function") setStandaloneMode(true, await api.reloadOpen());
+              } catch (error) {
+                setStandaloneMode(true, { status: "failed", lastError: error instanceof Error ? error.message : String(error) });
+              }
+            });
+          }
+        }
+
         function setStandaloneMode(enabled, launcherState = {}) {
           const strip = document.querySelector("#launcher-strip");
           if (!strip) return;
@@ -660,10 +687,19 @@
             document.body.dataset.mode = "browser";
             return;
           }
-          const status = launcherState.status ?? "attached";
           strip.hidden = false;
           document.body.dataset.mode = "standalone";
-          strip.innerHTML = `<span class="launcher-status">Launcher: ${escapeHtml(status)}</span><button type="button" disabled>Start</button><button type="button" disabled>Stop</button><a href="/" aria-label="Reload or open monitor">Reload/Open</a>`;
+          renderLauncherStrip(strip, launcherState);
+        }
+
+        async function syncStandaloneLauncher() {
+          const api = launcherApi();
+          if (!api || typeof api.state !== "function") return;
+          try {
+            setStandaloneMode(true, await api.state());
+          } catch {
+            setStandaloneMode(true, { status: "failed" });
+          }
         }
 
         async function refetchSnapshot() {
@@ -688,6 +724,7 @@
         function boot() {
           const params = new URLSearchParams(window.location.search);
           setStandaloneMode(params.get("mode") === "standalone");
+          if (params.get("mode") === "standalone") syncStandaloneLauncher();
           refetchSnapshot().catch(() => applySnapshot({ serverNow: new Date().toISOString(), status: "idle" }));
           connectStream();
         }
@@ -698,7 +735,8 @@
           formatSeconds,
           renderSnapshot,
           applySnapshot,
-          setStandaloneMode
+          setStandaloneMode,
+          syncStandaloneLauncher
         };
 
         if (!window.__AGENTOS_MONITOR_TEST__) boot();
