@@ -10,6 +10,7 @@ export type MonitorSnapshot = {
   serverNow: string;
   status: MonitorSnapshotStatus;
   run?: {
+    runId: string;
     issue: { id: string; title: string; url?: string; linearStatus?: string };
     attempt: { current: number; max?: number };
     runElapsedMs: number;

@@ -41,6 +41,7 @@ import {
 import { loadWorkflow, resolveServiceConfig, validateWorkflowDefinition } from "./workflow.js";
 import { Orchestrator } from "./orchestrator.js";
 import { startHttpServerIfConfigured } from "./http-server-cli.js";
+import { InMemoryMonitorAggregator } from "./monitor-aggregator.js";
 import { formatOperatorRecoveryRecord, recordOperatorRecovery } from "./recovery.js";
 import { RegistryOrchestrator } from "./registry-orchestrator.js";
 import { verifyGitHubCli } from "./github.js";
@@ -226,12 +227,14 @@ orchestrator
     const repo = resolve(options.repo);
     const workflow = resolve(repo, options.workflow);
     await withProjectRunnerLock(repo, "single-project:once", async () => {
-      const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
+      const monitor = new InMemoryMonitorAggregator();
+      const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow, monitorSink: monitor });
       const server = await startHttpServerIfConfigured({
         repoRoot: repo,
         workflowPath: workflow,
         port: options.port,
-        host: options.host
+        host: options.host,
+        monitor
       });
       try {
         await service.runOnce(true);
@@ -252,12 +255,14 @@ orchestrator
       const repo = resolve(options.repo);
       const workflow = resolve(repo, options.workflow);
       await withProjectRunnerLock(repo, "single-project:run", async () => {
-        const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow });
+        const monitor = new InMemoryMonitorAggregator();
+        const service = new Orchestrator({ repoRoot: repo, workflowPath: workflow, monitorSink: monitor });
         const server = await startHttpServerIfConfigured({
           repoRoot: repo,
           workflowPath: workflow,
           port: options.port,
-          host: options.host
+          host: options.host,
+          monitor
         });
         try {
           await service.runUntilStopped(signal);

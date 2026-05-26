@@ -1,5 +1,5 @@
 import { resolveRepoEnv } from "./env.js";
-import { startAgentOsHttpServer, type AgentOsHttpServerHandle } from "./http-server.js";
+import { startAgentOsHttpServer, type AgentOsHttpServerHandle, type MonitorSnapshotSource } from "./http-server.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 
 export async function startHttpServerIfConfigured(input: {
@@ -7,6 +7,7 @@ export async function startHttpServerIfConfigured(input: {
   workflowPath: string;
   port?: number;
   host?: string;
+  monitor?: MonitorSnapshotSource;
 }): Promise<AgentOsHttpServerHandle | null> {
   try {
     const resolvedEnv = await resolveRepoEnv(input.repoRoot, process.env);
@@ -16,7 +17,8 @@ export async function startHttpServerIfConfigured(input: {
       repoRoot: input.repoRoot,
       config,
       port: input.port,
-      host: input.host
+      host: input.host,
+      monitor: input.monitor
     });
     if (server) console.error(`AgentOS monitor placeholder listening at ${server.url}`);
     return server;

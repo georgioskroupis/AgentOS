@@ -116,9 +116,11 @@ It keeps orchestration logic narrow:
   freshness after `main` advances, shows CI/review/merge/retry waits, and
   preserves local validation timing evidence alongside GitHub CI authority.
 - The optional monitor listener is disabled by default and can be enabled with
-  `server.port` or `agent-os orchestrator run --port <number>`. It currently
-  serves only the static lean monitor shell at the root route. Runtime snapshot
-  assembly and rendering remain extension-owned future work.
+  `server.port` or `agent-os orchestrator run --port <number>`. It serves the
+  static lean monitor shell at the root route and the read-only
+  `/api/monitor/v1/snapshot`, `/api/monitor/v1/stream`, and
+  `/api/monitor/v1/health` routes. The API exposes snapshots and heartbeats
+  only, never scheduler mutation controls.
 - Phase timing is a durable measurement surface stored in run summaries and
   events. Operator-facing timing reports and SLO diagnostics are a separate
   reporting layer, not part of the measurement-only timing recorder.

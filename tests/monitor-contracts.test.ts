@@ -34,6 +34,7 @@ describe("monitor contracts", () => {
       serverNow: "2026-05-25T00:00:01.000Z",
       status: "active",
       run: {
+        runId: "run-150",
         issue: { id: "VER-150", title: "Define monitor contract", linearStatus: "In Progress" },
         attempt: { current: 0 },
         runElapsedMs: 1000,

@@ -24,6 +24,8 @@ export type MonitorAggregatorRetention = {
   hasTerminalSnapshot: boolean;
 };
 
+export type MonitorSnapshotListener = (snapshot: MonitorSnapshot) => void;
+
 type StoredMonitorEvent = {
   event: MonitorEvent;
   order: number;
@@ -72,6 +74,7 @@ export class InMemoryMonitorAggregator implements MonitorSink {
   private currentRun: MonitorRunContext | undefined;
   private events: StoredMonitorEvent[] = [];
   private terminalSnapshot: MonitorSnapshot | undefined;
+  private listeners = new Set<MonitorSnapshotListener>();
   private sequence = 0;
 
   emit(event: MonitorEvent): void {
@@ -82,18 +85,23 @@ export class InMemoryMonitorAggregator implements MonitorSink {
 
     if (!this.activeRunId) this.activeRunId = event.runId;
     if (event.runId !== this.activeRunId) return;
+    this.ensureRunContext(event);
 
     this.events.push({ event, order: this.sequence++ });
 
     if (isTerminalKind(event.kind) && this.currentRun?.runId === event.runId) {
       const snapshot = this.buildSnapshot(event.timestamp, this.currentRun);
       this.retainTerminal(snapshot);
+      this.notify(snapshot);
+      return;
     }
+    this.notify(this.snapshot({ serverNow: event.timestamp }));
   }
 
   updateRunContext(run: MonitorRunContext): void {
     this.currentRun = run;
     if (!this.activeRunId) this.activeRunId = run.runId;
+    this.notify(this.snapshot());
   }
 
   snapshot(options: MonitorSnapshotOptions = {}): MonitorSnapshot {
@@ -117,6 +125,28 @@ export class InMemoryMonitorAggregator implements MonitorSink {
       activeEventCount: this.events.length,
       hasTerminalSnapshot: this.terminalSnapshot != null
     };
+  }
+
+  subscribe(listener: MonitorSnapshotListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private ensureRunContext(event: MonitorEvent): void {
+    if (this.currentRun?.runId === event.runId) return;
+    this.currentRun = {
+      runId: event.runId,
+      issue: { id: event.issueId ?? event.runId, title: event.label },
+      attempt: { current: 0 },
+      links: {},
+      summary: defaultSummary
+    };
+  }
+
+  private notify(snapshot: MonitorSnapshot): void {
+    for (const listener of this.listeners) listener(snapshot);
   }
 
   private retainTerminal(snapshot: MonitorSnapshot): void {
@@ -194,6 +224,7 @@ export class InMemoryMonitorAggregator implements MonitorSink {
       serverNow,
       status,
       run: {
+        runId: run.runId,
         issue: run.issue,
         attempt: run.attempt,
         runElapsedMs,
