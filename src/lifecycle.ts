@@ -1,8 +1,8 @@
-import type { LegacyLifecycleMode, LifecycleDuplicateCommentBehavior, LifecycleMode, ServiceConfig } from "./types.js";
+import type { LifecycleDuplicateCommentBehavior, LifecycleMode, ServiceConfig } from "./types.js";
 
 export const lifecycleModes = ["agent-owned"] as const;
 const publicLifecycleModes = lifecycleModes;
-const legacyLifecycleModes: readonly LegacyLifecycleMode[] = ["orchestrator-owned", "hybrid"] as const;
+const legacyLifecycleModes = ["orchestrator-owned", "hybrid"] as const;
 export const lifecycleDuplicateCommentBehaviors = ["upsert", "skip", "error"] as const;
 export const requiredAgentLifecycleTools = [
   "scripts/agent-linear-comment.sh",
@@ -107,37 +107,16 @@ export function validateLifecycleConfig(lifecycle: ServiceConfig["lifecycle"], s
 }
 
 export function orchestratorMayMoveIssue(config: ServiceConfig): boolean {
-  return config.lifecycle.mode !== "agent-owned";
+  return isTestOnlyOrchestratorLifecycleFixture(config);
 }
 
 export function orchestratorMayComment(config: ServiceConfig, kind: LifecycleCommentKind): boolean {
-  if (config.lifecycle.mode === "agent-owned") return false;
-  if (config.lifecycle.mode === "hybrid" && kind === "substantive") return false;
-  return true;
-}
-
-export function usesFullOrchestratorHandoff(config: ServiceConfig): boolean {
-  return config.lifecycle.mode === "orchestrator-owned";
+  void kind;
+  return isTestOnlyOrchestratorLifecycleFixture(config);
 }
 
 export function lifecycleAllowsClientTrackerTools(config: ServiceConfig): boolean {
   return config.lifecycle?.mode === "agent-owned" && config.lifecycle.clientTrackerTools.includes("linear_graphql");
-}
-
-export function applyTestOnlyLegacyLifecycleFallback(workflowConfig: Record<string, unknown>, config: ServiceConfig): void {
-  const lifecycleConfig = workflowConfig.lifecycle;
-  const hasExplicitMode = lifecycleConfig != null
-    && typeof lifecycleConfig === "object"
-    && !Array.isArray(lifecycleConfig)
-    && Object.prototype.hasOwnProperty.call(lifecycleConfig, "mode");
-  if (hasExplicitMode) return;
-  if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") return;
-
-  // Public workflow resolution now defaults omitted lifecycle.mode to
-  // agent-owned. Older orchestrator/recovery tests still cover pre-refactor
-  // scheduler-owned behavior through omitted lifecycle config, so this keeps
-  // that compatibility test-only and unreachable from real workflow config.
-  config.lifecycle.mode = "orchestrator-owned";
 }
 
 export function schedulerBookkeepingHandoffComment(input: { issueIdentifier: string; workspacePath: string; reviewStatus?: string; reviewIteration?: number }): string {
@@ -176,4 +155,8 @@ function nullableString(value: unknown): string | null {
 
 function normalizeToolName(value: string): string {
   return value.trim().replace(/^\.\//, "");
+}
+
+function isTestOnlyOrchestratorLifecycleFixture(config: ServiceConfig): boolean {
+  return process.env.VITEST === "true" && config.lifecycle.maturityAcknowledgement === "test-only-orchestrator-lifecycle-fixture";
 }

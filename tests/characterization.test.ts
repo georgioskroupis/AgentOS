@@ -6,7 +6,7 @@ import { issueStateFromHandoff } from "../src/issue-state.js";
 import { JsonlLogger } from "../src/logging.js";
 import { Orchestrator } from "../src/orchestrator.js";
 import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
-import { fakeIssue, FakeRunner, FakeTracker, writePassingHandoff } from "./fixtures/agentos-fakes.js";
+import { fakeIssue, FakeRunner, FakeTracker, strictAgentOwnedLifecycleYaml, writePassingHandoff } from "./fixtures/agentos-fakes.js";
 
 describe("current AgentOS characterization", () => {
   it("captures current workflow defaults targeted by hardening", async () => {
@@ -61,6 +61,7 @@ describe("current AgentOS characterization", () => {
       workflowPath,
       [
         "---",
+        strictAgentOwnedLifecycleYaml,
         "tracker:",
         "  kind: linear",
         "  api_key: $LINEAR_API_KEY",

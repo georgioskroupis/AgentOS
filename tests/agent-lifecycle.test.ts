@@ -95,7 +95,8 @@ describe("agent lifecycle tools", () => {
           repoRoot: repo,
           config: lifecycleConfig({
             mode: "agent-owned",
-            idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->"
+            idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->",
+            maturityAcknowledgement: null
           }),
           tracker
         },
@@ -168,43 +169,12 @@ describe("agent lifecycle tools", () => {
     await expect(readFile(join(repo, ".agent-os", "handoff-issue-1.md"), "utf8")).rejects.toThrow();
   });
 
-  it("rejects orchestrator-owned tracker writes before lookup, tracker writes, or fallback", async () => {
-    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-owned-"));
-    const tracker = new MemoryTracker();
-
-    await expect(
-      commentWithAgentLifecycleTool(
-        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
-        { issue: "AG-1", event: "status_update", tool: "scripts/agent-linear-comment.sh", body: "handoff" }
-      )
-    ).rejects.toThrow("lifecycle.mode=orchestrator-owned rejects agent tracker writes");
-
-    expect(tracker.lookups).toEqual([]);
-    expect(tracker.comments).toEqual([]);
-    await expect(readFile(join(repo, ".agent-os", "handoff-AG-1.md"), "utf8")).rejects.toThrow();
-  });
-
-  it("rejects default agent mode moves under orchestrator-owned policy before lookup or writes", async () => {
-    const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-owned-move-"));
-    const tracker = new MemoryTracker();
-
-    await expect(
-      moveWithAgentLifecycleTool(
-        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
-        { issue: "AG-1", state: "Merging", tool: "scripts/agent-linear-move.sh" }
-      )
-    ).rejects.toThrow("lifecycle.mode=orchestrator-owned rejects agent tracker writes");
-
-    expect(tracker.lookups).toEqual([]);
-    expect(tracker.moves).toEqual([]);
-  });
-
-  it("allows explicit supervisor moves under orchestrator-owned policy after identifier and known-state validation", async () => {
+  it("allows explicit supervisor moves after identifier and known-state validation", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-agent-lifecycle-supervisor-move-"));
     const tracker = new MemoryTracker({ state: "Human Review" });
 
     const result = await moveWithAgentLifecycleTool(
-      { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+      { repoRoot: repo, config: lifecycleConfig(), tracker },
       {
         issue: "AG-1",
         state: "Merging",
@@ -225,7 +195,7 @@ describe("agent lifecycle tools", () => {
 
     await expect(
       moveWithAgentLifecycleTool(
-        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
         {
           issue: "AG-404",
           state: "Merging",
@@ -245,7 +215,7 @@ describe("agent lifecycle tools", () => {
 
     await expect(
       moveWithAgentLifecycleTool(
-        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
         {
           issue: "AG-1",
           state: "Ready",
@@ -288,7 +258,7 @@ describe("agent lifecycle tools", () => {
 
     await expect(
       commentWithAgentLifecycleTool(
-        { repoRoot: repo, config: lifecycleConfig({ mode: "orchestrator-owned" }), tracker },
+        { repoRoot: repo, config: lifecycleConfig(), tracker },
         {
           issue: "AG-1",
           event: "supervisor-decision",
@@ -878,7 +848,7 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
     trustMode: "ci-locked",
     automation: { profile: "conservative", repairPolicy: "conservative" },
     lifecycle: {
-      mode: "hybrid",
+      mode: "agent-owned",
       allowedTrackerTools: [
         "scripts/agent-linear-comment.sh",
         "scripts/agent-linear-move.sh",
@@ -890,7 +860,7 @@ function lifecycleConfig(overrides: Partial<ServiceConfig["lifecycle"]> = {}): S
       allowedStateTransitions: ["Todo -> In Progress", "In Progress -> Human Review"],
       duplicateCommentBehavior: "upsert",
       fallbackBehavior: "write handoff and stop human_required",
-      maturityAcknowledgement: null,
+      maturityAcknowledgement: "test-only-legacy-marker-fixture",
       trustedDecisionActors: [],
       ...overrides
     },

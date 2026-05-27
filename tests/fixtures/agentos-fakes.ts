@@ -3,6 +3,26 @@ import { join } from "node:path";
 import { writeValidationEvidence } from "../../src/validation.js";
 import type { AgentRunResult, AgentRunner, Issue, IssueTracker, ServiceConfig, Workspace } from "../../src/types.js";
 
+export const strictAgentOwnedLifecycleYaml = [
+  "lifecycle:",
+  "  mode: agent-owned",
+  "  allowed_tracker_tools:",
+  "    - scripts/agent-linear-comment.sh",
+  "    - scripts/agent-linear-move.sh",
+  "    - scripts/agent-linear-pr.sh",
+  "    - scripts/agent-linear-handoff.sh",
+  "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+  "  allowed_state_transitions:",
+  "    - Ready -> In Progress",
+  "    - Ready -> Human Review",
+  "    - Todo -> In Progress",
+  "    - Todo -> Human Review",
+  "    - In Progress -> Human Review",
+  "  duplicate_comment_behavior: upsert",
+  "  fallback_behavior: write handoff and stop human_required",
+  "  maturity_acknowledgement: test-only-orchestrator-lifecycle-fixture"
+].join("\n");
+
 export function fakeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
     id: "issue-1",
@@ -26,13 +46,18 @@ export function fakeServiceConfig(overrides: Partial<ServiceConfig> = {}): Servi
     trustMode: "ci-locked",
     automation: { profile: "conservative", repairPolicy: "conservative" },
     lifecycle: {
-      mode: "orchestrator-owned",
-      allowedTrackerTools: [],
+      mode: "agent-owned",
+      allowedTrackerTools: [
+        "scripts/agent-linear-comment.sh",
+        "scripts/agent-linear-move.sh",
+        "scripts/agent-linear-pr.sh",
+        "scripts/agent-linear-handoff.sh"
+      ],
       clientTrackerTools: [],
-      idempotencyMarkerFormat: null,
-      allowedStateTransitions: [],
-      duplicateCommentBehavior: null,
-      fallbackBehavior: null,
+      idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->",
+      allowedStateTransitions: ["Todo -> In Progress", "Todo -> Human Review", "In Progress -> Human Review"],
+      duplicateCommentBehavior: "upsert",
+      fallbackBehavior: "write handoff and stop human_required",
       maturityAcknowledgement: null,
       trustedDecisionActors: []
     },

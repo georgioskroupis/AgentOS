@@ -14,7 +14,6 @@ import {
   reviewTargetPullRequests
 } from "./issue-state.js";
 import { RuntimeStateStore } from "./runtime-state.js";
-import { applyTestOnlyLegacyLifecycleFallback } from "./lifecycle.js";
 import { validationEvidencePath, verifyValidationEvidence } from "./validation.js";
 import { validationReuseProfileForConfig } from "./validation-profile.js";
 import { workspaceKey } from "./workspace.js";
@@ -363,14 +362,10 @@ async function recoveryServiceConfig(repoRoot: string): Promise<ServiceConfig> {
   const workflowPath = join(repoRoot, "WORKFLOW.md");
   if (await pathExists(workflowPath)) {
     const workflow = await loadWorkflow(workflowPath);
-    const config = resolveServiceConfig(workflow);
-    applyTestOnlyLegacyLifecycleFallback(workflow.config, config);
-    return config;
+    return resolveServiceConfig(workflow);
   }
   const workflow = { config: {}, prompt_template: "", workflowPath };
-  const config = resolveServiceConfig(workflow);
-  applyTestOnlyLegacyLifecycleFallback(workflow.config, config);
-  return config;
+  return resolveServiceConfig(workflow);
 }
 
 export function formatOperatorRecoveryRecord(result: OperatorRecoveryRecordResult): string {

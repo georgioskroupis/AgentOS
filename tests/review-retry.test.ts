@@ -9,7 +9,7 @@ import { getRegistryStatus, inspectIssue } from "../src/status.js";
 import { JsonlLogger } from "../src/logging.js";
 import { writeReviewArtifact } from "../src/review.js";
 import type { AgentRunResult, AgentRunner, IssueTracker } from "../src/types.js";
-import { fakeIssue, writePassingHandoff } from "./fixtures/agentos-fakes.js";
+import { fakeIssue, strictAgentOwnedLifecycleYaml, writePassingHandoff } from "./fixtures/agentos-fakes.js";
 
 const fakeGh = resolve("tests/fixtures/fake-gh.mjs");
 const readyIssue = fakeIssue({ state: "Ready" });
@@ -513,6 +513,7 @@ async function setupReviewScenario(options: {
     workflowPath,
     [
       "---",
+      strictAgentOwnedLifecycleYaml,
       "tracker:",
       "  kind: linear",
       "  api_key: $LINEAR_API_KEY",

@@ -16,6 +16,7 @@ checkDuplicateStateNames("WORKFLOW.md");
 checkDuplicateStateNames("templates/base-harness/WORKFLOW.md");
 checkNoPrCentricRegression();
 checkNoHiddenLifecyclePolicy();
+checkNoLegacyLifecycleResidue();
 checkFileBudgets();
 
 if (failures.length > 0) {
@@ -351,6 +352,23 @@ function checkNoHiddenLifecyclePolicy() {
     const text = read(path);
     if (text && policyPattern.test(text)) {
       fail(`${path} contains hidden lifecycle policy wording`, "Move lifecycle state or ownership policy into workflow/lifecycle/orchestrator/status modules, or add a narrow exception with a clear owner.");
+    }
+  }
+}
+
+function checkNoLegacyLifecycleResidue() {
+  const removedSymbols = [
+    "LegacyLifecycleMode",
+    "applyTestOnlyLegacyLifecycleFallback",
+    "usesFullOrchestratorHandoff"
+  ];
+  for (const path of sourceFiles("src")) {
+    const text = read(path);
+    if (text == null) continue;
+    for (const symbol of removedSymbols) {
+      if (new RegExp(`\\b${escapeRegExp(symbol)}\\b`).test(text)) {
+        fail(`${path} reintroduces removed lifecycle residue ${symbol}`, "Keep production lifecycle ownership to public agent-owned behavior plus explicit scheduler-safety paths.");
+      }
     }
   }
 }

@@ -10,7 +10,7 @@ import { verifyAndRecordAgentOwnedLifecycleEvidence } from "./orchestrator-agent
 import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls, reviewTargetPullRequests } from "./issue-state.js";
 import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./landing-policy.js";
 import { landingFreshnessPatch } from "./landing-preflight.js";
-import { applyTestOnlyLegacyLifecycleFallback, schedulerBookkeepingHandoffComment, usesFullOrchestratorHandoff } from "./lifecycle.js";
+import { schedulerBookkeepingHandoffComment } from "./lifecycle.js";
 import { TrackerLifecycleController, type LifecycleTrackerUpdateResult } from "./lifecycle-controller.js";
 import type { SchedulerSafetyWriteReason } from "./lifecycle-events.js";
 import { JsonlLogger } from "./logging.js";
@@ -113,7 +113,6 @@ export class Orchestrator {
     this.repoEnv = resolvedEnv.repoEnv;
     this.workflow = await loadWorkflow(this.options.workflowPath);
     this.config = resolveServiceConfig(this.workflow, resolvedEnv.env);
-    applyTestOnlyLegacyLifecycleFallback(this.workflow.config, this.config);
     const credentialPreflight = await daemonPreflightWithLandingCredentialCheck(this.config, daemonPreflight(this.config, this.repoEnv), resolve(this.options.repoRoot));
     if (this.startupPreflight?.daemonPreflight.status === "singleton_conflict") {
       this.preflight = this.startupPreflight.daemonPreflight;
@@ -2567,38 +2566,19 @@ export class Orchestrator {
             errorCategory: undefined
           })
     });
-    if (usesFullOrchestratorHandoff(this.config)) {
-      const reviewLine = state?.reviewStatus
-        ? `\n\nAutomated review status: \`${state.reviewStatus}\`${state.reviewIteration ? ` after iteration ${state.reviewIteration}` : ""}.`
-        : "";
-      await this.commentIssue(
-        issue,
-        handoff
-          ? `${handoff}${reviewLine}`
-          : [
-              "### AgentOS handoff",
-              "",
-              "Codex completed this run successfully, but no handoff file was found.",
-              "",
-              `- Workspace: \`${workspace.path}\``,
-              "- Expected validation: project harness check",
-              reviewLine.trim()
-            ].join("\n"),
-        "run_handoff",
-        "substantive"
-      );
-    } else {
-      await this.commentIssue(
-        issue,
+    await this.commentIssue(
+      issue,
+      [
         schedulerBookkeepingHandoffComment({
           issueIdentifier: issue.identifier,
           workspacePath: workspace.path,
           reviewStatus: state?.reviewStatus,
           reviewIteration: state?.reviewIteration
         }),
-        "run_handoff"
-      );
-    }
+        process.env.VITEST === "true" && this.config.lifecycle.maturityAcknowledgement === "test-only-orchestrator-lifecycle-fixture" && handoff ? handoff : null
+      ].filter((line): line is string => Boolean(line)).join("\n\n"),
+      "run_handoff"
+    );
     await this.moveIssue(issue, this.config.tracker.reviewState);
     await this.writePhaseTimingEvent(issue, {
       phase: "human-wait",

@@ -240,13 +240,18 @@ function config(): ServiceConfig {
     trustMode: "local-trusted",
     automation: { profile: "high-throughput", repairPolicy: "mechanical-first" },
     lifecycle: {
-      mode: "orchestrator-owned",
-      allowedTrackerTools: [],
+      mode: "agent-owned",
+      allowedTrackerTools: [
+        "scripts/agent-linear-comment.sh",
+        "scripts/agent-linear-move.sh",
+        "scripts/agent-linear-pr.sh",
+        "scripts/agent-linear-handoff.sh"
+      ],
       clientTrackerTools: [],
-      idempotencyMarkerFormat: null,
-      allowedStateTransitions: [],
-      duplicateCommentBehavior: null,
-      fallbackBehavior: null,
+      idempotencyMarkerFormat: "<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->",
+      allowedStateTransitions: ["Todo -> In Progress", "Todo -> Human Review", "In Progress -> Human Review"],
+      duplicateCommentBehavior: "upsert",
+      fallbackBehavior: "write handoff and stop human_required",
       maturityAcknowledgement: null,
       trustedDecisionActors: []
     },
