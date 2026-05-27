@@ -31,7 +31,7 @@ import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
 import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
 import { recoverMergeMetadataFromWorkspaceEvidence } from "./orchestrator-merge-recovery.js";
-import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
+import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, withRunnerActivityMonitorContext, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
 import { emitPreDispatchMonitorPause } from "./orchestrator-pre-dispatch-monitor.js";
 import { markLinearPlanningRecommended } from "./orchestrator-planning-guardrail.js";
 import { markDraftPullRequestReadyIfConfigured } from "./orchestrator-pr-ready.js";
@@ -1318,7 +1318,7 @@ export class Orchestrator {
           signal,
           onEvent: (event) => {
             this.markRunningActivity(issue.id, event.timestamp);
-            void this.writeRunEvent(runId, { ...event, runId });
+            void this.writeRunEvent(runId, { ...withRunnerActivityMonitorContext(event, implementationTiming), runId });
           }
         });
       } catch (error) {

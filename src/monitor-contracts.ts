@@ -70,6 +70,7 @@ export type MonitorEvent = {
   spanId: string;
   parentSpanId?: string;
   runId: string;
+  turnId?: string;
   issueId?: string;
   timestamp: string;
   kind:

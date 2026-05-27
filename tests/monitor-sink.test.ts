@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { JsonlLogger } from "../src/logging.js";
 import type { MonitorEvent } from "../src/monitor-contracts.js";
+import { withRunnerActivityMonitorContext } from "../src/orchestrator-monitor-events.js";
 import { createMonitorEmitter } from "../src/monitor-sink.js";
 
 describe("monitor emitter", () => {
@@ -108,6 +109,107 @@ describe("monitor emitter", () => {
       label: "CI wait",
       status: "waiting",
       timeClass: "external-wait"
+    });
+  });
+
+  it("emits compact activity_observed events from explicit runner monitor hints", async () => {
+    const emitted: MonitorEvent[] = [];
+    const logger = new JsonlLogger(await mkdtemp(join(tmpdir(), "agent-os-monitor-activity-")));
+    const emitter = createMonitorEmitter({
+      logger,
+      sink: {
+        emit(event) {
+          emitted.push(event);
+        }
+      }
+    });
+
+    await emitter.emit("run-1", {
+      type: "item/completed",
+      issueId: "AG-1",
+      issueIdentifier: "AG-1",
+      message: "raw runner event",
+      timestamp: "2026-05-25T00:00:07.000Z",
+      payload: {
+        params: { item: { output: "raw command output should stay out of monitor activity" } },
+        monitor: {
+          kind: "activity_observed",
+          spanId: "run-1:implementation:1:step",
+          parentSpanId: "run-1:implementation:1",
+          turnId: "turn-1",
+          label: "Runner command completed",
+          timeClass: "agent",
+          activity: {
+            kind: "command_output",
+            label: "Runner command completed",
+            command: "npm test",
+            stream: "stdout",
+            bytesObserved: 2048,
+            output: "raw command output should stay out of monitor activity"
+          }
+        }
+      }
+    });
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({
+      kind: "activity_observed",
+      spanId: "run-1:implementation:1:step",
+      parentSpanId: "run-1:implementation:1",
+      runId: "run-1",
+      turnId: "turn-1",
+      label: "Runner command completed",
+      timeClass: "agent",
+      activity: {
+        kind: "command_output",
+        label: "Runner command completed",
+        command: "npm test",
+        stream: "stdout",
+        bytesObserved: 2048
+      }
+    });
+    expect(JSON.stringify(emitted[0])).not.toContain("raw command output");
+  });
+
+  it("tags runner updates with the active turn span without copying raw payloads into monitor activity", () => {
+    const event = withRunnerActivityMonitorContext(
+      {
+        type: "thread/tokenUsage/updated",
+        issueId: "AG-1",
+        issueIdentifier: "AG-1",
+        timestamp: "2026-05-25T00:00:08.000Z",
+        payload: {
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: { total: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }
+          }
+        }
+      },
+      {
+        id: "run-1:implementation:1",
+        phase: "implementation",
+        label: "implementation turn 1",
+        status: "running",
+        startedAt: "2026-05-25T00:00:00.000Z"
+      }
+    );
+
+    expect(event.payload).toMatchObject({
+      monitor: {
+        kind: "activity_observed",
+        spanId: "run-1:implementation:1:step",
+        parentSpanId: "run-1:implementation:1",
+        turnId: "turn-1",
+        label: "Runner token usage observed",
+        activity: {
+          kind: "token_usage",
+          label: "Runner token usage observed",
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15
+        }
+      }
     });
   });
 });
