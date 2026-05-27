@@ -292,8 +292,63 @@ describe("operator recovery", () => {
     );
 
     await expect(recordOperatorRecovery({ repoRoot: repo, issueIdentifier: issue.identifier })).rejects.toThrow(
-      /partially-satisfied[\s\S]*Next safe action: finish/
+      /partially-satisfied without an approve-as-is human decision[\s\S]*Next safe action: finish/
     );
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("records approve-as-is partially satisfied handoffs with passing validation and PR metadata", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-recovery-partial-approved-"));
+    const { workspace, headSha } = await createWorkspace(repo, { pushBranch: true });
+    const now = new Date().toISOString();
+    const prUrl = "https://github.com/o/r/pull/42";
+    await mkdir(join(workspace, ".agent-os"), { recursive: true });
+    await writeFile(
+      join(workspace, ".agent-os", `handoff-${issue.identifier}.md`),
+      [
+        "AgentOS-Outcome: partially-satisfied",
+        "AgentOS-Human-Decision: approve-as-is",
+        `Validation-JSON: .agent-os/validation/${issue.identifier}.json`,
+        `Primary PR: ${prUrl}`,
+        "App-Proof: .agent-os/proof/manual-review.md"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeValidationEvidence(join(workspace, ".agent-os", "validation", `${issue.identifier}.json`), {
+      schemaVersion: 1,
+      issueIdentifier: issue.identifier,
+      runId: "run_partial_approved",
+      repoHead: headSha,
+      status: "passed",
+      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }]
+    });
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      phase: "canceled",
+      lastRunId: "run_stale_canceled",
+      workspacePath: workspace,
+      updatedAt: "2026-05-17T00:00:00.000Z"
+    });
+
+    const result = await recordOperatorRecovery({
+      repoRoot: repo,
+      issueIdentifier: issue.identifier,
+      now: "2026-05-17T02:00:00.000Z"
+    });
+
+    expect(result.state).toMatchObject({
+      phase: "completed",
+      outcome: "partially_satisfied",
+      lastRunId: "run_partial_approved",
+      prUrl,
+      mergeTargetUrl: prUrl,
+      mergeTargetRole: "primary",
+      reviewTargetUrls: [prUrl],
+      validation: { status: "passed", runId: "run_partial_approved" },
+      appProof: { artifacts: [{ label: "app-proof", value: ".agent-os/proof/manual-review.md", source: "handoff" }] },
+      lastHumanDecision: { type: "approve_as_is", source: "handoff" }
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("refuses dirty, missing, and ambiguous worktree evidence with next actions", async () => {

@@ -30,6 +30,7 @@ import { recordSingletonPreflightFailure } from "./orchestrator-singleton-prefli
 import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
 import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
+import { recoverMergeMetadataFromWorkspaceEvidence } from "./orchestrator-merge-recovery.js";
 import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
 import { emitPreDispatchMonitorPause } from "./orchestrator-pre-dispatch-monitor.js";
 import { markLinearPlanningRecommended } from "./orchestrator-planning-guardrail.js";
@@ -2115,6 +2116,8 @@ export class Orchestrator {
         logger: this.logger
       });
     }
+    const recovered = await recoverMergeMetadataFromWorkspaceEvidence({ issue, state, repoRoot: resolve(this.options.repoRoot), logger: this.logger });
+    state = recovered.state;
     const mergeTarget = mergeTargetPullRequest(state);
     const mergePr = mergeTarget?.url ?? null;
     const mergeEligiblePrs = mergeEligiblePullRequests(state);
@@ -2140,7 +2143,9 @@ export class Orchestrator {
         return;
       }
       if (!state || !mergePr) {
-        const reason = "No pull request metadata was found for this issue.";
+        const reason = recovered.refusal
+          ? `No pull request metadata was found for this issue. AgentOS could not reconstruct it from workspace handoff/validation evidence: ${recovered.refusal.message}`
+          : "No pull request metadata was found for this issue.";
         timingStatus = "failed";
         timingLabel = "merge shepherding failed";
         timingMetadata = { reason };

@@ -15,6 +15,7 @@ import { writeValidationEvidence } from "../src/validation.js";
 import { inspectIssue } from "../src/status.js";
 import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
 import { validationReuseProfileForConfig } from "../src/validation-profile.js";
+import { applyTestOnlyLegacyLifecycleFallback } from "../src/lifecycle.js";
 import type { MonitorEvent } from "../src/monitor-contracts.js";
 
 const readyIssue: Issue = {
@@ -5413,6 +5414,124 @@ describe("orchestrator", () => {
     expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "human-wait")).toBe(true);
     expect(events.filter((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "ci-wait")).toHaveLength(2);
   });
+
+  it("reconstructs merge metadata from approved partial recovery evidence before Merging", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-recovery-"));
+    await initGitRemote(repo);
+    await run("git", ["checkout", "-b", "main"], repo);
+    await run("git", ["config", "user.email", "agentos@example.test"], repo);
+    await run("git", ["config", "user.name", "AgentOS Test"], repo);
+    await writeFile(join(repo, "README.md"), "initial\n", "utf8");
+    await run("git", ["add", "README.md"], repo);
+    await run("git", ["commit", "-m", "initial"], repo);
+    const startMain = await run("git", ["rev-parse", "HEAD"], repo);
+    await run("git", ["update-ref", "refs/remotes/origin/main", startMain], repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const { workspacePath, headSha } = await createCleanPushedIssueWorkspace(repo);
+    const workflow = await loadWorkflow(workflowPath);
+    const serviceConfig = resolveServiceConfig(workflow);
+    applyTestOnlyLegacyLifecycleFallback(workflow.config, serviceConfig);
+    const prUrl = "https://github.com/o/r/pull/125";
+    const now = new Date().toISOString();
+    await mkdir(join(workspacePath, ".agent-os"), { recursive: true });
+    await writeFile(
+      join(workspacePath, ".agent-os", "handoff-AG-1.md"),
+      [
+        "AgentOS-Outcome: partially-satisfied",
+        "AgentOS-Human-Decision: approve-as-is",
+        "Validation-JSON: .agent-os/validation/AG-1.json",
+        `Primary PR: ${prUrl}`,
+        "App-Proof: .agent-os/proof/monitor-smoke.md"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeValidationEvidence(join(workspacePath, ".agent-os", "validation", "AG-1.json"), {
+      schemaVersion: 1,
+      issueIdentifier: "AG-1",
+      runId: "run_recovered_merge",
+      repoHead: headSha,
+      status: "passed",
+      commands: [{ name: "npm run agent-check", exitCode: 0, startedAt: now, finishedAt: now }],
+      reuseProfile: validationReuseProfileForConfig(serviceConfig)
+    });
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      phase: "canceled",
+      lastRunId: "run_stale_canceled",
+      workspacePath,
+      updatedAt: "2026-05-26T20:00:00.000Z"
+    });
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        view: {
+          url: prUrl,
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "MERGEABLE",
+          merged: false,
+          headRefOid: headSha,
+          headRefName: "agent/AG-1",
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }]
+        }
+      }),
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+      },
+      async comment(_issueIdentifier, body) {
+        comments.push(body);
+      }
+    };
+    const logger = new JsonlLogger(repo);
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for recovered Merging issues");
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> Done"]);
+    expect(comments.join("\n")).toContain("Merged successfully");
+    expect(comments.join("\n")).toContain(prUrl);
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      outcome: "partially_satisfied",
+      prUrl,
+      mergeTargetUrl: prUrl,
+      validation: { status: "passed", runId: "run_recovered_merge" },
+      appProof: { artifacts: [{ value: ".agent-os/proof/monitor-smoke.md" }] }
+    });
+    const logs = await logger.tail(100);
+    expect(logs).toContainEqual(expect.objectContaining({ type: "merge_recovery_recorded" }));
+    expect(logs.some((entry) => entry.type === "merge_failed")).toBe(false);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("does not start merge shepherding when landing gates are only partially enabled", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-landing-blocked-"));
