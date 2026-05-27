@@ -131,6 +131,9 @@ required=(
   "scripts/check-dashboard.mjs"
   "scripts/check-harness-contract.mjs"
   "scripts/check-traceability.mjs"
+  "scripts/certification-gate-lib.mjs"
+  "scripts/certification-source-core.mjs"
+  "scripts/certification-extensions.mjs"
   "scripts/certification-agent-owned.mjs"
   "scripts/certification-e2e.sh"
 )

@@ -6,7 +6,9 @@ const root = process.cwd();
 const failures = [];
 const traceabilityPath = "docs/releases/CERTIFICATION_TRACEABILITY.md";
 const certificationPath = "docs/releases/agent-owned-core-certification.json";
-const allowedClassifications = new Set(["core", "extension", "legacy", "live-e2e"]);
+const sourceCoreCertificationPath = "docs/releases/source-core-certification.json";
+const extensionCertificationPath = "docs/releases/extension-certification.json";
+const allowedClassifications = new Set(["source-core", "core", "extension", "legacy", "live-e2e"]);
 const requiredRefactorIssues = ["VER-128", "VER-129", "VER-130", "VER-131", "VER-132", "VER-133", "VER-134"];
 const requiredScenarioIds = [
   "no-pr-already-satisfied",
@@ -18,6 +20,28 @@ const requiredScenarioIds = [
   "extension-routing-through-lifecycle-adapters",
   "raw-graphql-opt-in-only",
   "app-legibility-proof"
+];
+const requiredSourceCoreScenarioIds = [
+  "workflow-validation",
+  "tracker-reader-boundary",
+  "workspace-lifecycle",
+  "codex-runner-fake-local-proof",
+  "dispatch-retry-recovery",
+  "handoff-validation",
+  "agent-owned-lifecycle-evidence",
+  "context-budget-safety-stop",
+  "validation-budget",
+  "scheduler-safety-writes"
+];
+const requiredExtensionScenarioIds = [
+  "review-fixer-loop",
+  "ci-and-merge-shepherd",
+  "dashboard-monitor-extension",
+  "registry-orchestration",
+  "planning-dag",
+  "model-routing",
+  "raw-graphql-opt-in",
+  "non-linear-adapter-boundary"
 ];
 
 const traceability = read(traceabilityPath);
@@ -37,6 +61,26 @@ for (const classification of allowedClassifications) {
 
 const certification = readJson(certificationPath);
 if (certification) validateCertificationArtifact(certification, rowIssues);
+const sourceCoreCertification = readJson(sourceCoreCertificationPath);
+if (sourceCoreCertification) validateBoundaryCertificationArtifact(sourceCoreCertification, sourceCoreCertificationPath, "source-core", requiredSourceCoreScenarioIds, new Set(["source-core"]));
+const extensionCertification = readJson(extensionCertificationPath);
+if (extensionCertification) validateBoundaryCertificationArtifact(extensionCertification, extensionCertificationPath, "extensions", requiredExtensionScenarioIds, new Set(["extension"]));
+
+const packageJsonText = read("package.json");
+if (packageJsonText) {
+  let packageJson = null;
+  try {
+    packageJson = JSON.parse(packageJsonText);
+  } catch (error) {
+    fail(`package.json is invalid JSON: ${error instanceof Error ? error.message : String(error)}`, "Keep package metadata machine-readable.");
+  }
+  if (packageJson) {
+    expectScript(packageJson, "certification:source-core", "node scripts/certification-source-core.mjs");
+    expectScript(packageJson, "certification:extensions", "node scripts/certification-extensions.mjs");
+    expectScript(packageJson, "certification:agent-owned", "node scripts/certification-agent-owned.mjs");
+    expectScript(packageJson, "certification:live-e2e", "bash scripts/certification-e2e.sh");
+  }
+}
 
 if (failures.length > 0) {
   for (const failure of failures) console.error(`traceability: ${failure}`);
@@ -52,7 +96,7 @@ function validateTraceabilityRow(row) {
   const issue = row["Linear issue"] ?? "";
   if (!/^VER-\d+$/.test(issue)) fail(`${traceabilityPath} has stale or malformed Linear issue reference ${issue || "(empty)"}`, "Use a current Linear issue identifier such as VER-134.");
   if (!allowedClassifications.has(row.Classification)) {
-    fail(`${traceabilityPath} row ${issue} has unknown classification ${row.Classification}`, "Use one of core, extension, legacy, or live-e2e.");
+    fail(`${traceabilityPath} row ${issue} has unknown classification ${row.Classification}`, "Use one of source-core, core, extension, legacy, or live-e2e.");
   }
   if (!/^(PR #\d+|branch: [A-Za-z0-9._/-]+|release: .+|live-e2e: .+)$/.test(row["PR/branch"] ?? "")) {
     fail(`${traceabilityPath} row ${issue} has missing or invalid PR/branch`, "Use PR #N, branch: name, release: artifact, or live-e2e: gate.");
@@ -86,7 +130,7 @@ function validateCertificationArtifact(certification, rowIssues) {
     }
     for (const issue of certification.refactorIssues) {
       if (!rowIssues.has(issue.id)) fail(`${certificationPath} references ${issue.id} without a traceability row`, "Add the issue to the traceability matrix.");
-      if (!allowedClassifications.has(issue.classification)) fail(`${certificationPath} issue ${issue.id} has unknown classification`, "Use core, extension, legacy, or live-e2e.");
+      if (!allowedClassifications.has(issue.classification)) fail(`${certificationPath} issue ${issue.id} has unknown classification`, "Use source-core, core, extension, legacy, or live-e2e.");
       if (!issue.prOrBranch) fail(`${certificationPath} issue ${issue.id} is missing prOrBranch`, "Record the merged PR number or current branch.");
     }
   }
@@ -97,7 +141,7 @@ function validateCertificationArtifact(certification, rowIssues) {
   for (const scenario of certification.scenarios ?? []) {
     if (!requiredScenarioIds.includes(scenario.id)) fail(`${certificationPath} has unknown scenario ${scenario.id}`, "Remove undocumented certification scenarios or add them to the required contract.");
     if (scenario.status !== "covered") fail(`${certificationPath} scenario ${scenario.id} is not covered`, "Every local/fake-gated scenario must be covered before certification.");
-    if (!allowedClassifications.has(scenario.classification)) fail(`${certificationPath} scenario ${scenario.id} has unknown classification`, "Use core, extension, legacy, or live-e2e.");
+    if (!allowedClassifications.has(scenario.classification)) fail(`${certificationPath} scenario ${scenario.id} has unknown classification`, "Use source-core, core, extension, legacy, or live-e2e.");
     if (!Array.isArray(scenario.proofCommands) || scenario.proofCommands.length === 0) fail(`${certificationPath} scenario ${scenario.id} has no proof commands`, "Attach at least one executable proof command.");
     if (!Array.isArray(scenario.evidence) || scenario.evidence.length === 0) fail(`${certificationPath} scenario ${scenario.id} has no evidence pointers`, "Attach code, test, doc, or script evidence.");
     for (const evidence of scenario.evidence ?? []) {
@@ -114,6 +158,37 @@ function validateCertificationArtifact(certification, rowIssues) {
   if (legacyPolicy.excludedFromCoreCertification !== true || legacyPolicy.ver134BlockerUnlessRemoved !== true) {
     fail(`${certificationPath} does not exclude the test-only scheduler fallback from core certification`, "Mark any legacy fixture excluded and blocker-tracked.");
   }
+}
+
+function validateBoundaryCertificationArtifact(certification, path, gate, requiredIds, classifications) {
+  if (certification.schemaVersion !== 1) fail(`${path} has unsupported schemaVersion`, "Use schemaVersion 1.");
+  if (certification.certificationIssue !== "VER-139") fail(`${path} must certify VER-139`, "Boundary gate separation is certified by VER-139.");
+  if (certification.gate !== gate) fail(`${path} must declare gate ${gate}`, `Set gate to ${gate}.`);
+  if (certification.status !== "covered") fail(`${path} status must be covered`, "Only mark a separated gate covered when its local proof is complete.");
+  const scenarioIds = new Set((certification.scenarios ?? []).map((scenario) => scenario.id));
+  for (const id of requiredIds) {
+    if (!scenarioIds.has(id)) fail(`${path} missing certification scenario ${id}`, "Record every required boundary certification scenario.");
+  }
+  for (const scenario of certification.scenarios ?? []) {
+    if (!requiredIds.includes(scenario.id)) fail(`${path} has unknown scenario ${scenario.id}`, "Remove undocumented certification scenarios or add them to the required boundary contract.");
+    if (scenario.status !== "covered") fail(`${path} scenario ${scenario.id} is not covered`, "Every boundary scenario must be covered before certification.");
+    if (!classifications.has(scenario.classification)) fail(`${path} scenario ${scenario.id} has wrong classification`, `Use ${[...classifications].join(", ")} for this gate.`);
+    if (!Array.isArray(scenario.proofCommands) || scenario.proofCommands.length === 0) fail(`${path} scenario ${scenario.id} has no proof commands`, "Attach at least one executable proof command.");
+    if (!Array.isArray(scenario.evidence) || scenario.evidence.length === 0) fail(`${path} scenario ${scenario.id} has no evidence pointers`, "Attach code, test, doc, or script evidence.");
+    for (const evidence of scenario.evidence ?? []) {
+      if (!evidence.path || !referenceExists(evidence.path)) fail(`${path} scenario ${scenario.id} references missing evidence ${evidence.path ?? "(empty)"}`, "Evidence paths must exist.");
+      if (evidence.testName) {
+        const text = read(evidence.path);
+        if (text && !text.includes(`it("${evidence.testName}"`)) {
+          fail(`${path} scenario ${scenario.id} test pointer is stale: ${evidence.path} / ${evidence.testName}`, "Point to a real Vitest case.");
+        }
+      }
+    }
+  }
+}
+
+function expectScript(packageJson, name, command) {
+  if (packageJson.scripts?.[name] !== command) fail(`package.json script ${name} is missing or changed`, `Set ${name} to ${command}.`);
 }
 
 function parseTraceabilityRows(markdown) {

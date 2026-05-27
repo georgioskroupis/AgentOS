@@ -5,7 +5,7 @@
   "lifecycleMode": "agent-owned",
   "sourceFaithfulCertificationTarget": true,
   "localFakeGated": true,
-  "liveE2EGatedBy": "npm run certification:e2e",
+  "liveE2EGatedBy": "npm run certification:live-e2e",
   "refactorIssues": [
     {
       "id": "VER-128",

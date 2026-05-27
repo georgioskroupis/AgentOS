@@ -19,7 +19,10 @@
     "lint": "node scripts/check-lint.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "certification:source-core": "node scripts/certification-source-core.mjs",
+    "certification:extensions": "node scripts/certification-extensions.mjs",
     "certification:agent-owned": "node scripts/certification-agent-owned.mjs",
+    "certification:live-e2e": "bash scripts/certification-e2e.sh",
     "certification:e2e": "bash scripts/certification-e2e.sh",
     "agent-check": "bash scripts/agent-check.sh"
   },

@@ -9,7 +9,8 @@ if [[ "${AGENT_OS_CERTIFICATION_LIVE:-}" != "1" ]]; then
   cat <<'EOF'
 AgentOS live E2E certification skipped.
 
-Set AGENT_OS_CERTIFICATION_LIVE=1 to run the credentialed certification gate.
+Set AGENT_OS_CERTIFICATION_LIVE=1 to run the credentialed certification gate
+through npm run certification:live-e2e.
 For dispatch, also provide an isolated AGENT_OS_CERTIFICATION_WORKFLOW and set
 AGENT_OS_CERTIFICATION_DISPATCH=1 with AGENT_OS_CERTIFICATION_ACK=dispatch:<issue>.
 EOF
