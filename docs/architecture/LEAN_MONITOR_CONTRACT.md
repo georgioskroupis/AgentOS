@@ -11,12 +11,22 @@ Source-core-safe contracts live in `src/monitor-contracts.ts`:
 
 - `MonitorSink`
 - `MonitorEvent`
+- `MonitorActivity`
 - `NullMonitorSink`
 
 `MonitorEvent` distinguishes `eventId`, `spanId`, and `parentSpanId`.
 `eventId` is the unique emitted event id. `spanId` is the timing row/span id.
 `parentSpanId` is the nested parent row id. Start and finish pairs use the same
 `spanId`.
+
+`activity_observed` events may carry optional `MonitorActivity` metadata for
+compact sub-turn facts. Activities are created through `buildMonitorActivity`,
+which preserves only the approved compact typed fields. The supported activity
+kinds are exactly `command_output`, `file_change`, `token_usage`, `rate_limit`,
+and `generic`. Activity output must not include raw stdout or stderr, raw diffs,
+prompts, model responses, full runner payloads, raw rate-limit payloads,
+stack traces except compact labels, secrets, or environment values. Rate-limit
+activity exposes compact pressure only, not raw limit payloads.
 
 Core modules must not import snapshot, UI, or launcher contracts. A core caller
 that has no monitor configured should use `NullMonitorSink`.
