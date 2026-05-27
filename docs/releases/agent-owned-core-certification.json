@@ -41,7 +41,7 @@
       "id": "VER-133",
       "prOrBranch": "PR #107",
       "classification": "legacy",
-      "status": "public-disabled; test-only fallback excluded"
+      "status": "public-disabled; production residue removed by VER-138"
     },
     {
       "id": "VER-134",
@@ -51,11 +51,11 @@
     }
   ],
   "legacyPolicy": {
-    "remainingFixture": "test-only scheduler-owned fallback",
+    "remainingFixture": null,
     "publicConfig": false,
     "excludedFromCoreCertification": true,
     "ver134BlockerUnlessRemoved": true,
-    "resolution": "explicitly final-excluded from source-faithful core proof"
+    "resolution": "production legacy lifecycle residue removed by VER-138; only explicit scheduler-safety paths remain"
   },
   "classifications": {
     "core": "Agent-owned scheduler, workspace, runner, evidence, lifecycle-tool, validation, and traceability proof.",

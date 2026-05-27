@@ -300,7 +300,7 @@ describe("agent lifecycle CLI", () => {
       "hello"
     ]);
 
-    expect(result.stderr).toContain("lifecycle.mode=agent-owned requires lifecycle.allowed_tracker_tools in strict mode");
+    expect(result.stderr).toContain("lifecycle.allowed_tracker_tools is required for agent tracker writes");
   });
 
   it("emits machine-readable JSON with lifecycle correlation and redacted tracker bodies", async () => {

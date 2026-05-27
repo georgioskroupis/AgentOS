@@ -252,7 +252,12 @@ function controllerFixture(input: { config?: ServiceConfig; issueState?: string;
   };
   return {
     controller: new TrackerLifecycleController({
-      config: input.config ?? fakeServiceConfig(),
+      config: input.config ?? fakeServiceConfig({
+        lifecycle: {
+          ...fakeServiceConfig().lifecycle,
+          maturityAcknowledgement: "test-only-orchestrator-lifecycle-fixture"
+        }
+      }),
       tracker,
       logger
     }),

@@ -1,10 +1,10 @@
-import { access, appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile as writeRawFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "../src/orchestrator.js";
-import type { AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueState, IssueTracker } from "../src/types.js";
+import type { AgentRunResult, AgentRunner, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker } from "../src/types.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RunArtifactStore } from "../src/runs.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
@@ -15,7 +15,6 @@ import { writeValidationEvidence } from "../src/validation.js";
 import { inspectIssue } from "../src/status.js";
 import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
 import { validationReuseProfileForConfig } from "../src/validation-profile.js";
-import { applyTestOnlyLegacyLifecycleFallback } from "../src/lifecycle.js";
 import type { MonitorEvent } from "../src/monitor-contracts.js";
 
 const readyIssue: Issue = {
@@ -44,6 +43,121 @@ const fakeGh = resolve("tests/fixtures/fake-gh.mjs");
 const supervisorAssignee = { assignee: "Supervisor", assigneeId: "user-supervisor", assigneeEmail: "supervisor@example.com" };
 const supervisorCommentAuthor = { author: "Supervisor", authorId: "user-supervisor", authorEmail: "supervisor@example.com" };
 const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
+const strictAgentOwnedLifecycleYaml = [
+  "lifecycle:",
+  "  mode: agent-owned",
+  "  allowed_tracker_tools:",
+  "    - scripts/agent-linear-comment.sh",
+  "    - scripts/agent-linear-move.sh",
+  "    - scripts/agent-linear-pr.sh",
+  "    - scripts/agent-linear-handoff.sh",
+  "  idempotency_marker_format: \"<!-- agentos:event={event} issue={issue} run={run} attempt={attempt} -->\"",
+  "  allowed_state_transitions:",
+  "    - Ready -> In Progress",
+  "    - Ready -> Human Review",
+  "    - Todo -> In Progress",
+  "    - Todo -> Human Review",
+  "    - In Progress -> Human Review",
+  "  duplicate_comment_behavior: upsert",
+  "  fallback_behavior: write handoff and stop human_required",
+  "  maturity_acknowledgement: test-only-orchestrator-lifecycle-fixture"
+].join("\n");
+
+async function writeFile(path: Parameters<typeof writeRawFile>[0], data: Parameters<typeof writeRawFile>[1], options?: Parameters<typeof writeRawFile>[2]): Promise<void> {
+  const text = typeof data === "string" && String(path).endsWith("WORKFLOW.md") ? withStrictAgentOwnedLifecycle(data) : data;
+  await writeRawFile(path, text, options);
+}
+
+function withStrictAgentOwnedLifecycle(text: string): string {
+  if (!text.startsWith("---\n")) return text;
+  const end = text.indexOf("\n---", 4);
+  if (end === -1) return text;
+  const frontMatter = text.slice(4, end);
+  if (!/(^|\n)lifecycle:\n/.test(frontMatter)) {
+    return `---\n${strictAgentOwnedLifecycleYaml}\n${frontMatter}\n---${text.slice(end + 4)}`;
+  }
+  if (/(^|\n)  mode:/.test(frontMatter) || /(^|\n)  allowed_tracker_tools:/.test(frontMatter)) return text;
+  return `---\n${frontMatter.replace(/(^|\n)lifecycle:\n/, `$1${strictAgentOwnedLifecycleYaml}\n`)}\n---${text.slice(end + 4)}`;
+}
+
+function withAgentOwnedLifecycleEvidence(repo: string, tracker: IssueTracker): IssueTracker {
+  const wrapped: IssueTracker = {
+    ...tracker,
+    async fetchIssueStates(issueIds) {
+      return tracker.fetchIssueStates ? await tracker.fetchIssueStates(issueIds) : new Map();
+    }
+  };
+  if (tracker.fetchIssueComments) {
+    wrapped.fetchIssueComments = async (issueIdentifier, limit) => {
+      const existing = await tracker.fetchIssueComments?.(issueIdentifier, limit);
+      return [...(existing ?? []), ...(await syntheticAgentOwnedComments(repo, issueIdentifier))];
+    };
+  }
+  if (tracker.move) {
+    wrapped.move = async (issue, state) => {
+      await tracker.move?.(issue, state);
+    };
+  }
+  if (tracker.comment) {
+    wrapped.comment = async (issue, body) => {
+      await tracker.comment?.(issue, body);
+    };
+  }
+  if (tracker.upsertComment) {
+    wrapped.upsertComment = async (issue, body, key) => {
+      await tracker.upsertComment?.(issue, body, key);
+    };
+  }
+  return wrapped;
+}
+
+async function syntheticAgentOwnedComments(repo: string, issueIdentifier: string): Promise<IssueComment[]> {
+  const run = await latestRun(repo, issueIdentifier);
+  if (!run || !(await hasRecordedHandoff(repo, issueIdentifier))) return [];
+  const createdAt = new Date().toISOString();
+  return ["run_started", "run_handoff", "pr_metadata"].map((event) => ({
+    id: `synthetic-${event}-${run.runId}`,
+    body: `<!-- agentos:event=${event} issue=${issueIdentifier} run=${run.runId} attempt=${run.attempt} -->`,
+    author: "AgentOS test agent",
+    authorId: "agentos-test-agent",
+    authorEmail: "agentos-test@example.com",
+    createdAt
+  }));
+}
+
+async function recordedIssueStates(repo: string): Promise<Array<{ issueId?: string; issueIdentifier?: string; outcome?: string; validation?: unknown; phase?: string; agentOwnedLifecycleEvidence?: unknown }>> {
+  const dir = join(repo, ".agent-os", "state", "issues");
+  try {
+    const entries = await readdir(dir);
+    return await Promise.all(
+      entries
+        .filter((entry) => entry.endsWith(".json"))
+        .map(async (entry) => JSON.parse(await readFile(join(dir, entry), "utf8")) as { issueId?: string; issueIdentifier?: string; outcome?: string; validation?: unknown; phase?: string; agentOwnedLifecycleEvidence?: unknown })
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function latestRun(repo: string, issueIdentifier: string): Promise<{ runId: string; attempt: number } | null> {
+  try {
+    const runs = (await new RunArtifactStore(repo).listRuns())
+      .filter((run) => run.issueIdentifier === issueIdentifier)
+      .sort((left, right) => Date.parse(right.startedAt ?? "") - Date.parse(left.startedAt ?? ""));
+    const [latest] = runs;
+    return latest ? { runId: latest.runId, attempt: latest.attempt ?? 0 } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function hasRecordedHandoff(repo: string, issueIdentifier: string): Promise<boolean> {
+  try {
+    return (await recordedIssueStates(repo)).some((state) => state.issueIdentifier === issueIdentifier);
+  } catch {
+    return false;
+  }
+}
 
 class WarningWriteFailingLogger extends JsonlLogger {
   warningAttempts = 0;
@@ -93,7 +207,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -366,7 +480,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -471,7 +585,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -549,7 +663,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -630,7 +744,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -726,7 +840,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -808,7 +922,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -880,7 +994,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -950,7 +1064,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           await writePassingHandoff(input.workspace.path, issue.identifier, input.prompt, "AgentOS-Outcome: implemented");
@@ -1042,7 +1156,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -1097,7 +1211,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -1143,7 +1257,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           prompts += 1;
@@ -1235,7 +1349,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("blocked retry should not dispatch");
@@ -1291,7 +1405,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -1355,7 +1469,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -1460,7 +1574,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -1546,7 +1660,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           prompt = input.prompt;
@@ -1628,7 +1742,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("supervisor continuation should pause redispatch");
@@ -1715,7 +1829,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -1783,7 +1897,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -1860,7 +1974,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -1931,7 +2045,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: implemented");
@@ -1994,7 +2108,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -2072,7 +2186,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           prompt = input.prompt;
@@ -2143,7 +2257,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -2201,7 +2315,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           prompt = input.prompt;
@@ -2274,7 +2388,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -2356,7 +2470,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -2433,7 +2547,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -2521,7 +2635,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -2599,7 +2713,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -2671,7 +2785,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -2737,7 +2851,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for paused issue");
@@ -2810,7 +2924,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       logger,
       env: { HOME: "/tmp" }
     }).runOnce(true);
@@ -2852,7 +2966,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" },
       daemonSingletonGuardOptions: { isProcessAlive: () => true }
@@ -2902,7 +3016,7 @@ describe("orchestrator", () => {
       new Orchestrator({
         repoRoot: repo,
         workflowPath,
-        tracker,
+        tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
         logger,
         env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" },
         daemonSingletonGuardOptions: { isProcessAlive: () => true }
@@ -2960,7 +3074,7 @@ describe("orchestrator", () => {
       new Orchestrator({
         repoRoot: repo,
         workflowPath,
-        tracker,
+        tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
         env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" },
         daemonSingletonGuardOptions: { isProcessAlive: () => true }
       }).runUntilStopped(controller.signal)
@@ -3002,7 +3116,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     }).runOnce(true);
@@ -3040,7 +3154,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called");
@@ -3092,7 +3206,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -3130,7 +3244,7 @@ describe("orchestrator", () => {
         new Orchestrator({
           repoRoot: repo,
           workflowPath,
-          tracker,
+          tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
           runner: { async run() { return { status: "succeeded" }; } },
           logger: new JsonlLogger(repo),
           env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -3161,7 +3275,7 @@ describe("orchestrator", () => {
       new Orchestrator({
         repoRoot: repo,
         workflowPath,
-        tracker,
+        tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
         runner: {
           async run(): Promise<AgentRunResult> {
             throw new Error("runner should not be called");
@@ -3203,7 +3317,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -3252,7 +3366,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: firstRunner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -3270,7 +3384,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: secondRunner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -3337,7 +3451,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -3403,7 +3517,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for terminal issues");
@@ -3424,7 +3538,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for terminal issues");
@@ -3488,7 +3602,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for terminal issues");
@@ -3567,7 +3681,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for terminal issues");
@@ -3717,7 +3831,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -3839,7 +3953,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           return { status: "succeeded" };
@@ -3881,7 +3995,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -3975,7 +4089,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -4033,7 +4147,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           return { status: "succeeded" };
@@ -4066,7 +4180,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           return { status: "succeeded" };
@@ -4111,7 +4225,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called");
@@ -4173,7 +4287,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           prompts.push(input.prompt);
@@ -4302,7 +4416,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4370,7 +4484,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4435,7 +4549,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4503,7 +4617,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4555,7 +4669,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4624,7 +4738,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4699,7 +4813,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4781,7 +4895,7 @@ describe("orchestrator", () => {
       await new Orchestrator({
         repoRoot: repo,
         workflowPath,
-        tracker,
+        tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
         runner,
         logger: new JsonlLogger(repo),
         env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4857,7 +4971,7 @@ describe("orchestrator", () => {
       await new Orchestrator({
         repoRoot: repo,
         workflowPath,
-        tracker,
+        tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
         runner,
         logger: new JsonlLogger(repo),
         env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4915,7 +5029,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -4969,7 +5083,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -5042,7 +5156,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           return { status: "failed", error: "boom" };
@@ -5114,7 +5228,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -5184,7 +5298,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -5254,7 +5368,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -5373,7 +5487,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -5434,10 +5548,9 @@ describe("orchestrator", () => {
       "utf8"
     );
     const { workspacePath, headSha } = await createCleanPushedIssueWorkspace(repo);
-    const workflow = await loadWorkflow(workflowPath);
-    const serviceConfig = resolveServiceConfig(workflow);
-    applyTestOnlyLegacyLifecycleFallback(workflow.config, serviceConfig);
-    const prUrl = "https://github.com/o/r/pull/125";
+  const workflow = await loadWorkflow(workflowPath);
+  const serviceConfig = resolveServiceConfig(workflow);
+  const prUrl = "https://github.com/o/r/pull/125";
     const now = new Date().toISOString();
     await mkdir(join(workspacePath, ".agent-os"), { recursive: true });
     await writeFile(
@@ -5507,7 +5620,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for recovered Merging issues");
@@ -5563,7 +5676,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called when landing is blocked");
@@ -5641,7 +5754,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -5740,7 +5853,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -5850,7 +5963,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for terminal merge state");
@@ -5919,7 +6032,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -6011,7 +6124,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -6059,7 +6172,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -6121,7 +6234,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -6218,7 +6331,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -6297,7 +6410,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -6387,7 +6500,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -6462,7 +6575,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -6536,7 +6649,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -6603,7 +6716,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -6690,7 +6803,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -6770,7 +6883,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -6866,7 +6979,7 @@ describe("orchestrator", () => {
       new Orchestrator({
         repoRoot: repo,
         workflowPath,
-        tracker,
+        tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
         runner: {
           async run(): Promise<AgentRunResult> {
             throw new Error("runner should not be called for Merging issues");
@@ -6997,7 +7110,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7064,7 +7177,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7122,7 +7235,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7179,7 +7292,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7287,7 +7400,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7398,7 +7511,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7491,7 +7604,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7582,7 +7695,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7657,7 +7770,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7753,7 +7866,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7844,7 +7957,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -7953,7 +8066,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8046,7 +8159,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8128,7 +8241,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8260,7 +8373,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8358,7 +8471,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8466,7 +8579,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8557,7 +8670,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8643,7 +8756,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8735,7 +8848,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8812,7 +8925,7 @@ describe("orchestrator", () => {
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
       logger: new JsonlLogger(repo),
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
@@ -8863,7 +8976,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -8921,7 +9034,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -8974,7 +9087,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9025,7 +9138,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9125,7 +9238,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9211,7 +9324,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9311,7 +9424,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9413,7 +9526,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9516,7 +9629,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9613,7 +9726,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9706,7 +9819,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9833,7 +9946,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -9978,7 +10091,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -10062,7 +10175,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           throw new Error("runner should not be called for Merging issues");
@@ -10162,7 +10275,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10244,7 +10357,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10331,7 +10444,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10412,7 +10525,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10479,7 +10592,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10535,7 +10648,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10587,7 +10700,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10646,7 +10759,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10734,7 +10847,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10796,7 +10909,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10860,7 +10973,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -10933,7 +11046,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -11027,7 +11140,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -11104,7 +11217,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -11208,7 +11321,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -11332,7 +11445,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -11412,7 +11525,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -11641,7 +11754,7 @@ describe("orchestrator", () => {
     const result = await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           runnerCalled = true;
@@ -11694,7 +11807,7 @@ describe("orchestrator", () => {
     await new Orchestrator({
       repoRoot: repo,
       workflowPath,
-      tracker,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner: {
         async run(input): Promise<AgentRunResult> {
           prompt = input.prompt;
@@ -11792,14 +11905,6 @@ function supervisorProceedCommentBody(summary: string): string {
 async function reuseProfileForWorkflow(workflowPath: string) {
   const workflow = await loadWorkflow(workflowPath);
   const config = resolveServiceConfig(workflow, { LINEAR_API_KEY: "lin_test" });
-  const lifecycleConfig = workflow.config.lifecycle;
-  const hasExplicitMode = lifecycleConfig != null
-    && typeof lifecycleConfig === "object"
-    && !Array.isArray(lifecycleConfig)
-    && Object.prototype.hasOwnProperty.call(lifecycleConfig, "mode");
-  if (!hasExplicitMode) {
-    config.lifecycle.mode = "orchestrator-owned";
-  }
   return validationReuseProfileForConfig(config);
 }
 

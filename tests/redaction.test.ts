@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { JsonlLogger } from "../src/logging.js";
 import { Orchestrator } from "../src/orchestrator.js";
 import { redactText, redactValue } from "../src/redaction.js";
-import { fakeIssue, FakeRunner, FakeTracker, writePassingHandoff } from "./fixtures/agentos-fakes.js";
+import { fakeIssue, FakeRunner, FakeTracker, strictAgentOwnedLifecycleYaml, writePassingHandoff } from "./fixtures/agentos-fakes.js";
 
 describe("redaction", () => {
   it("redacts token-shaped values and sensitive env values", () => {
@@ -72,7 +72,20 @@ describe("redaction", () => {
     const workflowPath = join(repo, "WORKFLOW.md");
     await writeFile(
       workflowPath,
-      "---\ntracker:\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}",
+      [
+        "---",
+        strictAgentOwnedLifecycleYaml,
+        "tracker:",
+        "  api_key: $LINEAR_API_KEY",
+        "  project_slug: AgentOS",
+        "  active_states: [Ready]",
+        "workspace:",
+        "  root: .agent-os/workspaces",
+        "review:",
+        "  enabled: false",
+        "---",
+        "Do {{ issue.identifier }}"
+      ].join("\n"),
       "utf8"
     );
     const issue = fakeIssue();
