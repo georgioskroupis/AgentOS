@@ -6,6 +6,7 @@ import {
   clearedFailureMetadataPatch,
   issueStateFromHandoff,
   IssueStateStore,
+  latestHumanDecision,
   mergeTargetAmbiguityReason,
   mergeTargetPullRequest,
   normalizeIssueState,
@@ -235,10 +236,10 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
       `add AgentOS-Outcome and Validation-JSON lines to ${relativeToRepo(repoRoot, handoffPath)} before recording recovery`
     );
   }
-  if (handoffState.outcome === "partially_satisfied") {
+  if (handoffState.outcome === "partially_satisfied" && !hasApproveAsIsDecision(handoffState, current)) {
     throw new OperatorRecoveryRefusal(
-      "handoff outcome is partially-satisfied and cannot be recorded as successful recovery",
-      `finish the recovered work, write an implemented or already-satisfied handoff, rerun validation, and record recovery again`
+      "handoff outcome is partially-satisfied without an approve-as-is human decision",
+      `finish the recovered work, write an implemented or already-satisfied handoff, or record AgentOS-Human-Decision: approve-as-is with passing validation before recording recovery again`
     );
   }
   const mergeAmbiguity = mergeTargetAmbiguityReason(handoffState);
@@ -349,6 +350,13 @@ export async function recordOperatorRecovery(input: RecordOperatorRecoveryInput)
     proofArtifacts: operatorRecovery.proofArtifacts,
     state: next
   };
+}
+
+function hasApproveAsIsDecision(...states: Array<Pick<IssueState, "humanDecisions" | "lastHumanDecision"> | null | undefined>): boolean {
+  return states.some((state) => {
+    const latest = latestHumanDecision([...(state?.humanDecisions ?? []), ...(state?.lastHumanDecision ? [state.lastHumanDecision] : [])]);
+    return latest?.type === "approve_as_is";
+  });
 }
 
 async function recoveryServiceConfig(repoRoot: string): Promise<ServiceConfig> {
