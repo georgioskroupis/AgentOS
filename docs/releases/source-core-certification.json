@@ -1,0 +1,266 @@
+{
+  "schemaVersion": 1,
+  "certificationIssue": "VER-139",
+  "gate": "source-core",
+  "status": "covered",
+  "localFakeGated": true,
+  "liveE2EGatedBy": "npm run certification:live-e2e",
+  "excludes": [
+    "review/fixer loop",
+    "merge shepherd and GitHub checks",
+    "dashboard/API and monitor snapshot assembly",
+    "registry orchestration",
+    "planning/DAG issue creation",
+    "model routing",
+    "raw GraphQL client tool",
+    "non-Linear tracker adapters"
+  ],
+  "scenarios": [
+    {
+      "id": "workflow-validation",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Strict workflow validation proves agent-owned lifecycle config, repo-local tools, marker correlation, and context/validation budget parsing.",
+      "evidence": [
+        {
+          "path": "tests/workflow.test.ts",
+          "testName": "strictly gates production agent-owned lifecycle mode"
+        },
+        {
+          "path": "tests/workflow.test.ts",
+          "testName": "keeps root and base template workflows as strict agent-owned defaults"
+        },
+        {
+          "path": "tests/workflow.test.ts",
+          "testName": "parses context and validation budget controls"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/workflow.test.ts -t \"strictly gates production agent-owned lifecycle mode|keeps root and base template workflows as strict agent-owned defaults|parses context and validation budget controls\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "tracker-reader-boundary",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Core scheduler access to tracker state stays behind the reader boundary and direct tracker mutations are rejected by architecture proof.",
+      "evidence": [
+        {
+          "path": "src/tracker-boundaries.ts"
+        },
+        {
+          "path": "tests/check-scripts.test.ts",
+          "testName": "reports direct tracker writes and raw tracker mutations in core scheduler code"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/check-scripts.test.ts -t \"reports direct tracker writes and raw tracker mutations in core scheduler code\" --reporter verbose",
+        "npm run check:architecture"
+      ]
+    },
+    {
+      "id": "workspace-lifecycle",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Workspace creation, hooks, locks, bootstrap markers, and partial-bootstrap recovery are proven without live credentials.",
+      "evidence": [
+        {
+          "path": "src/workspace.ts"
+        },
+        {
+          "path": "tests/workspace.test.ts"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/workspace.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "codex-runner-fake-local-proof",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "The Codex App Server runner boundary is exercised through local fake protocol fixtures, including success, early exit, and nested-orchestrator stops.",
+      "evidence": [
+        {
+          "path": "src/runner/app-server.ts"
+        },
+        {
+          "path": "tests/runner.test.ts",
+          "testName": "runs a thread and waits for turn completion"
+        },
+        {
+          "path": "tests/runner.test.ts",
+          "testName": "fails promptly when the app server exits before turn completion"
+        },
+        {
+          "path": "tests/runner.test.ts",
+          "testName": "stops nested orchestrator commands inside agent turns"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/runner.test.ts -t \"runs a thread and waits for turn completion|fails promptly when the app server exits before turn completion|stops nested orchestrator commands inside agent turns\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "dispatch-retry-recovery",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Eligible dispatch, retry attempts, durable restart recovery, unchanged-success suppression, and retry-budget safety writes are source-core proof.",
+      "evidence": [
+        {
+          "path": "src/orchestrator.ts"
+        },
+        {
+          "path": "src/runtime-state.ts"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "dispatches eligible issues to a runner"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "passes retry attempts and does not re-dispatch an unchanged successful issue"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "rebuilds due retries from durable runtime state after restart"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "routes retry budget exhaustion through scheduler safety lifecycle events"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/orchestrator.test.ts -t \"dispatches eligible issues to a runner|passes retry attempts and does not re-dispatch an unchanged successful issue|rebuilds due retries from durable runtime state after restart|routes retry budget exhaustion through scheduler safety lifecycle events\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "handoff-validation",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Handoffs are reviewable only with valid Validation-JSON evidence, matching head/profile data, and allowed PR metadata.",
+      "evidence": [
+        {
+          "path": "src/validation.ts"
+        },
+        {
+          "path": "tests/validation.test.ts",
+          "testName": "accepts fresh matching JSON evidence"
+        },
+        {
+          "path": "tests/agent-lifecycle.test.ts",
+          "testName": "rejects handoffs with invalid validation evidence before tracker writes or issue-state persistence"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/validation.test.ts tests/agent-lifecycle.test.ts -t \"accepts fresh matching JSON evidence|rejects handoffs with invalid validation evidence before tracker writes or issue-state persistence\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "agent-owned-lifecycle-evidence",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Agent-owned lifecycle markers and tracker evidence must correlate issue, run, and attempt before completion.",
+      "evidence": [
+        {
+          "path": "src/agent-owned-lifecycle-evidence.ts"
+        },
+        {
+          "path": "tests/agent-owned-lifecycle-evidence.test.ts",
+          "testName": "records passed agent-owned evidence before completing the run"
+        },
+        {
+          "path": "tests/agent-lifecycle.test.ts",
+          "testName": "correlates agent-owned lifecycle comments with issue, run, and attempt markers"
+        },
+        {
+          "path": "tests/agent-lifecycle.test.ts",
+          "testName": "correlates agent-owned PR metadata and handoff comments with run and attempt"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/agent-owned-lifecycle-evidence.test.ts tests/agent-lifecycle.test.ts -t \"records passed agent-owned evidence before completing the run|correlates agent-owned lifecycle comments with issue, run, and attempt markers|correlates agent-owned PR metadata and handoff comments with run and attempt\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "context-budget-safety-stop",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Oversized implementation prompts stop before runner invocation and record context-budget diagnostics.",
+      "evidence": [
+        {
+          "path": "src/context-budget.ts"
+        },
+        {
+          "path": "src/context-pack.ts"
+        },
+        {
+          "path": "tests/context-pack.test.ts",
+          "testName": "records prompt size and large-section reasons for context budget diagnostics"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "stops before a runner call when the implementation prompt exceeds the context budget"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/context-pack.test.ts tests/orchestrator.test.ts -t \"records prompt size and large-section reasons for context budget diagnostics|stops before a runner call when the implementation prompt exceeds the context budget\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "validation-budget",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Full-suite validation evidence is budgeted per unchanged head and reuse requires a matching validation profile.",
+      "evidence": [
+        {
+          "path": "src/validation.ts"
+        },
+        {
+          "path": "src/validation-profile.ts"
+        },
+        {
+          "path": "tests/validation.test.ts",
+          "testName": "flags duplicate full validation runs for the same evidence head"
+        },
+        {
+          "path": "tests/validation.test.ts",
+          "testName": "reuses previous-run validation evidence when repoHead matches the current code"
+        },
+        {
+          "path": "tests/validation.test.ts",
+          "testName": "rejects reused validation evidence when the workflow config or risk profile changed"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/validation.test.ts tests/workflow.test.ts -t \"flags duplicate full validation runs for the same evidence head|reuses previous-run validation evidence when repoHead matches the current code|rejects reused validation evidence when the workflow config or risk profile changed|parses context and validation budget controls\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "scheduler-safety-writes",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Scheduler-owned writes are limited to enumerated no-agent-can-act safety reasons and bookkeeping-only comments.",
+      "evidence": [
+        {
+          "path": "src/lifecycle-events.ts"
+        },
+        {
+          "path": "tests/lifecycle-controller.test.ts",
+          "testName": "allows enumerated scheduler safety writes in agent-owned mode and logs the safety reason"
+        },
+        {
+          "path": "tests/lifecycle-controller.test.ts",
+          "testName": "rejects scheduler safety writes without an allowed reason or with substantive content"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "routes retry budget exhaustion through scheduler safety lifecycle events"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/lifecycle-controller.test.ts tests/orchestrator.test.ts -t \"allows enumerated scheduler safety writes in agent-owned mode and logs the safety reason|rejects scheduler safety writes without an allowed reason or with substantive content|routes retry budget exhaustion through scheduler safety lifecycle events\" --reporter verbose"
+      ]
+    }
+  ]
+}

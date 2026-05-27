@@ -8,6 +8,8 @@ const architectureScript = resolve("scripts/check-architecture.mjs");
 const docsScript = resolve("scripts/check-docs.mjs");
 const traceabilityScript = resolve("scripts/check-traceability.mjs");
 const agentOwnedCertificationScript = resolve("scripts/certification-agent-owned.mjs");
+const sourceCoreCertificationScript = resolve("scripts/certification-source-core.mjs");
+const extensionCertificationScript = resolve("scripts/certification-extensions.mjs");
 
 describe("architecture and docs checks", () => {
   it("accepts a minimal architecture fixture", async () => {
@@ -268,6 +270,7 @@ describe("architecture and docs checks", () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
     const script = await readFile("scripts/certification-e2e.sh", "utf8");
 
+    expect(packageJson.scripts["certification:live-e2e"]).toBe("bash scripts/certification-e2e.sh");
     expect(packageJson.scripts["certification:e2e"]).toBe("bash scripts/certification-e2e.sh");
     expect(script).toContain("AGENT_OS_CERTIFICATION_LIVE");
     expect(script).toContain("AGENT_OS_CERTIFICATION_ACK");
@@ -279,7 +282,7 @@ describe("architecture and docs checks", () => {
     });
   });
 
-  it("keeps agent-owned certification and traceability gates discoverable", async () => {
+  it("keeps separated certification and traceability gates discoverable", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
     const repo = await mkdtemp(join(tmpdir(), "agent-os-certification-proof-"));
     const proofCommandsPath = join(repo, "proof-commands.json");
@@ -296,10 +299,19 @@ describe("architecture and docs checks", () => {
     );
 
     expect(packageJson.scripts["check:traceability"]).toBe("node scripts/check-traceability.mjs");
+    expect(packageJson.scripts["certification:source-core"]).toBe("node scripts/certification-source-core.mjs");
+    expect(packageJson.scripts["certification:extensions"]).toBe("node scripts/certification-extensions.mjs");
     expect(packageJson.scripts["certification:agent-owned"]).toBe("node scripts/certification-agent-owned.mjs");
+    expect(packageJson.scripts["certification:live-e2e"]).toBe("bash scripts/certification-e2e.sh");
     await expect(execNode(traceabilityScript, process.cwd())).resolves.toMatchObject({ stdout: expect.stringContaining("Traceability check passed.") });
-    await expect(execNode(agentOwnedCertificationScript, process.cwd(), { AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath, VITEST: "true" })).resolves.toMatchObject({
+    await expect(execNode(sourceCoreCertificationScript, process.cwd(), { AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath, VITEST: "true" })).resolves.toMatchObject({
       stdout: expect.stringContaining("fixture certification proof executed")
+    });
+    await expect(execNode(extensionCertificationScript, process.cwd(), { AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath, VITEST: "true" })).resolves.toMatchObject({
+      stdout: expect.stringContaining("fixture certification proof executed")
+    });
+    await expect(execNode(agentOwnedCertificationScript, process.cwd(), { AGENT_OS_CERTIFICATION_PROOF_COMMANDS_FILE: proofCommandsPath, VITEST: "true" })).resolves.toMatchObject({
+      stdout: expect.stringContaining("certification gate passed: source-core")
     });
   });
 
@@ -538,6 +550,8 @@ async function writeTraceabilityFixture(repo: string): Promise<void> {
   await writeFile(join(repo, "scripts", "certification-e2e.sh"), "#!/usr/bin/env bash\n", "utf8");
   await writeFile(join(repo, "docs", "releases", "CERTIFICATION_TRACEABILITY.md"), traceabilityMarkdown(), "utf8");
   await writeFile(join(repo, "docs", "releases", "agent-owned-core-certification.json"), JSON.stringify(traceabilityCertificationFixture(), null, 2), "utf8");
+  await writeFile(join(repo, "docs", "releases", "source-core-certification.json"), JSON.stringify(boundaryCertificationFixture("source-core"), null, 2), "utf8");
+  await writeFile(join(repo, "docs", "releases", "extension-certification.json"), JSON.stringify(boundaryCertificationFixture("extensions"), null, 2), "utf8");
 }
 
 function traceabilityMarkdown(options: { classification?: string; proof?: string } = {}): string {
@@ -552,7 +566,10 @@ function traceabilityMarkdown(options: { classification?: string; proof?: string
     ["VER-133", "PR #107", "legacy", "Legacy fixture exclusion", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
     ["VER-106", "PR #99", "extension", "Optional extension", "`src/core.ts`", "`tests/core.test.ts`", proof, "Complete"],
     ["VER-134", "branch: codex/ver-134-agent-owned-certification", "core", "Certification", "`src/core.ts`", "`tests/core.test.ts`", "npm run check:traceability && npm run certification:agent-owned", "Complete"],
-    ["VER-134", "live-e2e: credential-gated", "live-e2e", "Live proof", "`scripts/certification-e2e.sh`", "`tests/core.test.ts`", "npm run certification:e2e", "Gated"]
+    ["VER-134", "live-e2e: credential-gated", "live-e2e", "Live proof", "`scripts/certification-e2e.sh`", "`tests/core.test.ts`", "npm run certification:e2e", "Gated"],
+    ["VER-139", "branch: agent/VER-139", "source-core", "Source-core proof", "`src/core.ts`", "`tests/core.test.ts`", "npm run certification:source-core", "Complete"],
+    ["VER-139", "branch: agent/VER-139", "extension", "Extension proof", "`src/core.ts`", "`tests/core.test.ts`", "npm run certification:extensions", "Complete"],
+    ["VER-139", "live-e2e: credential-gated", "live-e2e", "Live proof", "`scripts/certification-e2e.sh`", "`tests/core.test.ts`", "npm run certification:live-e2e", "Gated"]
   ];
   return [
     "# Certification Traceability",
@@ -594,6 +611,48 @@ function traceabilityCertificationFixture(): unknown {
       id,
       status: "covered",
       classification: id === "extension-routing-through-lifecycle-adapters" || id === "raw-graphql-opt-in-only" ? "extension" : "core",
+      evidence,
+      proofCommands
+    }))
+  };
+}
+
+function boundaryCertificationFixture(gate: "source-core" | "extensions"): unknown {
+  const evidence = [{ path: "tests/core.test.ts", testName: "covers certification scenario" }];
+  const proofCommands = ["npm test -- tests/core.test.ts --reporter verbose"];
+  const ids =
+    gate === "source-core"
+      ? [
+          "workflow-validation",
+          "tracker-reader-boundary",
+          "workspace-lifecycle",
+          "codex-runner-fake-local-proof",
+          "dispatch-retry-recovery",
+          "handoff-validation",
+          "agent-owned-lifecycle-evidence",
+          "context-budget-safety-stop",
+          "validation-budget",
+          "scheduler-safety-writes"
+        ]
+      : [
+          "review-fixer-loop",
+          "ci-and-merge-shepherd",
+          "dashboard-monitor-extension",
+          "registry-orchestration",
+          "planning-dag",
+          "model-routing",
+          "raw-graphql-opt-in",
+          "non-linear-adapter-boundary"
+        ];
+  return {
+    schemaVersion: 1,
+    certificationIssue: "VER-139",
+    gate,
+    status: "covered",
+    scenarios: ids.map((id) => ({
+      id,
+      status: "covered",
+      classification: gate === "source-core" ? "source-core" : "extension",
       evidence,
       proofCommands
     }))

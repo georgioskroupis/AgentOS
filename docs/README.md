@@ -24,6 +24,8 @@ Start with:
 - `docs/releases/MVP.md`
 - `docs/releases/CERTIFICATION_TRACEABILITY.md`
 - `docs/releases/agent-owned-core-certification.json`
+- `docs/releases/source-core-certification.json`
+- `docs/releases/extension-certification.json`
 - `docs/releases/high-throughput-landing-certification.json`
 - `docs/runbooks/README.md`
 - `docs/runbooks/LINEAR_SETUP.md`

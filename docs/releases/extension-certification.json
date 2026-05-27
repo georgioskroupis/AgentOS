@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "certificationIssue": "VER-139",
+  "gate": "extensions",
+  "status": "covered",
+  "localFakeGated": true,
+  "sourceCoreGate": "npm run certification:source-core",
+  "scenarios": [
+    {
+      "id": "review-fixer-loop",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Automated review, reviewer artifact retry, and review-budget split behavior are extension proof outside source-core certification.",
+      "evidence": [
+        {
+          "path": "tests/review-retry.test.ts"
+        },
+        {
+          "path": "tests/review.test.ts"
+        },
+        {
+          "path": "tests/review-budget.test.ts"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/review-retry.test.ts tests/review.test.ts tests/review-budget.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "ci-and-merge-shepherd",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "CI diagnostics, landing gates, branch freshness, and GitHub merge shepherd behavior are high-trust extension proof.",
+      "evidence": [
+        {
+          "path": "docs/releases/high-throughput-landing-certification.json"
+        },
+        {
+          "path": "tests/landing-policy.test.ts"
+        },
+        {
+          "path": "tests/landing-preflight.test.ts"
+        },
+        {
+          "path": "tests/github.test.ts"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/landing-policy.test.ts tests/landing-preflight.test.ts tests/github.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "dashboard-monitor-extension",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Monitor snapshot assembly, launcher, static dashboard shell, and read-only API routes remain extension-owned.",
+      "evidence": [
+        {
+          "path": "tests/http-server.test.ts"
+        },
+        {
+          "path": "tests/monitor-aggregator.test.ts"
+        },
+        {
+          "path": "tests/monitor-launcher.test.ts"
+        },
+        {
+          "path": "tests/dashboard-profiler-ui.test.ts"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/http-server.test.ts tests/monitor-aggregator.test.ts tests/monitor-launcher.test.ts tests/dashboard-profiler-ui.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "registry-orchestration",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Registry-wide fair scheduling, project locks, and transient project errors are optional coordinator behavior.",
+      "evidence": [
+        {
+          "path": "src/registry-orchestrator.ts"
+        },
+        {
+          "path": "tests/registry-orchestrator.test.ts"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/registry-orchestrator.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "planning-dag",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Planning/decomposition helpers and child/follow-up Linear issue creation stay outside source-core dispatch proof.",
+      "evidence": [
+        {
+          "path": "src/linear-planned-issues.ts"
+        },
+        {
+          "path": "tests/linear-planned-issues.test.ts"
+        },
+        {
+          "path": "tests/scope-report.test.ts"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/linear-planned-issues.test.ts tests/scope-report.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "model-routing",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Report-only and applied model-routing decisions are optimization telemetry, not source-core execution policy.",
+      "evidence": [
+        {
+          "path": "src/model-routing.ts"
+        },
+        {
+          "path": "tests/model-routing.test.ts"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/model-routing.test.ts --reporter verbose"
+      ]
+    },
+    {
+      "id": "raw-graphql-opt-in",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Raw Linear GraphQL remains a client-tool extension available only through explicit workflow opt-in.",
+      "evidence": [
+        {
+          "path": "tests/linear-graphql-tool.test.ts",
+          "testName": "advertises only for agent-owned Linear workflows with auth"
+        },
+        {
+          "path": "tests/linear-graphql-tool.test.ts",
+          "testName": "returns structured availability and unsupported-tool failures"
+        },
+        {
+          "path": "tests/runner.test.ts",
+          "testName": "advertises agent-owned linear_graphql and answers unsupported client tool calls"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/linear-graphql-tool.test.ts tests/runner.test.ts -t \"advertises only for agent-owned Linear workflows with auth|returns structured availability and unsupported-tool failures|advertises agent-owned linear_graphql and answers unsupported client tool calls\" --reporter verbose"
+      ]
+    },
+    {
+      "id": "non-linear-adapter-boundary",
+      "classification": "extension",
+      "status": "covered",
+      "summary": "Tracker adapters beyond the Linear default use the adapter registry and do not expand source-core certification.",
+      "evidence": [
+        {
+          "path": "tests/tracker-adapters.test.ts"
+        },
+        {
+          "path": "docs/runbooks/TRACKER_ADAPTERS.md"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/tracker-adapters.test.ts --reporter verbose"
+      ]
+    }
+  ]
+}

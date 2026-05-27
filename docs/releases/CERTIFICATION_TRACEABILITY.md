@@ -20,20 +20,27 @@ tests, and proof commands. Linear status alone is not certification evidence.
 | VER-133 | PR #107 | legacy | Legacy scheduler-owned lifecycle modes are removed from public workflow config, docs/templates, and certification paths before final A+ certification | `src/lifecycle.ts`, `WORKFLOW.md`, `templates/base-harness/WORKFLOW.md`, `docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md`, `docs/planning/SOURCE_ALIGNMENT_AUDIT.md` | `tests/workflow.test.ts`, `tests/orchestrator.test.ts`, `tests/agent-lifecycle-cli.test.ts` | `npm test -- tests/workflow.test.ts tests/lifecycle-controller.test.ts tests/agent-lifecycle.test.ts tests/agent-lifecycle-cli.test.ts tests/orchestrator.test.ts --reporter verbose && npm run check:docs && npm run check:architecture` | Complete; public legacy lifecycle modes stay rejected, and production fallback residue was removed by VER-138 |
 | VER-134 | PR #108 | core | Agent-owned core source-faithful A+ certification with executable local traceability and certification gates | `scripts/check-traceability.mjs`, `scripts/certification-agent-owned.mjs`, `docs/releases/agent-owned-core-certification.json`, `package.json` | `tests/check-scripts.test.ts`, `docs/releases/CERTIFICATION_TRACEABILITY.md` | `npm run check:traceability && npm run certification:agent-owned` | Certified locally in PR #108 |
 | VER-134 | live-e2e: credential-gated | live-e2e | Live Linear/GitHub/Codex certification remains isolated from local fake-gated proof | `scripts/certification-e2e.sh` | `tests/check-scripts.test.ts` | `npm run certification:e2e` | Credential-gated; required for release only when isolated live credentials are configured |
+| VER-139 | branch: agent/VER-139 | source-core | Source-core certification proves workflow validation, tracker reader boundary, workspace lifecycle, fake/local Codex runner proof, dispatch/retry/recovery, handoff validation, agent-owned evidence, context and validation budget stops, and scheduler-safety writes without extension proof | `scripts/certification-source-core.mjs`, `docs/releases/source-core-certification.json`, `scripts/check-traceability.mjs` | `tests/workflow.test.ts`, `tests/workspace.test.ts`, `tests/runner.test.ts`, `tests/orchestrator.test.ts`, `tests/validation.test.ts`, `tests/agent-owned-lifecycle-evidence.test.ts`, `tests/context-pack.test.ts`, `tests/lifecycle-controller.test.ts` | `npm run certification:source-core` | Covered by separated local source-core gate |
+| VER-139 | branch: agent/VER-139 | extension | Extension certification owns review/fixer, CI/merge shepherd, dashboard/monitor, registry, planning/DAG, model-routing, raw GraphQL, and non-Linear adapter proof outside source-core | `scripts/certification-extensions.mjs`, `docs/releases/extension-certification.json`, `docs/releases/high-throughput-landing-certification.json` | `tests/review-retry.test.ts`, `tests/review.test.ts`, `tests/review-budget.test.ts`, `tests/landing-policy.test.ts`, `tests/landing-preflight.test.ts`, `tests/http-server.test.ts`, `tests/registry-orchestrator.test.ts`, `tests/linear-planned-issues.test.ts`, `tests/model-routing.test.ts`, `tests/linear-graphql-tool.test.ts`, `tests/tracker-adapters.test.ts` | `npm run certification:extensions` | Covered by separated local extension gate |
+| VER-139 | live-e2e: credential-gated | live-e2e | Live Linear/GitHub/Codex behavior remains credential-gated and does not block local source-core proof | `scripts/certification-e2e.sh`, `package.json` | `tests/check-scripts.test.ts` | `npm run certification:live-e2e` | Credential-gated; aggregate gate reports it as separate proof |
 
 ## Certification Rules
 
 - A certification row must name at least one code path and one executable proof.
-- A certification row must include PR/branch and one classification: `core`,
-  `extension`, `legacy`, or `live-e2e`.
+- A certification row must include PR/branch and one classification:
+  `source-core`, `core`, `extension`, `legacy`, or `live-e2e`.
 - Optional extensions must be labeled as optional or high-trust; they must not be
   treated as core Symphony proof.
 - Test-only legacy fixtures must be labeled `legacy`, excluded from core proof,
   and resolved or explicitly final-excluded before A+ certification.
 - If a post-review correction changes the meaning of an old Done issue, add a
   new row instead of rewriting historical Linear state.
-- `npm run check:traceability` is the machine-readable gate for this matrix and
-  `docs/releases/agent-owned-core-certification.json`.
-- Live E2E proof is gated by `npm run certification:e2e`; it is required for
+- `npm run check:traceability` is the machine-readable gate for this matrix,
+  `docs/releases/agent-owned-core-certification.json`,
+  `docs/releases/source-core-certification.json`, and
+  `docs/releases/extension-certification.json`.
+- `npm run certification:agent-owned` is a local aggregate over
+  `certification:source-core` and `certification:extensions`. Live E2E proof is
+  separate and gated by `npm run certification:live-e2e`; it is required for
   release certification only when credentials and an isolated certification
   workflow are available.
