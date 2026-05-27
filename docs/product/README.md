@@ -18,6 +18,9 @@ The product promise is simple:
   projects with global/per-project concurrency, fair scheduling, project-local
   workflow config, and registry status summaries for operator triage.
 
+Monitor optimization planning is tracked in
+[`MONITOR_OPTIMIZATION_GAP_INVENTORY.md`](MONITOR_OPTIMIZATION_GAP_INVENTORY.md).
+
 <!-- AGENTOS:BEGIN -->
 ## AgentOS Product Context
 
