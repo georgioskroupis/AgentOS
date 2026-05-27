@@ -1,3 +1,4 @@
+import { buildMonitorActivity, type MonitorActivity } from "./monitor-contracts.js";
 import type { RunPhaseTiming } from "./runs.js";
 import type { AgentEvent, AgentRunResult, Issue, ModelRoutingRole } from "./types.js";
 import type { ValidationEvidenceCheck } from "./validation.js";
@@ -76,6 +77,28 @@ export async function writeTurnCompletedMonitorEvent(input: {
     message: `${input.label} ${input.result.status}`,
     payload: turnCompletedMonitorPayload(input)
   });
+}
+
+export function withRunnerActivityMonitorContext(event: AgentEvent, timing: RunPhaseTiming): AgentEvent {
+  const monitor = runnerActivityMonitorPayload(event, timing);
+  if (!monitor) return event;
+  if (typeof event.payload !== "object" || event.payload == null || Array.isArray(event.payload)) return event;
+  return { ...event, payload: { ...event.payload, monitor } };
+}
+
+export function runnerActivityMonitorPayload(event: AgentEvent, timing: RunPhaseTiming): Record<string, unknown> | null {
+  const activity = runnerActivityFromEvent(event);
+  if (!activity) return null;
+  const turnId = runnerTurnId(event);
+  return {
+    kind: "activity_observed",
+    spanId: `${timing.id}:step`,
+    parentSpanId: timing.id,
+    ...(turnId ? { turnId } : {}),
+    label: activity.label,
+    timeClass: "agent",
+    activity
+  };
 }
 
 export async function writeModelFinishedMonitorEvent(input: {
@@ -222,4 +245,153 @@ export function reviewIterationFinishedMonitorEvent(input: {
       }
     }
   };
+}
+
+function runnerActivityFromEvent(event: AgentEvent): MonitorActivity | null {
+  if (event.type === "codex_stdout") {
+    return buildMonitorActivity({
+      kind: "command_output",
+      label: "Runner stdout observed",
+      stream: "stdout",
+      bytesObserved: bytesObserved(event)
+    });
+  }
+  if (event.type === "codex_stderr" || event.type === "codex_stderr_benign") {
+    return buildMonitorActivity({
+      kind: "command_output",
+      label: event.type === "codex_stderr_benign" ? "Runner stderr warning observed" : "Runner stderr observed",
+      stream: "stderr",
+      bytesObserved: bytesObserved(event)
+    });
+  }
+  if (event.type === "thread/tokenUsage/updated") {
+    const usage = runnerTokenUsage(event);
+    return usage ? buildMonitorActivity({ kind: "token_usage", label: "Runner token usage observed", ...usage }) : null;
+  }
+  if (event.type === "account/rateLimits/updated") {
+    const rateLimit = runnerRateLimit(event);
+    return buildMonitorActivity({ kind: "rate_limit", label: "Runner rate-limit pressure observed", ...rateLimit });
+  }
+  if (event.type === "item/started" || event.type === "item/completed") {
+    const item = runnerItem(event);
+    const action = event.type === "item/started" ? "started" : "completed";
+    if (item?.type === "commandExecution") {
+      return buildMonitorActivity({
+        kind: "command_output",
+        label: `Runner command ${action}`,
+        ...(typeof item.command === "string" ? { command: item.command } : {}),
+        ...(event.type === "item/completed" && typeof item.output === "string" ? { bytesObserved: Buffer.byteLength(item.output) } : {})
+      });
+    }
+    return buildMonitorActivity({ kind: "generic", label: `Runner item ${action}` });
+  }
+  return null;
+}
+
+function bytesObserved(event: AgentEvent): number | undefined {
+  const payload = recordValue(event.payload);
+  const captured = integerValue(payload?.capturedChars);
+  if (captured != null) return captured;
+  return event.message ? Buffer.byteLength(event.message) : undefined;
+}
+
+function runnerTokenUsage(event: AgentEvent): { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null {
+  const params = recordValue(recordValue(event.payload)?.params);
+  const usage = recordValue(recordValue(params?.tokenUsage)?.total) ?? recordValue(params?.tokenUsage) ?? recordValue(params?.usage);
+  if (!usage) return null;
+  const inputTokens = integerValue(usage.inputTokens ?? usage.input_tokens ?? usage.input);
+  const outputTokens = integerValue(usage.outputTokens ?? usage.output_tokens ?? usage.output);
+  const totalTokens = integerValue(usage.totalTokens ?? usage.total_tokens ?? usage.total);
+  if (inputTokens == null && outputTokens == null && totalTokens == null) return null;
+  return {
+    ...(inputTokens != null ? { inputTokens } : {}),
+    ...(outputTokens != null ? { outputTokens } : {}),
+    ...(totalTokens != null ? { totalTokens } : {})
+  };
+}
+
+function runnerRateLimit(event: AgentEvent): { pressure: "none" | "low" | "medium" | "high" | "blocked"; resetAt?: string } {
+  const params = recordValue(recordValue(event.payload)?.params);
+  const snapshot = recordValue(params?.rateLimits) ?? recordValue(params?.rateLimit);
+  const usedPercent = maxNumberByKey(snapshot, "usedPercent");
+  const remainingPercent = maxNumberByKey(snapshot, "remainingPercent");
+  const pressure =
+    usedPercent != null ? pressureFromUsedPercent(usedPercent) : remainingPercent != null ? pressureFromRemainingPercent(remainingPercent) : "none";
+  const resetAt = firstStringByKey(snapshot, "resetAt") ?? firstStringByKey(snapshot, "reset_at");
+  return {
+    pressure,
+    ...(resetAt ? { resetAt } : {})
+  };
+}
+
+function runnerItem(event: AgentEvent): Record<string, unknown> | null {
+  return recordValue(recordValue(recordValue(event.payload)?.params)?.item);
+}
+
+function runnerTurnId(event: AgentEvent): string | undefined {
+  const payload = recordValue(event.payload);
+  const params = recordValue(payload?.params);
+  const value = params?.turnId ?? params?.turn_id ?? recordValue(params?.turn)?.id ?? payload?.turnId ?? payload?.turn_id;
+  return compactRunnerString(value);
+}
+
+function pressureFromUsedPercent(value: number): "none" | "low" | "medium" | "high" | "blocked" {
+  const normalized = value > 1 ? value / 100 : value;
+  if (normalized >= 1) return "blocked";
+  if (normalized >= 0.9) return "high";
+  if (normalized >= 0.75) return "medium";
+  return normalized > 0 ? "low" : "none";
+}
+
+function pressureFromRemainingPercent(value: number): "none" | "low" | "medium" | "high" | "blocked" {
+  const normalized = value > 1 ? value / 100 : value;
+  if (normalized <= 0) return "blocked";
+  if (normalized <= 0.1) return "high";
+  if (normalized <= 0.25) return "medium";
+  return normalized < 1 ? "low" : "none";
+}
+
+function maxNumberByKey(value: unknown, key: string): number | undefined {
+  const matches: number[] = [];
+  visitRecords(value, (record) => {
+    const numeric = numberValue(record[key]);
+    if (numeric != null) matches.push(numeric);
+  });
+  return matches.length ? Math.max(...matches) : undefined;
+}
+
+function firstStringByKey(value: unknown, key: string): string | undefined {
+  let match: string | undefined;
+  visitRecords(value, (record) => {
+    if (!match) match = compactRunnerString(record[key]);
+  });
+  return match;
+}
+
+function visitRecords(value: unknown, visit: (record: Record<string, unknown>) => void): void {
+  const record = recordValue(value);
+  if (!record) return;
+  visit(record);
+  for (const child of Object.values(record)) {
+    if (typeof child === "object" && child != null) visitRecords(child, visit);
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value != null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function integerValue(value: unknown): number | undefined {
+  const numeric = numberValue(value);
+  return numeric != null && Number.isInteger(numeric) && numeric >= 0 ? numeric : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function compactRunnerString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  return trimmed ? trimmed.slice(0, 160) : undefined;
 }

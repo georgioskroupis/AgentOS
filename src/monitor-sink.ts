@@ -1,5 +1,5 @@
 import type { JsonlLogger } from "./logging.js";
-import type { MonitorEvent, MonitorSink } from "./monitor-contracts.js";
+import { buildMonitorActivity, type MonitorEvent, type MonitorSink } from "./monitor-contracts.js";
 import type { AgentEvent, ModelRoutingRole } from "./types.js";
 
 type MonitorEventKind = MonitorEvent["kind"];
@@ -23,6 +23,7 @@ export function createMonitorEmitter(input: { sink: MonitorSink; logger: JsonlLo
           spanId,
           ...(parentSpanId ? { parentSpanId } : {}),
           runId,
+          ...(derived.turnId ? { turnId: derived.turnId } : {}),
           issueId: event.issueIdentifier ?? event.issueId,
           timestamp,
           kind: derived.kind,
@@ -33,6 +34,7 @@ export function createMonitorEmitter(input: { sink: MonitorSink; logger: JsonlLo
           ...(derived.iteration ? { iteration: derived.iteration } : {}),
           ...(derived.validation ? { validation: derived.validation } : {}),
           ...(derived.humanAction ? { humanAction: derived.humanAction } : {}),
+          ...(derived.activity ? { activity: derived.activity } : {}),
           ...(derived.result ? { result: derived.result } : {})
         };
         try {
@@ -52,7 +54,7 @@ export function createMonitorEmitter(input: { sink: MonitorSink; logger: JsonlLo
   };
 }
 
-type MonitorDerivedEvent = Partial<Pick<MonitorEvent, "spanId" | "parentSpanId" | "label" | "status" | "timeClass" | "model" | "iteration" | "validation" | "humanAction" | "result">> & {
+type MonitorDerivedEvent = Partial<Pick<MonitorEvent, "spanId" | "parentSpanId" | "turnId" | "label" | "status" | "timeClass" | "model" | "iteration" | "validation" | "humanAction" | "activity" | "result">> & {
   kind: MonitorEventKind;
 };
 
@@ -178,6 +180,7 @@ function monitorHints(event: AgentEvent): Partial<MonitorDerivedEvent> {
     ...(isMonitorKind(hints.kind) ? { kind: hints.kind } : {}),
     ...(typeof hints.spanId === "string" ? { spanId: hints.spanId } : {}),
     ...(typeof hints.parentSpanId === "string" ? { parentSpanId: hints.parentSpanId } : {}),
+    ...(compactHintString(hints.turnId) ? { turnId: compactHintString(hints.turnId) } : {}),
     ...(typeof hints.label === "string" ? { label: hints.label } : {}),
     ...(isMonitorStatus(hints.status) ? { status: hints.status } : {}),
     ...(isMonitorTimeClass(hints.timeClass) ? { timeClass: hints.timeClass } : {}),
@@ -185,8 +188,15 @@ function monitorHints(event: AgentEvent): Partial<MonitorDerivedEvent> {
     ...(hints.iteration && typeof hints.iteration.current === "number" ? { iteration: hints.iteration } : {}),
     ...(hints.validation && typeof hints.validation.command === "string" ? { validation: hints.validation } : {}),
     ...(monitorHumanAction(hints.humanAction) ? { humanAction: monitorHumanAction(hints.humanAction) } : {}),
+    ...(monitorActivity(hints.activity) ? { activity: monitorActivity(hints.activity) } : {}),
     ...(typeof hints.result === "string" ? { result: hints.result } : {})
   };
+}
+
+function monitorActivity(value: unknown): MonitorEvent["activity"] | undefined {
+  if (typeof value !== "object" || value == null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return isMonitorActivityKind(record.kind) ? buildMonitorActivity({ ...record, kind: record.kind }) : undefined;
 }
 
 function stageEvent(kind: "stage_started" | "stage_finished", event: AgentEvent, timing: Record<string, unknown> | undefined): MonitorDerivedEvent {
@@ -420,8 +430,12 @@ function monitorModelRole(role: string): NonNullable<MonitorEvent["model"]>["rol
 
 function isMonitorKind(value: unknown): value is MonitorEventKind {
   return typeof value === "string" && [
-    "run_started", "run_finished", "run_failed", "stage_started", "stage_finished", "step_started", "step_finished", "wait_started", "wait_finished", "loop_started", "loop_finished", "loop_iteration_started", "loop_iteration_finished", "model_started", "model_finished", "validation_started", "validation_finished", "human_action_required"
+    "run_started", "run_finished", "run_failed", "stage_started", "stage_finished", "step_started", "step_finished", "wait_started", "wait_finished", "loop_started", "loop_finished", "loop_iteration_started", "loop_iteration_finished", "model_started", "model_finished", "validation_started", "validation_finished", "activity_observed", "human_action_required"
   ].includes(value);
+}
+
+function isMonitorActivityKind(value: unknown): value is NonNullable<MonitorEvent["activity"]>["kind"] {
+  return value === "command_output" || value === "file_change" || value === "token_usage" || value === "rate_limit" || value === "generic";
 }
 
 function isMonitorStatus(value: unknown): value is MonitorEventStatus {
@@ -476,6 +490,12 @@ function stringList(value: unknown): string[] {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function compactHintString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  return trimmed ? trimmed.slice(0, 160) : undefined;
 }
 
 function slug(value: string): string {
