@@ -61,6 +61,43 @@ describe("in-memory monitor aggregator", () => {
     expect(late.run?.timing[0]?.children[0]?.durationMs).toBe(5000);
   });
 
+  it("renders sanitized command execution activity as timing rows under the active step", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext(runContext);
+    emitAll(aggregator, [
+      event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z"),
+      event("turn", "step_started", "implementation turn 1", "2026-05-25T00:00:01.000Z", { parentSpanId: "run" }),
+      event("cmd-active", "step_started", "Command: npm run active", "2026-05-25T00:00:02.000Z", {
+        parentSpanId: "turn",
+        status: "active",
+        timeClass: "tool",
+        result: "running"
+      }),
+      event("cmd-pass", "step_started", "Command: npm run pass", "2026-05-25T00:00:03.000Z", { parentSpanId: "turn", timeClass: "tool" }),
+      event("cmd-pass", "step_finished", "Command: npm run pass", "2026-05-25T00:00:05.000Z", {
+        status: "pass",
+        timeClass: "tool",
+        result: "exit 0"
+      }),
+      event("cmd-fail", "step_started", "Command: npm run fail", "2026-05-25T00:00:06.000Z", { parentSpanId: "turn", timeClass: "tool" }),
+      event("cmd-fail", "step_finished", "Command: npm run fail", "2026-05-25T00:00:10.000Z", {
+        status: "failed",
+        timeClass: "tool",
+        result: "exit 2"
+      })
+    ]);
+
+    const turn = aggregator.snapshot({ serverNow: "2026-05-25T00:00:12.000Z" }).run?.timing[0]?.children[0];
+
+    expect(turn?.children.map((child) => [child.id, child.label, child.status, child.durationMs, child.result])).toEqual([
+      ["cmd-active", "Command: npm run active", "active", 10000, "running"],
+      ["cmd-pass", "Command: npm run pass", "pass", 2000, "exit 0"],
+      ["cmd-fail", "Command: npm run fail", "failed", 4000, "exit 2"]
+    ]);
+    expect(JSON.stringify(turn)).not.toContain("stdout");
+    expect(JSON.stringify(turn)).not.toContain("stderr");
+  });
+
   it("closes active rows on terminal events and retains only active run plus terminal snapshot", () => {
     const aggregator = new InMemoryMonitorAggregator();
     aggregator.updateRunContext(runContext);

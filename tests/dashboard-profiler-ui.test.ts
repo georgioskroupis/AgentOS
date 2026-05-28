@@ -51,6 +51,22 @@ describe("dashboard live profiler UI", () => {
     expect(rowHtml(html, "wait")).toContain('data-ms="4000"');
   });
 
+  it("renders command timing rows with compact results without exposing raw output", () => {
+    const { profiler } = loadProfiler();
+    const html = profiler.renderSnapshot(commandRowsSnapshot(), { serverNow: "2026-05-26T00:00:12.000Z" });
+
+    expect(rowHtml(html, "cmd-active")).toContain("Command: npm run active");
+    expect(rowHtml(html, "cmd-active")).toContain(">active<");
+    expect(rowHtml(html, "cmd-active")).toContain(">running<");
+    expect(rowHtml(html, "cmd-active")).toContain('data-ms="10000"');
+    expect(rowHtml(html, "cmd-pass")).toContain(">pass<");
+    expect(rowHtml(html, "cmd-pass")).toContain(">exit 0<");
+    expect(rowHtml(html, "cmd-fail")).toContain(">failed<");
+    expect(rowHtml(html, "cmd-fail")).toContain(">exit 2<");
+    expect(html).not.toContain("raw stdout");
+    expect(html).not.toContain("raw stderr");
+  });
+
   it("renders required Human Action details only when action is required", () => {
     const { profiler } = loadProfiler();
     const html = profiler.renderSnapshot(humanActionSnapshot(), { serverNow: "2026-05-26T00:00:08.000Z" });
@@ -228,6 +244,66 @@ function nestedWaitSnapshot(): Record<string, unknown> {
           durationMs: 4000,
           selfMs: 4000,
           waitMs: 4000,
+          children: []
+        }
+      ]
+    }
+  ];
+  return snapshot;
+}
+
+function commandRowsSnapshot(): Record<string, unknown> {
+  const snapshot = activeSnapshot("active");
+  const run = snapshot.run as Record<string, unknown>;
+  run.timing = [
+    {
+      id: "turn",
+      label: "implementation turn 1",
+      status: "active",
+      timeClass: "agent",
+      startedAt: "2026-05-26T00:00:01.000Z",
+      durationMs: 11000,
+      selfMs: 1000,
+      waitMs: 0,
+      children: [
+        {
+          id: "cmd-active",
+          label: "Command: npm run active",
+          status: "active",
+          timeClass: "tool",
+          startedAt: "2026-05-26T00:00:02.000Z",
+          durationMs: 10000,
+          selfMs: 10000,
+          waitMs: 0,
+          result: "running",
+          output: "raw stdout should not render",
+          children: []
+        },
+        {
+          id: "cmd-pass",
+          label: "Command: npm run pass",
+          status: "pass",
+          timeClass: "tool",
+          startedAt: "2026-05-26T00:00:03.000Z",
+          endedAt: "2026-05-26T00:00:05.000Z",
+          durationMs: 2000,
+          selfMs: 2000,
+          waitMs: 0,
+          result: "exit 0",
+          stderr: "raw stderr should not render",
+          children: []
+        },
+        {
+          id: "cmd-fail",
+          label: "Command: npm run fail",
+          status: "failed",
+          timeClass: "tool",
+          startedAt: "2026-05-26T00:00:06.000Z",
+          endedAt: "2026-05-26T00:00:10.000Z",
+          durationMs: 4000,
+          selfMs: 4000,
+          waitMs: 0,
+          result: "exit 2",
           children: []
         }
       ]

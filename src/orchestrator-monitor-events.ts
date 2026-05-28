@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { buildMonitorActivity, type MonitorActivity } from "./monitor-contracts.js";
 import type { RunPhaseTiming } from "./runs.js";
 import type { AgentEvent, AgentRunResult, Issue, ModelRoutingRole } from "./types.js";
@@ -87,6 +88,8 @@ export function withRunnerActivityMonitorContext(event: AgentEvent, timing: RunP
 }
 
 export function runnerActivityMonitorPayload(event: AgentEvent, timing: RunPhaseTiming): Record<string, unknown> | null {
+  const commandRow = runnerCommandRowFromEvent(event, timing);
+  if (commandRow) return commandRow;
   const activity = runnerActivityFromEvent(event);
   if (!activity) return null;
   const turnId = runnerTurnId(event);
@@ -98,6 +101,33 @@ export function runnerActivityMonitorPayload(event: AgentEvent, timing: RunPhase
     label: activity.label,
     timeClass: "agent",
     activity
+  };
+}
+
+function runnerCommandRowFromEvent(event: AgentEvent, timing: RunPhaseTiming): Record<string, unknown> | null {
+  if (event.type !== "item/started" && event.type !== "item/completed") return null;
+  const item = runnerItem(event);
+  if (item?.type !== "commandExecution") return null;
+  const command = compactRunnerString(item.command);
+  const activity = buildMonitorActivity({
+    kind: "command_output",
+    label: "Command execution",
+    ...(command ? { command } : {}),
+    ...(event.type === "item/completed" && typeof item.output === "string" ? { bytesObserved: Buffer.byteLength(item.output) } : {})
+  });
+  const commandLabel = activity.kind === "command_output" ? activity.command : undefined;
+  const status = commandStatus(event.type, item);
+  const result = commandResult(event.type, item);
+  return {
+    kind: event.type === "item/started" ? "step_started" : "step_finished",
+    spanId: commandSpanId(timing.id, item, command),
+    parentSpanId: `${timing.id}:step`,
+    ...(runnerTurnId(event) ? { turnId: runnerTurnId(event) } : {}),
+    label: `Command: ${commandLabel ?? "command execution"}`,
+    status,
+    timeClass: "tool",
+    activity,
+    ...(result ? { result } : {})
   };
 }
 
@@ -394,4 +424,34 @@ function compactRunnerString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.replace(/\s+/g, " ").trim();
   return trimmed ? trimmed.slice(0, 160) : undefined;
+}
+
+function commandStatus(type: string, item: Record<string, unknown>): "active" | "done" | "failed" | "pass" {
+  if (type === "item/started") return "active";
+  const exitCode = integerValue(item.exitCode);
+  if (exitCode === 0) return "pass";
+  if (exitCode != null && exitCode !== 0) return "failed";
+  const rawStatus = compactRunnerString(item.status)?.toLowerCase();
+  if (rawStatus === "failed" || rawStatus === "error") return "failed";
+  if (rawStatus === "passed" || rawStatus === "success" || rawStatus === "succeeded") return "pass";
+  return "done";
+}
+
+function commandResult(type: string, item: Record<string, unknown>): string | undefined {
+  if (type === "item/started") return "running";
+  const exitCode = integerValue(item.exitCode);
+  if (exitCode != null) return `exit ${exitCode}`;
+  return compactRunnerString(item.status);
+}
+
+function commandSpanId(parentId: string, item: Record<string, unknown>, command: string | undefined): string {
+  const itemId = compactRunnerString(item.id ?? item.itemId);
+  if (itemId) return `${parentId}:command:${safeSpanSegment(itemId)}`;
+  const hash = createHash("sha256").update(command ?? "unknown-command").digest("hex").slice(0, 12);
+  return `${parentId}:command:${hash}`;
+}
+
+function safeSpanSegment(value: string): string {
+  const safe = value.replace(/[^a-zA-Z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return safe || createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
