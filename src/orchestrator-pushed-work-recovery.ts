@@ -8,7 +8,7 @@ import { validationEvidencePath, verifyValidationEvidence, writeValidationEviden
 import { validationReuseProfileForConfig } from "./validation-profile.js";
 import { workspaceKey } from "./workspace.js";
 import type { JsonlLogger } from "./logging.js";
-import type { Issue, IssueState, ServiceConfig, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, Issue, IssueState, ServiceConfig, Workspace } from "./types.js";
 
 export interface AutoRecoverPushedWorkInput {
   issue: Issue;
@@ -27,6 +27,21 @@ export interface PublishCleanRecoveryBranchInput {
   state?: IssueState | null;
   repoRoot: string;
   logger: JsonlLogger;
+}
+
+export interface FinalizeCleanPushedWorkAfterRunnerStopInput {
+  issue: Issue;
+  workspace: Workspace;
+  result: AgentRunResult;
+  runId: string;
+  state: IssueState | null;
+  repoRoot: string;
+  config: ServiceConfig;
+  logger: JsonlLogger;
+  markSucceeded: (workspace: Workspace, handoff: string | null, state: IssueState) => Promise<void>;
+  writeRunHandoff: (handoff: string) => Promise<void>;
+  writeRunEvent: (entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }) => Promise<void>;
+  completeRun: (result: AgentRunResult) => Promise<void>;
 }
 
 export async function publishCleanRecoveryBranchIfSafe(input: PublishCleanRecoveryBranchInput): Promise<WorkspaceRecoveryDiagnostics> {
@@ -59,6 +74,42 @@ export async function publishCleanRecoveryBranchIfSafe(input: PublishCleanRecove
     });
     return recovery;
   }
+}
+
+export async function finalizeCleanPushedWorkAfterRunnerStop(input: FinalizeCleanPushedWorkAfterRunnerStopInput): Promise<boolean> {
+  if (!isRunnerClosureResult(input.result)) return false;
+  let recovery = await inspectWorkspaceRecovery(resolve(input.repoRoot), {
+    issueIdentifier: input.issue.identifier,
+    workspacePath: input.workspace.path,
+    headSha: input.state?.headSha ?? null,
+    validation: input.state?.validation
+  }).catch(() => null);
+  if (!recovery?.recoverable) return false;
+  recovery = await publishCleanRecoveryBranchIfSafe({ issue: input.issue, recovery, state: input.state, repoRoot: input.repoRoot, logger: input.logger });
+  const recovered = await autoRecoverPushedWork({
+    issue: input.issue,
+    recovery,
+    reason: `implementation runner stopped after clean pushed work was produced: ${input.result.error ?? input.result.status}`,
+    repoRoot: input.repoRoot,
+    config: input.config,
+    runId: input.runId,
+    logger: input.logger,
+    markSucceeded: input.markSucceeded
+  });
+  if (!recovered) return false;
+
+  const handoff = await readText(join(recovery.workspacePath, ".agent-os", `handoff-${input.issue.identifier}.md`)).catch(() => null);
+  if (handoff) await input.writeRunHandoff(handoff);
+  const recoveredResult: AgentRunResult = { ...input.result, status: "succeeded", error: undefined };
+  await input.writeRunEvent({
+    type: "run_succeeded",
+    issueId: input.issue.id,
+    issueIdentifier: input.issue.identifier,
+    message: "completed after clean pushed work recovery",
+    payload: { ...recoveredResult, recoveredFrom: input.result.status, originalError: input.result.error }
+  });
+  await input.completeRun(recoveredResult);
+  return true;
 }
 
 export async function autoRecoverPushedWork(input: AutoRecoverPushedWorkInput): Promise<boolean> {
@@ -302,6 +353,12 @@ function runShell(command: string, cwd: string): Promise<string> {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function isRunnerClosureResult(result: AgentRunResult): boolean {
+  if (result.status === "canceled" || result.status === "stale") return true;
+  const normalized = (result.error ?? "").toLowerCase();
+  return normalized.includes("codex_app_server_closed") || normalized.includes("stream disconnected") || normalized.includes("canceled");
 }
 
 async function logPushedWorkRecoverySkipped(input: AutoRecoverPushedWorkInput, message: string, payload: Record<string, unknown>): Promise<void> {
