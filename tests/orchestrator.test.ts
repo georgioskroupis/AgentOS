@@ -4511,6 +4511,100 @@ describe("orchestrator", () => {
     expect(events.some((event) => event.type === "phase_finished" && (event.payload as { timing?: { phase?: string } }).timing?.phase === "stall-cancel")).toBe(true);
   });
 
+  it("presents review-state runner aborts with a handoff as orderly stream stops", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-handoff-stream-stop-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready, In Progress]\n  running_state: In Progress\n  review_state: Human Review\nagent:\n  max_turns: 1\n  max_retry_attempts: 1\n  max_retry_backoff_ms: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    let currentIssue = { ...readyIssue };
+    let runnerStarted = false;
+    let activeWorkspace: string | null = null;
+    let activePrompt: string | null = null;
+    let resolveFinished: () => void = () => {};
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
+    const tracker: IssueTracker = {
+      async fetchCandidates(activeStates) {
+        return activeStates.includes(currentIssue.state) ? [currentIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, currentIssue]]);
+      },
+      async comment() {},
+      async move(_issue, state) {
+        currentIssue = { ...currentIssue, state };
+      }
+    };
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        runnerStarted = true;
+        activeWorkspace = input.workspace.path;
+        activePrompt = input.prompt;
+        return new Promise<AgentRunResult>((resolve) => {
+          input.signal?.addEventListener(
+            "abort",
+            () => {
+              resolveFinished();
+              resolve({ status: "canceled", error: "canceled" });
+            },
+            { once: true }
+          );
+        });
+      }
+    };
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(false);
+    await waitUntil(() => runnerStarted && activeWorkspace != null && activePrompt != null);
+    await writePassingHandoff(activeWorkspace!, "AG-1", activePrompt!, "AgentOS-Outcome: implemented");
+    currentIssue = { ...currentIssue, state: "Human Review" };
+    await orchestrator.runOnce(false);
+    await finished;
+
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    const events = await new RunArtifactStore(repo).replay(summary.runId);
+    const turnCompleted = events.find((event) => event.type === "turn_completed");
+    const turnPayload = turnCompleted?.payload as { result?: AgentRunResult; monitor?: { status?: string; result?: string } } | undefined;
+    const handoffStop = events.find((event) => {
+      const timing = (event.payload as { timing?: { phase?: string; label?: string; status?: string; metadata?: Record<string, unknown> } } | undefined)?.timing;
+      return event.type === "phase_finished" && timing?.phase === "stall-cancel";
+    })?.payload as { timing?: { label?: string; status?: string; metadata?: Record<string, unknown> } } | undefined;
+    const implementationFinished = events.find((event) => {
+      const timing = (event.payload as { timing?: { phase?: string; label?: string } } | undefined)?.timing;
+      return event.type === "phase_finished" && timing?.phase === "implementation";
+    })?.payload as { timing?: { status?: string; metadata?: Record<string, unknown> } } | undefined;
+
+    expect(turnCompleted?.message).toBe("implementation turn 1 handoff completed; runner stream stopped");
+    expect(turnPayload?.result?.status).toBe("succeeded");
+    expect(turnPayload?.monitor?.status).toBe("done");
+    expect(turnPayload?.monitor?.result).toBe("succeeded");
+    expect(handoffStop?.timing).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        label: "handoff state reached; runner stream stopped",
+        metadata: expect.objectContaining({ reason: "handoff_completed_runner_stream_stopped", state: "Human Review" })
+      })
+    );
+    expect(implementationFinished?.timing).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        metadata: expect.objectContaining({ resultStatus: "canceled", displayStatus: "succeeded", stopReason: "handoff_completed_runner_stream_stopped" })
+      })
+    );
+  });
+
   it("stops denied MCP elicitation requests for human input without retrying", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-elicitation-"));
     const workflowPath = join(repo, "WORKFLOW.md");

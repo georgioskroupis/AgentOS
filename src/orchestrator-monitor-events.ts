@@ -70,13 +70,16 @@ export async function writeTurnCompletedMonitorEvent(input: {
   current: number;
   result: AgentRunResult;
   max?: number;
+  displayResult?: AgentRunResult;
+  message?: string;
 }): Promise<void> {
+  const eventResult = input.displayResult ?? input.result;
   await input.writeRunEvent(input.runId, {
     type: "turn_completed",
     issueId: input.issue.id,
     issueIdentifier: input.issue.identifier,
-    message: `${input.label} ${input.result.status}`,
-    payload: turnCompletedMonitorPayload(input)
+    message: input.message ?? `${input.label} ${eventResult.status}`,
+    payload: turnCompletedMonitorPayload({ ...input, result: eventResult })
   });
 }
 
@@ -138,6 +141,7 @@ export async function writeModelFinishedMonitorEvent(input: {
   result: AgentRunResult;
   role: ModelRoutingRole;
   attempt: number;
+  displayStatus?: AgentRunResult["status"];
 }): Promise<void> {
   if (!input.result.modelTelemetry) return;
   await input.writeRunEvent(input.runId, {
@@ -145,7 +149,7 @@ export async function writeModelFinishedMonitorEvent(input: {
     issueId: input.issue.id,
     issueIdentifier: input.issue.identifier,
     message: `${input.role} model finished`,
-    payload: { ...input.result.modelTelemetry, role: input.role, attempt: input.attempt, status: input.result.status }
+    payload: { ...input.result.modelTelemetry, role: input.role, attempt: input.attempt, status: input.displayStatus ?? input.result.status }
   });
 }
 

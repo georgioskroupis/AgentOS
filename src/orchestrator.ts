@@ -36,6 +36,7 @@ import { emitPreDispatchMonitorPause } from "./orchestrator-pre-dispatch-monitor
 import { markLinearPlanningRecommended } from "./orchestrator-planning-guardrail.js";
 import { markDraftPullRequestReadyIfConfigured } from "./orchestrator-pr-ready.js";
 import { moveIssueToRunningState } from "./orchestrator-run-start-state-sync.js";
+import { handoffRunnerStreamStopPresentation, nonDispatchableRunnerStreamStopPresentation, TERMINAL_RUNNER_STREAM_STOP_REASON, HANDOFF_RUNNER_STREAM_STOP_REASON } from "./orchestrator-runner-stop-presentation.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
@@ -77,6 +78,7 @@ interface RunningEntry {
   abortController: AbortController;
   promise: Promise<void>;
 }
+
 export class Orchestrator {
   private workflow!: WorkflowDefinition;
   private config!: ServiceConfig;
@@ -1328,9 +1330,10 @@ export class Orchestrator {
         await this.finishRunPhase(runId, issue, implementationTiming, "failed", { turnNumber, error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
-      await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result, role: "implementation", attempt: turnNumber });
-      await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: implementationTiming, label: `implementation turn ${turnNumber}`, current: turnNumber, result, max: this.config.agent.maxTurns });
-      await this.finishRunPhase(runId, issue, implementationTiming, timingStatusForRunResult(result), { turnNumber, resultStatus: result.status });
+      const handoffStop = await handoffRunnerStreamStopPresentation({ result, signal, workspace, issue });
+      await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result, role: "implementation", attempt: turnNumber, ...(handoffStop ? { displayStatus: "succeeded" } : {}) });
+      await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: implementationTiming, label: `implementation turn ${turnNumber}`, current: turnNumber, result, max: this.config.agent.maxTurns, ...(handoffStop ? { displayResult: handoffStop.displayResult, message: `implementation turn ${turnNumber} handoff completed; runner stream stopped` } : {}) });
+      await this.finishRunPhase(runId, issue, implementationTiming, handoffStop ? "completed" : timingStatusForRunResult(result), { turnNumber, resultStatus: result.status, ...(handoffStop ? { displayStatus: "succeeded", stopReason: HANDOFF_RUNNER_STREAM_STOP_REASON } : {}) });
       if (result.status !== "succeeded") return result;
       if (await readHandoff(workspace.path, issue.identifier)) return result;
 
@@ -1596,25 +1599,22 @@ export class Orchestrator {
       if (!running || !issue) continue;
       const normalized = issue.state.toLowerCase();
       if (this.config.tracker.terminalStates.map((state) => state.toLowerCase()).includes(normalized)) {
-        running.abortController.abort();
+        running.abortController.abort(TERMINAL_RUNNER_STREAM_STOP_REASON);
         await this.writePhaseTimingEvent(issue, {
-          phase: "stall-cancel",
-          status: "canceled",
+          phase: "stall-cancel", status: "canceled",
           startedAt: new Date(running.lastCodexEventAt ?? running.startedAt).toISOString(),
           finishedAt: new Date().toISOString(),
-          label: "terminal-state cancel",
-          metadata: { state: issue.state }
+          label: "terminal-state cancel", metadata: { state: issue.state }
         });
         await workspaceManager.remove(issue.identifier);
       } else if (!isStateIn(issue.state, runningAllowedStates(this.config))) {
-        running.abortController.abort();
+        const streamStop = nonDispatchableRunnerStreamStopPresentation(issue.state, this.config);
+        running.abortController.abort(streamStop.reason);
         await this.writePhaseTimingEvent(issue, {
-          phase: "stall-cancel",
-          status: "canceled",
+          phase: "stall-cancel", status: streamStop.status,
           startedAt: new Date(running.lastCodexEventAt ?? running.startedAt).toISOString(),
           finishedAt: new Date().toISOString(),
-          label: "non-dispatchable-state cancel",
-          metadata: { state: issue.state }
+          label: streamStop.label, metadata: { state: issue.state, reason: streamStop.reason }
         });
       }
     }
