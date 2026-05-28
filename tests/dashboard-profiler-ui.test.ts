@@ -67,6 +67,33 @@ describe("dashboard live profiler UI", () => {
     expect(html).not.toContain("raw stderr");
   });
 
+  it("renders low-level activity freshness when present and unavailable when missing", () => {
+    const { profiler } = loadProfiler();
+    const withActivity = activeSnapshot();
+    const run = withActivity.run as Record<string, unknown>;
+    run.currentActivity = {
+      stage: "implementation",
+      step: "render UI",
+      stepElapsedMs: 4000,
+      lastEventAgeMs: 1000,
+      lastMeaningfulActivity: {
+        kind: "token_usage",
+        label: "Runner token usage observed",
+        ageMs: 3000,
+        observedAt: "2026-05-26T00:00:07.000Z"
+      }
+    };
+
+    const freshHtml = profiler.renderSnapshot(withActivity, { serverNow: "2026-05-26T00:00:12.000Z" });
+    const unavailableHtml = profiler.renderSnapshot(activeSnapshot(), { serverNow: "2026-05-26T00:00:12.000Z" });
+
+    expect(freshHtml).toContain("Last low-level activity");
+    expect(freshHtml).toContain("Token update");
+    expect(freshHtml).toContain("Low-level activity age");
+    expect(freshHtml).toContain('data-ms="5000"');
+    expect(unavailableHtml).toContain("Unavailable");
+  });
+
   it("renders required Human Action details only when action is required", () => {
     const { profiler } = loadProfiler();
     const html = profiler.renderSnapshot(humanActionSnapshot(), { serverNow: "2026-05-26T00:00:08.000Z" });

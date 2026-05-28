@@ -546,11 +546,25 @@
           const activity = run?.currentActivity;
           const stepElapsed = activity ? tickingDuration(activity.stepElapsedMs, snapshot, serverNowMs) : 0;
           const loopElapsed = activity?.loopElapsedMs != null ? tickingDuration(activity.loopElapsedMs, snapshot, serverNowMs) : null;
+          const meaningfulActivity = activity?.lastMeaningfulActivity;
+          const meaningfulAge =
+            meaningfulActivity?.ageMs != null ? tickingDuration(meaningfulActivity.ageMs, snapshot, serverNowMs) : null;
           return section(
             sectionNames[2],
             "current-activity",
-            `<div class="activity-grid">${metric("Stage", activity?.stage ?? "Idle")}${metric("Step", activity?.step ?? "None")}${metric("Step elapsed", formatSeconds(stepElapsed), ` data-ms="${stepElapsed}"`)}${metric("Loop", activity?.loop ?? "None")}${metric("Loop elapsed", loopElapsed == null ? "None" : formatSeconds(loopElapsed), loopElapsed == null ? "" : ` data-ms="${loopElapsed}"`)}${metric("Last event age", activity ? formatSeconds(activity.lastEventAgeMs) : "None")}</div>`
+            `<div class="activity-grid">${metric("Stage", activity?.stage ?? "Idle")}${metric("Step", activity?.step ?? "None")}${metric("Step elapsed", formatSeconds(stepElapsed), ` data-ms="${stepElapsed}"`)}${metric("Loop", activity?.loop ?? "None")}${metric("Loop elapsed", loopElapsed == null ? "None" : formatSeconds(loopElapsed), loopElapsed == null ? "" : ` data-ms="${loopElapsed}"`)}${metric("Last event age", activity ? formatSeconds(activity.lastEventAgeMs) : "None")}${metric("Last low-level activity", meaningfulActivity ? activityKindLabel(meaningfulActivity.kind) : "Unavailable")}${metric("Low-level activity age", meaningfulAge == null ? "Unavailable" : formatSeconds(meaningfulAge), meaningfulAge == null ? "" : ` data-ms="${meaningfulAge}"`)}</div>`
           );
+        }
+
+        function activityKindLabel(kind) {
+          const labels = {
+            command_output: "Command output",
+            file_change: "File change",
+            token_usage: "Token update",
+            rate_limit: "Rate-limit update",
+            generic: "Generic activity"
+          };
+          return labels[kind] ?? "Generic activity";
         }
 
         function renderTiming(run, serverNowMs) {
