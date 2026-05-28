@@ -177,6 +177,10 @@ Snapshot status is exactly one of:
 - Active row duration is computed from `serverNow`.
 - Finished rows are immutable.
 - Terminal snapshots close active rows.
+- Sanitized command execution activity may render as `tool` timing rows under
+  the active turn span. Command rows expose the compact command label, status,
+  elapsed time, and bounded result such as `running` or `exit 0`; they must not
+  expose raw stdout or stderr.
 - Top time sinks are selected by `selfMs`.
 - Retention keeps the active run plus the most recent terminal snapshot.
 

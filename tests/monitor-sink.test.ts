@@ -171,6 +171,90 @@ describe("monitor emitter", () => {
     expect(JSON.stringify(emitted[0])).not.toContain("raw command output");
   });
 
+  it("maps command execution runner items to sanitized tool timing rows", async () => {
+    const emitted: MonitorEvent[] = [];
+    const logger = new JsonlLogger(await mkdtemp(join(tmpdir(), "agent-os-monitor-command-row-")));
+    const emitter = createMonitorEmitter({
+      logger,
+      sink: {
+        emit(event) {
+          emitted.push(event);
+        }
+      }
+    });
+
+    const timing = {
+      id: "run-1:implementation:1",
+      phase: "implementation",
+      label: "implementation turn 1",
+      status: "running",
+      startedAt: "2026-05-25T00:00:00.000Z"
+    };
+
+    await emitter.emit(
+      "run-1",
+      withRunnerActivityMonitorContext(
+        {
+          type: "item/started",
+          issueId: "AG-1",
+          issueIdentifier: "AG-1",
+          timestamp: "2026-05-25T00:00:02.000Z",
+          payload: {
+            params: {
+              turnId: "turn-1",
+              item: { id: "cmd-1", type: "commandExecution", command: "npm run check:dashboard", status: "inProgress" }
+            }
+          }
+        },
+        timing
+      )
+    );
+    await emitter.emit(
+      "run-1",
+      withRunnerActivityMonitorContext(
+        {
+          type: "item/completed",
+          issueId: "AG-1",
+          issueIdentifier: "AG-1",
+          timestamp: "2026-05-25T00:00:05.000Z",
+          payload: {
+            params: {
+              turnId: "turn-1",
+              item: {
+                id: "cmd-1",
+                type: "commandExecution",
+                command: "npm run check:dashboard",
+                status: "completed",
+                exitCode: 0,
+                output: "raw stdout should stay out"
+              }
+            }
+          }
+        },
+        timing
+      )
+    );
+
+    expect(emitted.map((event) => event.kind)).toEqual(["step_started", "step_finished"]);
+    expect(emitted[0]).toMatchObject({
+      spanId: "run-1:implementation:1:command:cmd-1",
+      parentSpanId: "run-1:implementation:1:step",
+      turnId: "turn-1",
+      label: "Command: npm run check:dashboard",
+      status: "active",
+      timeClass: "tool",
+      result: "running"
+    });
+    expect(emitted[1]).toMatchObject({
+      spanId: "run-1:implementation:1:command:cmd-1",
+      parentSpanId: "run-1:implementation:1:step",
+      status: "pass",
+      timeClass: "tool",
+      result: "exit 0"
+    });
+    expect(JSON.stringify(emitted)).not.toContain("raw stdout");
+  });
+
   it("tags runner updates with the active turn span without copying raw payloads into monitor activity", () => {
     const event = withRunnerActivityMonitorContext(
       {
