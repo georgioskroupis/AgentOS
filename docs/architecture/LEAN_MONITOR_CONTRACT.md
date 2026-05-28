@@ -59,6 +59,13 @@ source-core orchestration.
 `HumanAction.required` controls rendering. When `required` is false, the UI
 renders the human-action fields as `Not needed`.
 
+`run.currentActivity.lastMeaningfulActivity`, when present, is the most recent
+compact low-level activity tied to the active turn span. It exposes only the
+activity kind, compact label, observation timestamp, and age in milliseconds.
+Command output, file-change metadata, token updates, rate-limit updates, and
+generic activity are meaningful categories. Missing low-level activity is an
+unavailable display state, not a stale or failed scheduler signal.
+
 The in-memory reducer lives in `src/monitor-aggregator.ts`. It is an
 extension-owned `MonitorSink` implementation that combines monitor events and
 current run context into `MonitorSnapshot`; source-core modules must not import
@@ -177,6 +184,8 @@ Snapshot status is exactly one of:
 - Active row duration is computed from `serverNow`.
 - Finished rows are immutable.
 - Terminal snapshots close active rows.
+- Current Activity renders the last meaningful low-level activity category and
+  age when available. Missing low-level activity renders as unavailable.
 - Sanitized command execution activity may render as `tool` timing rows under
   the active turn span. Command rows expose the compact command label, status,
   elapsed time, and bounded result such as `running` or `exit 0`; they must not

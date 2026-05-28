@@ -48,6 +48,8 @@ type SpanState = {
   order: number;
 };
 
+type MeaningfulActivity = NonNullable<SnapshotRun["currentActivity"]["lastMeaningfulActivity"]>;
+
 type BuiltRow = {
   row: TimingRow;
   order: number;
@@ -206,7 +208,8 @@ export class InMemoryMonitorAggregator implements MonitorSink {
     const runRow = spans.get(`${run.runId}:run`) ?? [...spans.values()].find((span) => span.kind === "run_started");
     const runElapsedMs = runRow ? rowDurationMs(runRow, serverNowMs) : Math.max(0, serverNowMs - firstEventMs);
     const activeSpans = [...spans.values()].filter((span) => span.endedAt == null).sort(compareSpans);
-    const activity = currentActivity(activeSpans, serverNowMs, lastEventMs, terminalEvent, currentModel);
+    const lastMeaningfulActivity = meaningfulActivityForActiveTurn(orderedEvents, activeSpans, serverNowMs);
+    const activity = currentActivity(activeSpans, serverNowMs, lastEventMs, terminalEvent, currentModel, lastMeaningfulActivity);
     const status = run.humanAction?.reasonCode && run.humanAction.reasonCode !== "none" ? snapshotStatus(terminalEvent, humanActionEvent, activeSpans, true) : snapshotStatus(terminalEvent, humanActionEvent, activeSpans);
     const generatedText = this.generatedText(run, status, terminalEvent, humanActionEvent, orderedEvents);
 
@@ -292,7 +295,8 @@ function currentActivity(
   serverNowMs: number,
   lastEventMs: number,
   terminalEvent: MonitorEvent | undefined,
-  currentModel: string | undefined
+  currentModel: string | undefined,
+  lastMeaningfulActivity: MeaningfulActivity | undefined
 ): SnapshotRun["currentActivity"] {
   const current = activeSpans.at(-1);
   if (!current) {
@@ -301,6 +305,7 @@ function currentActivity(
       step: terminalEvent?.label ?? "No active run",
       stepElapsedMs: 0,
       lastEventAgeMs: Math.max(0, serverNowMs - lastEventMs),
+      ...(lastMeaningfulActivity ? { lastMeaningfulActivity } : {}),
       ...(currentModel ? { model: currentModel } : {})
     };
   }
@@ -315,8 +320,26 @@ function currentActivity(
     stepElapsedMs: rowDurationMs(current, serverNowMs),
     ...(loop ? { loopElapsedMs: rowDurationMs(loop, serverNowMs) } : {}),
     lastEventAgeMs: Math.max(0, serverNowMs - lastEventMs),
+    ...(lastMeaningfulActivity ? { lastMeaningfulActivity } : {}),
     ...(current.model ?? currentModel ? { model: current.model ?? currentModel } : {})
   };
+}
+
+function meaningfulActivityForActiveTurn(orderedEvents: StoredMonitorEvent[], activeSpans: SpanState[], serverNowMs: number): MeaningfulActivity | undefined {
+  const activeSpanIds = new Set(activeSpans.map((span) => span.id));
+  if (activeSpanIds.size === 0) return undefined;
+  for (const stored of [...orderedEvents].reverse()) {
+    const { event } = stored;
+    if (!event.activity) continue;
+    if (!activeSpanIds.has(event.spanId) && (!event.parentSpanId || !activeSpanIds.has(event.parentSpanId))) continue;
+    return {
+      kind: event.activity.kind,
+      label: event.activity.label,
+      ageMs: Math.max(0, serverNowMs - timestampMs(event.timestamp)),
+      observedAt: event.timestamp
+    };
+  }
+  return undefined;
 }
 
 function topTimeSinks(rows: TimingRow[], spans: Map<string, SpanState>, limit: number): TimeSink[] {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InMemoryMonitorAggregator, type MonitorEvent, type MonitorRunContext } from "../src/index.js";
+import { buildMonitorActivity, InMemoryMonitorAggregator, monitorActivityKinds, type MonitorActivityKind, type MonitorEvent, type MonitorRunContext } from "../src/index.js";
 
 const runContext: MonitorRunContext = {
   runId: "run-1",
@@ -96,6 +96,44 @@ describe("in-memory monitor aggregator", () => {
     ]);
     expect(JSON.stringify(turn)).not.toContain("stdout");
     expect(JSON.stringify(turn)).not.toContain("stderr");
+  });
+
+  it.each(monitorActivityKinds)("shows %s as the last meaningful low-level activity without changing scheduler status", (kind) => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext(runContext);
+    emitAll(aggregator, [
+      event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z"),
+      event("turn", "step_started", "implementation turn 1", "2026-05-25T00:00:01.000Z", { parentSpanId: "run" }),
+      event("turn", "activity_observed", "Low-level activity", "2026-05-25T00:00:03.000Z", {
+        parentSpanId: "run",
+        activity: activityForKind(kind)
+      })
+    ]);
+
+    const snapshot = aggregator.snapshot({ serverNow: "2026-05-25T00:00:10.000Z" });
+
+    expect(snapshot.status).toBe("active");
+    expect(snapshot.run?.currentActivity.lastMeaningfulActivity).toEqual({
+      kind,
+      label: activityForKind(kind).label,
+      ageMs: 7000,
+      observedAt: "2026-05-25T00:00:03.000Z"
+    });
+  });
+
+  it("keeps missing low-level activity unavailable instead of treating freshness as a stale failure", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext(runContext);
+    emitAll(aggregator, [
+      event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z"),
+      event("turn", "step_started", "implementation turn 1", "2026-05-25T00:00:01.000Z", { parentSpanId: "run" })
+    ]);
+
+    const snapshot = aggregator.snapshot({ serverNow: "2026-05-25T00:10:00.000Z" });
+
+    expect(snapshot.status).toBe("active");
+    expect(snapshot.run?.currentActivity.lastEventAgeMs).toBe(599000);
+    expect(snapshot.run?.currentActivity.lastMeaningfulActivity).toBeUndefined();
   });
 
   it("closes active rows on terminal events and retains only active run plus terminal snapshot", () => {
@@ -279,6 +317,14 @@ describe("in-memory monitor aggregator", () => {
 
 function emitAll(aggregator: InMemoryMonitorAggregator, events: MonitorEvent[]): void {
   for (const monitorEvent of events) aggregator.emit(monitorEvent);
+}
+
+function activityForKind(kind: MonitorActivityKind): MonitorEvent["activity"] {
+  if (kind === "command_output") return buildMonitorActivity({ kind, label: "Runner stdout observed", stream: "stdout", bytesObserved: 128 });
+  if (kind === "file_change") return buildMonitorActivity({ kind, label: "File-change metadata observed", changedFileCount: 2, lastFile: "src/monitor-aggregator.ts", category: "source" });
+  if (kind === "token_usage") return buildMonitorActivity({ kind, label: "Token update observed", inputTokens: 10, outputTokens: 20, totalTokens: 30 });
+  if (kind === "rate_limit") return buildMonitorActivity({ kind, label: "Rate-limit update observed", pressure: "medium", resetAt: "2026-05-25T00:05:00.000Z" });
+  return buildMonitorActivity({ kind, label: "Generic activity observed" });
 }
 
 function event(
