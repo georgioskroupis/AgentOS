@@ -41,7 +41,7 @@ import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrato
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
-import { autoRecoverPushedWork, publishCleanRecoveryBranchIfSafe } from "./orchestrator-pushed-work-recovery.js";
+import { autoRecoverPushedWork, finalizeCleanPushedWorkAfterRunnerStop, publishCleanRecoveryBranchIfSafe } from "./orchestrator-pushed-work-recovery.js";
 import { isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
 import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { schedulerSafetyCommentIssue, schedulerSafetyMoveIssue } from "./orchestrator-scheduler-safety.js";
@@ -1153,6 +1153,9 @@ export class Orchestrator {
       await workspaceManager.beforeRun(workspace);
       const result = await this.runImplementationTurns(issue, attempt, workspace, abortController.signal, runId);
       if (result.status !== "succeeded") {
+        if (await this.tryFinalizeCleanPushedWorkAfterRunnerStop(issue, workspace, result, runId)) {
+          return;
+        }
         await this.writeRunEvent(runId, {
           type: `run_${result.status}`,
           issueId: issue.id,
@@ -2655,6 +2658,27 @@ export class Orchestrator {
         await this.markLinearSucceeded(issue, workspace, handoff, state);
         this.completedMarkers.set(issue.id, completionMarker(issue));
       }
+    });
+  }
+
+  private async tryFinalizeCleanPushedWorkAfterRunnerStop(issue: Issue, workspace: Workspace, result: AgentRunResult, runId: string): Promise<boolean> {
+    const state = await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier);
+    return finalizeCleanPushedWorkAfterRunnerStop({
+      issue,
+      workspace,
+      result,
+      runId,
+      state,
+      repoRoot: this.options.repoRoot,
+      config: this.config,
+      logger: this.logger,
+      markSucceeded: async (targetWorkspace, handoff, recoveredState) => {
+        await this.markLinearSucceeded(issue, targetWorkspace, handoff, recoveredState);
+        this.completedMarkers.set(issue.id, completionMarker(issue));
+      },
+      writeRunHandoff: (handoff) => this.runArtifacts.writeHandoff(runId, handoff),
+      writeRunEvent: (entry) => this.writeRunEvent(runId, entry),
+      completeRun: async (recoveredResult) => { await this.runArtifacts.completeRun(runId, recoveredResult); }
     });
   }
 

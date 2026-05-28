@@ -11360,6 +11360,105 @@ describe("orchestrator", () => {
     expect(await readFile(join(workspacePath, ".agent-os", "handoff-AG-1.md"), "utf8")).toContain("Primary PR: https://github.com/o/r/pull/77");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("finalizes live clean pushed work when the runner reports app-server closure after handoff", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-live-clean-pushed-recovery-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  running_state: In Progress\n  review_state: Human Review\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(ghState, "{}\n", "utf8");
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const prUrl = "https://github.com/o/r/pull/77";
+    let headSha = "";
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          await initCleanWorkspaceAtOriginMain(input.workspace.path);
+          await run("git", ["checkout", "-b", "agent/AG-1"], input.workspace.path);
+          await writeFile(join(input.workspace.path, "README.md"), "implemented after stream closure\n", "utf8");
+          await run("git", ["add", "README.md"], input.workspace.path);
+          await run("git", ["commit", "-m", "implement AG-1"], input.workspace.path);
+          await run("git", ["push", "-u", "origin", "agent/AG-1"], input.workspace.path);
+          headSha = await run("git", ["rev-parse", "HEAD"], input.workspace.path);
+          await writeFile(
+            ghState,
+            `${JSON.stringify(
+              {
+                view: {
+                  url: prUrl,
+                  state: "OPEN",
+                  isDraft: false,
+                  mergeable: "MERGEABLE",
+                  headRefName: "agent/AG-1",
+                  headRefOid: headSha,
+                  statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+                }
+              },
+              null,
+              2
+            )}\n`,
+            "utf8"
+          );
+          await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, `AgentOS-Outcome: implemented\n\nPrimary PR: ${prUrl}`, {
+            repoHead: headSha
+          });
+          return { status: "canceled", error: "codex_app_server_closed: exit 0" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(1);
+    expect([...new Set(moves)]).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("Primary PR: https://github.com/o/r/pull/77");
+    expect(comments.join("\n")).not.toContain("AgentOS recovery needed");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      phase: "completed",
+      outcome: "implemented",
+      prUrl,
+      reviewStatus: "pending",
+      headSha,
+      validation: expect.objectContaining({ status: "passed", repoHead: headSha }),
+      operatorRecovery: expect.objectContaining({
+        branch: "agent/AG-1",
+        headSha
+      })
+    });
+    expect(state?.lastError).toBeUndefined();
+    expect(state?.lifecycleStatus).toBeUndefined();
+    const runtime = await new RuntimeStateStore(repo).read();
+    expect(runtime.activeRuns).toEqual([]);
+    expect(runtime.retryQueue).toEqual([]);
+    const logs = await new JsonlLogger(repo).tail(100);
+    expect(logs.some((entry) => entry.type === "pushed_work_recovered" && entry.message?.includes("implementation runner stopped"))).toBe(true);
+    expect(logs.some((entry) => entry.type === "run_succeeded" && entry.message === "completed after clean pushed work recovery")).toBe(true);
+    expect(logs.some((entry) => entry.type === "run_canceled")).toBe(false);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("pushes and recovers a clean no-upstream validated branch after app-server closure", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-unpushed-recovery-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -11913,7 +12012,7 @@ async function writePassingHandoff(
   issueIdentifier: string,
   prompt: string,
   body: string,
-  options: { validationStartedAt?: string; validationFinishedAt?: string } = {}
+  options: { validationStartedAt?: string; validationFinishedAt?: string; repoHead?: string } = {}
 ): Promise<void> {
   const runId = prompt.match(/^Run ID: (.+)$/m)?.[1] ?? "missing-run-id";
   const reuseProfile = prompt.match(/^Validation reuse profile JSON: (.+)$/m)?.[1];
@@ -11927,6 +12026,7 @@ async function writePassingHandoff(
     schemaVersion: 1,
     issueIdentifier,
     runId,
+    ...(options.repoHead ? { repoHead: options.repoHead } : {}),
     ...(reuseProfile ? { reuseProfile: JSON.parse(reuseProfile) } : {}),
     status: "passed",
     finalResult: {
