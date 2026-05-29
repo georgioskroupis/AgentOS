@@ -62,6 +62,10 @@
         font-weight: 650;
       }
 
+      .launcher-detail {
+        overflow-wrap: anywhere;
+      }
+
       .launcher-strip button,
       .launcher-strip a {
         min-height: 28px;
@@ -701,12 +705,41 @@
           return api;
         }
 
+        function launcherOwnershipText(launcherState = {}) {
+          if (launcherState.managedByLauncher) {
+            return launcherState.pid ? `Daemon: launcher-owned pid ${launcherState.pid}` : "Daemon: launcher-owned";
+          }
+          if (launcherState.status === "attached") return "Daemon: externally managed";
+          if (launcherState.status === "stopped") return "Daemon: not running";
+          if (launcherState.status === "failed") return "Daemon: not launcher-owned";
+          return "Daemon: not launcher-owned";
+        }
+
+        function launcherStopText(api, launcherState = {}) {
+          const status = launcherState.status ?? "attached";
+          if (!api) return "Stop unavailable: standalone launcher API is unavailable";
+          if (launcherState.stopEnabled) return "Stop available: launcher owns this daemon";
+          if (status === "attached") return "Stop unavailable: daemon is externally managed";
+          if (status === "stopped") return "Stop unavailable: no launcher-owned daemon is running";
+          if (status === "failed") return "Stop unavailable: launcher is not managing a daemon";
+          if (status === "stopping") return "Stop unavailable: launcher is already stopping the daemon";
+          return "Stop unavailable: launcher does not own a stoppable daemon";
+        }
+
         function renderLauncherStrip(strip, launcherState = {}) {
           const api = launcherApi();
           const status = launcherState.status ?? "attached";
           const startDisabled = !api || ["starting", "running", "attached"].includes(status);
           const stopDisabled = !api || !launcherState.stopEnabled;
-          strip.innerHTML = `<span class="launcher-status">Launcher: ${escapeHtml(status)}</span><button type="button" data-launcher-action="start"${startDisabled ? " disabled" : ""}>Start</button><button type="button" data-launcher-action="stop"${stopDisabled ? " disabled" : ""}>Stop</button><button type="button" data-launcher-action="reload-open"${api ? "" : " disabled"}>Reload/Open</button>`;
+          const ownership = launcherOwnershipText(launcherState);
+          const stopReason = launcherStopText(api, launcherState);
+          strip.innerHTML =
+            `<span class="launcher-status">Launcher: ${escapeHtml(status)}</span>` +
+            `<span class="launcher-detail">${escapeHtml(ownership)}</span>` +
+            `<span class="launcher-detail">${escapeHtml(stopReason)}</span>` +
+            `<button type="button" data-launcher-action="start"${startDisabled ? " disabled" : ""}>Start</button>` +
+            `<button type="button" data-launcher-action="stop"${stopDisabled ? " disabled" : ""}>Stop</button>` +
+            `<button type="button" data-launcher-action="reload-open"${api ? "" : " disabled"}>Reload/Open</button>`;
           if (!api || typeof strip.querySelectorAll !== "function") return;
           for (const button of strip.querySelectorAll("[data-launcher-action]")) {
             button.addEventListener("click", async () => {
