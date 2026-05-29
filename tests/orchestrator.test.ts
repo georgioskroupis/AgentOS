@@ -6786,6 +6786,74 @@ describe("orchestrator", () => {
     );
   });
 
+  it("does not treat implemented handoffs without PR metadata as approved no-PR work", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-implemented-no-pr-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(ghState, JSON.stringify({}), "utf8");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    const runStore = new RunArtifactStore(repo);
+    const completedRun = await runStore.startRun({ issue: readyIssue, attempt: null });
+    await runStore.completeRun(completedRun.runId, { status: "succeeded" });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        lastRunId: completedRun.runId,
+        phase: "completed",
+        outcome: "implemented",
+        validation: {
+          status: "passed",
+          finalStatus: "passed",
+          acceptedCommands: [{ name: "npm run agent-check", exitCode: 0, startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z" }]
+        },
+        updatedAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        return states.includes("Merging") ? [mergingIssue] : [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async move(issue, state) {
+        moves.push(`${issue} -> ${state}`);
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called for implemented no-PR Merging issues");
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("No pull request metadata was found for this issue");
+    expect(comments.join("\n")).not.toContain("approval of the handoff without a merge");
+  });
+
   it("routes ambiguous merge-eligible PR metadata back to Human Review", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-ambiguous-"));
     const workflowPath = join(repo, "WORKFLOW.md");

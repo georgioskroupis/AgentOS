@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { exists, readText } from "./fs-utils.js";
-import { pullRequestUrls } from "./issue-state.js";
+import { mergeEligiblePullRequests, pullRequestUrls } from "./issue-state.js";
 import type { RunSummary } from "./runs.js";
 import type { RuntimeActiveRun } from "./runtime-state.js";
 import type { Issue, IssueState, ServiceConfig, Workspace } from "./types.js";
@@ -99,7 +99,11 @@ export function gitLsRemoteBranch(cwd: string, remote: string, branch: string): 
   });
 }
 
-export function isNoPrHandoffApproved(state: IssueState): boolean { return state.phase === "completed" && (state.validation?.finalStatus === "passed" || state.validation?.status === "passed"); }
+export function isNoPrHandoffApproved(state: IssueState): boolean {
+  const validationPassed = state.validation?.finalStatus === "passed" || state.validation?.status === "passed";
+  const hasOnlyNonMergePrOutputs = pullRequestUrls(state).length > 0 && mergeEligiblePullRequests(state).length === 0;
+  return state.phase === "completed" && validationPassed && (state.outcome === "already_satisfied" || hasOnlyNonMergePrOutputs);
+}
 
 export function isLocallySettledIssueState(state: IssueState): boolean { return state.phase === "completed" || state.phase === "canceled" || state.phase === "human-required" || state.reviewStatus === "human_required"; }
 
