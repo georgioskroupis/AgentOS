@@ -243,6 +243,17 @@ describe("architecture and docs checks", () => {
     });
   });
 
+  it("reports missing agent validation wrapper guidance", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-agent-guidance-fail-"));
+    await writeDocsFixture(repo);
+    await writeFile(join(repo, "AGENTS.md"), "Agents.\n", "utf8");
+
+    await expect(execNode(docsScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("AGENTS.md missing validation wrapper guidance"),
+      code: 1
+    });
+  });
+
   it("reports disabled lifecycle modes in public docs and templates", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-legacy-lifecycle-fail-"));
     await writeDocsFixture(repo);
@@ -518,7 +529,7 @@ async function writeDocsFixture(repo: string): Promise<void> {
     "docs/security/ORCHESTRATOR_TRUST_MODEL.md"
   ];
   await writeFile(join(repo, "README.md"), "Use `agent-os init` and `agent-os status`.\n", "utf8");
-  await writeFile(join(repo, "AGENTS.md"), "Agents.\n", "utf8");
+  await writeFile(join(repo, "AGENTS.md"), "Agents run `npm run agent-check` and focused tests with timestamp wrappers using `exit_code`, not zsh reserved `status`.\n", "utf8");
   await writeFile(join(repo, "ARCHITECTURE.md"), "Architecture.\n", "utf8");
   await writeFile(join(repo, "WORKFLOW.md"), "Workflow.\n", "utf8");
   await mkdir(join(repo, "docs"), { recursive: true });
