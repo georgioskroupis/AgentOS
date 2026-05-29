@@ -236,6 +236,71 @@ describe("dashboard live profiler UI", () => {
     expect(html).not.toContain("<button");
   });
 
+  it.each([
+    [
+      "planning-required",
+      pauseSnapshot({
+        issue: { id: "VER-164", title: "Preserve PR and validation metadata" },
+        stage: "Pre-dispatch",
+        step: "Planning/decomposition required",
+        stoppedBecause: "prior planning_required pause needs bounded Active-Scope or linked decomposition evidence",
+        youShould: "Create or attach a bounded planning/decomposition artifact before continuing.",
+        recommendedNextStep: "Add a bounded Active Scope or split follow-up issues, then return the issue to an active state."
+      }),
+      ["Planning/decomposition required", "bounded Active-Scope", "bounded planning/decomposition artifact", "split follow-up issues"]
+    ],
+    [
+      "recovery-needed",
+      pauseSnapshot({
+        issue: { id: "VER-170", title: "Recover clean workspace" },
+        stage: "Pre-dispatch",
+        step: "Workspace recovery needed",
+        stoppedBecause: "recoverable partial work found: workspace has uncommitted changes",
+        youShould: "Resume the existing workspace, preserve its changes, validate, then record recovery.",
+        recommendedNextStep: "Commit or push the recovered workspace evidence, then run the documented recovery command."
+      }),
+      ["Workspace recovery needed", "recoverable partial work", "preserve its changes", "documented recovery command"]
+    ],
+    [
+      "scope-large",
+      pauseSnapshot({
+        issue: { id: "VER-171", title: "Large monitor parent" },
+        stage: "Scope guardrail",
+        step: "Planning/decomposition required",
+        stoppedBecause: "likely-large scope needs planning or decomposition before implementation dispatch",
+        youShould: "Create or attach a bounded planning/decomposition artifact before continuing.",
+        recommendedNextStep: "Add a bounded Active Scope or split follow-up issues, then return the issue to an active state."
+      }),
+      ["likely-large scope", "planning or decomposition", "bounded planning/decomposition artifact", "Active Scope"]
+    ],
+    [
+      "human-action",
+      pauseSnapshot({
+        issue: { id: "VER-172", title: "Human decision required" },
+        stage: "Review",
+        step: "Human action required",
+        stoppedBecause: "Supervisor decision required",
+        youShould: "Review validation evidence",
+        recommendedNextStep: "Record the requested human input, then continue the run from the latest evidence."
+      }),
+      ["Human action required", "Supervisor decision required", "Review validation evidence", "Record the requested human input"]
+    ]
+  ])("renders visible operator messages for %s pause snapshots without legacy trace parsing", (_label, snapshot, expectedMessages) => {
+    const { profiler } = loadProfiler();
+    const html = profiler.renderSnapshot(snapshot, { serverNow: "2026-05-26T00:00:10.000Z" });
+
+    expect(html).toContain("Human action");
+    expect(html).toContain("Stopped because");
+    expect(html).toContain("You should");
+    expect(html).toContain("Manual test");
+    expect(html).toContain("Expected result");
+    expect(html).toContain("Recommended next step");
+    for (const message of expectedMessages) expect(html).toContain(message);
+    expect(html).not.toContain("legacy trace parser only");
+    expect(html).not.toContain("raw legacy event");
+    expect(html).not.toContain("<button");
+  });
+
   it("renders failed and completed terminal states with immutable finished durations", () => {
     const { profiler } = loadProfiler();
     const failed = profiler.renderSnapshot(terminalSnapshot("failed"), { serverNow: "2026-05-26T00:01:00.000Z" });
@@ -345,6 +410,53 @@ function humanActionSnapshot(): Record<string, unknown> {
     recommendedNextStep: "Move to Human Review"
   };
   return snapshot;
+}
+
+function pauseSnapshot(options: {
+  issue: { id: string; title: string };
+  stage: string;
+  step: string;
+  stoppedBecause: string;
+  youShould: string;
+  recommendedNextStep: string;
+}): Record<string, unknown> {
+  return {
+    serverNow: "2026-05-26T00:00:05.000Z",
+    status: "human_action",
+    legacyTrace: "legacy trace parser only",
+    events: [{ message: "raw legacy event" }],
+    run: {
+      runId: `pause-${options.issue.id}`,
+      issue: options.issue,
+      attempt: { current: 0, max: 3 },
+      runElapsedMs: 5000,
+      links: {},
+      summary: { why: `Work on ${options.issue.id}: ${options.issue.title}`, build: "Test coverage is in scope.", done: "Waiting for a human action." },
+      currentActivity: { stage: options.stage, step: options.step, stepElapsedMs: 5000, lastEventAgeMs: 0 },
+      timing: [
+        {
+          id: "pause",
+          label: options.step,
+          status: "waiting",
+          timeClass: "human-wait",
+          startedAt: "2026-05-26T00:00:00.000Z",
+          durationMs: 5000,
+          selfMs: 5000,
+          waitMs: 5000,
+          children: []
+        }
+      ],
+      topTimeSinks: [{ id: "pause", label: options.step, selfMs: 5000, timeClass: "human-wait" }],
+      humanAction: {
+        required: true,
+        stoppedBecause: options.stoppedBecause,
+        youShould: options.youShould,
+        manualTest: "Manual test could not be inferred from the available monitor data.",
+        expectedResult: "Expected result could not be inferred from the available monitor data.",
+        recommendedNextStep: options.recommendedNextStep
+      }
+    }
+  };
 }
 
 function terminalSnapshot(status: "failed" | "completed"): Record<string, unknown> {
