@@ -29,6 +29,7 @@ const requiredSourceCoreScenarioIds = [
   "dispatch-retry-recovery",
   "handoff-validation",
   "agent-owned-lifecycle-evidence",
+  "post-validation-noop-boundary",
   "context-budget-safety-stop",
   "validation-budget",
   "scheduler-safety-writes"
