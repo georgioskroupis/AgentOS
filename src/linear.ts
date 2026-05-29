@@ -8,7 +8,7 @@ import type {
   LinearPlannedIssueWriteInput,
   PlannedIssueRelationInput,
   PlannedIssueRelationType
-} from "./linear-planned-issues.js";
+} from "./linear-planned-issue-types.js";
 
 type FetchLike = typeof fetch;
 

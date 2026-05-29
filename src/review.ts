@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { ensureDir, exists, readText, writeTextEnsuringDir } from "./fs-utils.js";
+import { findingHash } from "./review-finding-hash.js";
 import type { Issue, ReviewFinding, ReviewRunnerFailure, ReviewStateReviewer, ReviewStatus, ServiceConfig } from "./types.js";
 
 export const REVIEW_ARTIFACT_SCHEMA_VERSION = 1;
@@ -61,16 +62,7 @@ export function blockingFindings(findings: ReviewFinding[], config: ServiceConfi
   return findings.filter((finding) => isBlockingFinding(finding, config));
 }
 
-export function findingHash(input: Omit<ReviewFinding, "findingHash"> | ReviewFinding): string {
-  const stable = [
-    input.reviewer,
-    input.severity,
-    input.file ?? "",
-    input.line ?? "",
-    input.body.trim().replace(/\s+/g, " ")
-  ].join("\n");
-  return createHash("sha256").update(stable).digest("hex").slice(0, 16);
-}
+export { findingHash };
 
 export function normalizeFinding(raw: unknown, reviewer: string, decision: ReviewFinding["decision"]): ReviewFinding | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;

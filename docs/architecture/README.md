@@ -16,3 +16,4 @@ Current architecture references:
 - `docs/architecture/MONITOR_DELETION_MANIFEST.md`
 - `docs/architecture/ORCHESTRATOR_RESPONSIBILITIES.md`
 - `docs/architecture/SOURCE_FAITHFUL_CORE.md`
+- `docs/architecture/source-module-map.json`

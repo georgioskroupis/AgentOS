@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, normalize, relative } from "node:path";
 
 const root = process.cwd();
 const failures = [];
 const canonicalStates = ["Todo", "In Progress", "Human Review", "Merging", "Done", "Closed", "Canceled", "Duplicate"];
 
 checkLayerBoundaries();
+checkArchitectureMapBoundaries();
 checkLifecycleBoundaryContracts();
 checkCoreTrackerWriteBoundaries();
 checkLifecycleControllerThinBoundary();
@@ -42,6 +43,79 @@ function checkNoImports(path, disallowed, fix) {
   for (const target of disallowed) {
     const pattern = new RegExp(`from\\s+["']${escapeRegExp(target)}`);
     if (pattern.test(text)) fail(`${path} imports disallowed boundary ${target}`, fix);
+  }
+}
+
+function checkArchitectureMapBoundaries() {
+  const mapPath = "docs/architecture/source-module-map.json";
+  const raw = read(mapPath);
+  if (raw == null) return;
+  let map;
+  try {
+    map = JSON.parse(raw);
+  } catch (error) {
+    fail(`${mapPath} is not valid JSON`, error instanceof Error ? error.message : "Fix the JSON syntax.");
+    return;
+  }
+
+  const classifications = map && typeof map === "object" && !Array.isArray(map) ? map.classifications : null;
+  if (map.schemaVersion !== 1) fail(`${mapPath} has unsupported schemaVersion`, "Set schemaVersion to 1.");
+  if (!classifications || typeof classifications !== "object" || Array.isArray(classifications)) {
+    fail(`${mapPath} is missing classifications`, "Add classifications.source-core, classifications.extension-interface, and classifications.extension-implementation.");
+    return;
+  }
+
+  const moduleClassifications = new Map();
+  for (const [classification, paths] of Object.entries(classifications)) {
+    if (!Array.isArray(paths)) {
+      fail(`${mapPath} classification ${classification} is not an array`, "Store each classification as an array of repo-relative paths.");
+      continue;
+    }
+    for (const path of paths) {
+      if (typeof path !== "string" || !path.trim()) {
+        fail(`${mapPath} has an invalid path in ${classification}`, "Use non-empty repo-relative path strings.");
+        continue;
+      }
+      const normalized = normalizeRepoPath(path);
+      if (moduleClassifications.has(normalized)) {
+        fail(`${mapPath} classifies ${normalized} more than once`, "Each module must have exactly one architecture classification.");
+      }
+      moduleClassifications.set(normalized, classification);
+      if (!existsSync(join(root, normalized))) {
+        fail(`${mapPath} references missing module ${normalized}`, "Remove stale entries or restore the mapped module.");
+      }
+    }
+  }
+
+  for (const required of ["source-core", "extension-interface", "extension-implementation"]) {
+    if (!Array.isArray(classifications[required]) || classifications[required].length === 0) {
+      fail(`${mapPath} does not define ${required}`, "Keep source-core, extension-interface, and extension-implementation entries populated.");
+    }
+  }
+
+  for (const sourceCorePath of classifications["source-core"] ?? []) {
+    const normalizedSource = normalizeRepoPath(sourceCorePath);
+    if (!normalizedSource.endsWith(".ts")) continue;
+    const text = readOptional(normalizedSource);
+    if (text == null) continue;
+    for (const statement of moduleReferenceStatements(text)) {
+      const target = resolveLocalModule(normalizedSource, statement.specifier);
+      if (target == null) continue;
+      const targetClassification = moduleClassifications.get(target);
+      if (targetClassification == null) {
+        fail(
+          `${normalizedSource} imports unclassified module ${target}`,
+          `Classify ${target} in ${mapPath} before source-core depends on it.`
+        );
+        continue;
+      }
+      if (targetClassification === "extension-implementation") {
+        fail(
+          `${normalizedSource} imports extension implementation ${target}`,
+          "Source-core modules may import extension interfaces, but not concrete extension implementations."
+        );
+      }
+    }
   }
 }
 
@@ -454,6 +528,28 @@ function importStatements(text) {
   }));
 }
 
+function moduleReferenceStatements(text) {
+  const references = [];
+  for (const match of text.matchAll(/^\s*import\s+(?:type\s+)?(?:[^"']+\s+from\s+)?["']([^"']+)["']/gm)) {
+    references.push({ specifier: match[1] });
+  }
+  for (const match of text.matchAll(/^\s*export\s+(?:type\s+)?(?:\*\s+from|[^"']+\s+from)\s+["']([^"']+)["']/gm)) {
+    references.push({ specifier: match[1] });
+  }
+  return references;
+}
+
+function resolveLocalModule(fromPath, specifier) {
+  if (!specifier.startsWith(".")) return null;
+  const fromDir = dirname(fromPath);
+  const withoutJs = specifier.endsWith(".js") ? specifier.slice(0, -3) : specifier;
+  const candidates = [
+    normalizeRepoPath(join(fromDir, `${withoutJs}.ts`)),
+    normalizeRepoPath(join(fromDir, withoutJs, "index.ts"))
+  ];
+  return candidates.find((candidate) => existsSync(join(root, candidate))) ?? null;
+}
+
 function importedNames(clause) {
   const named = clause.match(/\{([^}]*)\}/s);
   if (!named) return [];
@@ -469,4 +565,8 @@ function fail(message, fix) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeRepoPath(path) {
+  return normalize(path).replace(/\\/g, "/");
 }

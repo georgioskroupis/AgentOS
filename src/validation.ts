@@ -1,8 +1,8 @@
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { exists, readText } from "./fs-utils.js";
+import { findingHash } from "./review-finding-hash.js";
 import type { Issue, ReviewFinding, ValidationBudgetConfig, ValidationReuseProfileState, ValidationState } from "./types.js";
-import { findingHash } from "./review.js";
 import { compareValidationReuseProfiles, VALIDATION_EVIDENCE_MAX_AGE_MS, VALIDATION_EVIDENCE_MAX_FUTURE_SKEW_MS } from "./validation-profile.js";
 
 export interface ValidationEvidence {
