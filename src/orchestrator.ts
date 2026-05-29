@@ -64,25 +64,19 @@ import { validationEvidenceFinding, verifyValidationEvidence } from "./validatio
 import { validationRunContext, verifyHandoffValidationEvidence } from "./orchestrator-validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { createWorkspaceForRun } from "./orchestrator-workspace-bootstrap.js";
-import { createIssueTracker } from "./tracker-adapters.js";
+import { createTrackerCapabilitySet } from "./tracker-adapters.js";
+import { splitTrackerCapabilities, type AgentLifecycleWriter, type SchedulerSafetyWriter, type TrackerReader } from "./tracker-boundaries.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, IssueTracker, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
-export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: IssueTracker; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; }
+import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: TrackerReader; schedulerSafetyWriter?: SchedulerSafetyWriter; agentLifecycleWriter?: AgentLifecycleWriter; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
 export interface OrchestratorRunSummary { dispatched: number; retryDispatched: number; candidateDispatched: number; candidates: number; }
-interface RunningEntry {
-  issue: Issue;
-  startedAt: number;
-  runId: string | null;
-  lastCodexEventAt: number | null;
-  abortController: AbortController;
-  promise: Promise<void>;
-}
+interface RunningEntry { issue: Issue; startedAt: number; runId: string | null; lastCodexEventAt: number | null; abortController: AbortController; promise: Promise<void>; }
 
 export class Orchestrator {
   private workflow!: WorkflowDefinition;
   private config!: ServiceConfig;
-  private tracker!: IssueTracker;
+  private tracker!: TrackerReader;
   private runner!: AgentRunner;
   private lifecycleController!: TrackerLifecycleController;
   private logger: JsonlLogger;
@@ -132,8 +126,9 @@ export class Orchestrator {
     if (this.options.maxConcurrentAgents != null && Number.isInteger(this.options.maxConcurrentAgents) && this.options.maxConcurrentAgents > 0) {
       this.config.agent.maxConcurrentAgents = Math.min(this.config.agent.maxConcurrentAgents, this.options.maxConcurrentAgents);
     }
-    this.tracker = this.options.tracker ?? createIssueTracker(this.config);
-    this.lifecycleController = new TrackerLifecycleController({ config: this.config, tracker: this.tracker, logger: this.logger });
+    const defaultCapabilities = this.options.tracker && this.options.schedulerSafetyWriter && this.options.agentLifecycleWriter ? null : this.options.tracker ? splitTrackerCapabilities(this.options.tracker) : createTrackerCapabilitySet(this.config);
+    this.tracker = this.options.tracker ?? defaultCapabilities!.reader;
+    this.lifecycleController = new TrackerLifecycleController({ config: this.config, reader: this.tracker, schedulerSafetyWriter: this.options.schedulerSafetyWriter ?? defaultCapabilities!.schedulerSafetyWriter, agentLifecycleWriter: this.options.agentLifecycleWriter ?? defaultCapabilities!.agentLifecycleWriter, logger: this.logger });
     this.runner = this.options.runner ?? new CodexAppServerRunner();
   }
   async runOnce(waitForWorkers = true, options: OrchestratorRunOptions = {}): Promise<OrchestratorRunSummary> {

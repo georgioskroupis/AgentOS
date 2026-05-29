@@ -6,10 +6,11 @@ import type { RunArtifactStore } from "./runs.js";
 import type { RuntimeStateStore } from "./runtime-state.js";
 import type { IssueStateStore } from "./issue-state.js";
 import type { AgentOwnedLifecycleEvidence } from "./agentOwnedEvidenceTypes.js";
-import type { AgentEvent, AgentRunResult, Issue, IssueComment, IssueState, IssueTracker, Workspace, ServiceConfig } from "./types.js";
+import type { TrackerReader } from "./tracker-boundaries.js";
+import type { AgentEvent, AgentRunResult, Issue, IssueComment, IssueState, Workspace, ServiceConfig } from "./types.js";
 
 export async function verifyAndRecordAgentOwnedLifecycleEvidence(input: {
-  config: ServiceConfig; tracker: IssueTracker; logger: JsonlLogger; runArtifacts: RunArtifactStore; runtimeState: RuntimeStateStore; stateStore: IssueStateStore;
+  config: ServiceConfig; tracker: TrackerReader; logger: JsonlLogger; runArtifacts: RunArtifactStore; runtimeState: RuntimeStateStore; stateStore: IssueStateStore;
   issue: Issue; workspace: Workspace; runId: string; attempt: number | null; handoff: string | null; state: IssueState | null; validation: IssueState["validation"] | null; result: AgentRunResult;
   recordIssueState(patch: Partial<IssueState>): Promise<void>; forgetRetry(): void; forgetCompletionMarker(): void; writeRunEvent(entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }): Promise<void>;
 }): Promise<{ passed: boolean; state: IssueState }> {
@@ -24,7 +25,7 @@ export async function verifyAndRecordAgentOwnedLifecycleEvidence(input: {
 
 export async function verifyAgentOwnedLifecycleEvidenceForRun(input: {
   config: ServiceConfig;
-  tracker: IssueTracker;
+  tracker: TrackerReader;
   logger: JsonlLogger;
   runArtifacts: RunArtifactStore;
   issue: Issue;
@@ -130,7 +131,7 @@ function testOnlyAgentOwnedEvidenceComments(config: ServiceConfig, issueIdentifi
   }));
 }
 
-async function fetchEvidenceComments(tracker: IssueTracker, logger: JsonlLogger, issue: Issue): Promise<IssueComment[] | null> {
+async function fetchEvidenceComments(tracker: TrackerReader, logger: JsonlLogger, issue: Issue): Promise<IssueComment[] | null> {
   if (!tracker.fetchIssueComments) return null;
   try {
     return await tracker.fetchIssueComments(issue.identifier, 100);
@@ -145,7 +146,7 @@ async function fetchEvidenceComments(tracker: IssueTracker, logger: JsonlLogger,
   }
 }
 
-async function fetchObservedIssueState(tracker: IssueTracker, logger: JsonlLogger, issue: Issue): Promise<string | null> {
+async function fetchObservedIssueState(tracker: TrackerReader, logger: JsonlLogger, issue: Issue): Promise<string | null> {
   try {
     const states = await tracker.fetchIssueStates([issue.id]);
     return states.get(issue.id)?.state ?? states.get(issue.identifier)?.state ?? [...states.values()].find((candidate) => candidate?.identifier === issue.identifier)?.state ?? null;

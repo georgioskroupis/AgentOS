@@ -16,6 +16,7 @@ import { inspectIssue } from "../src/status.js";
 import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
 import { validationReuseProfileForConfig } from "../src/validation-profile.js";
 import type { MonitorEvent } from "../src/monitor-contracts.js";
+import type { SchedulerSafetyWriter, TrackerReader } from "../src/tracker-boundaries.js";
 
 const readyIssue: Issue = {
   id: "issue-1",
@@ -111,6 +112,18 @@ function withAgentOwnedLifecycleEvidence(repo: string, tracker: IssueTracker): I
   return wrapped;
 }
 
+function readerWithForbiddenLinearWrites(reader: TrackerReader, touched: string[]): TrackerReader {
+  for (const method of ["comment", "move", "createIssue", "createProject", "createIssueRelation"] as const) {
+    Object.defineProperty(reader, method, {
+      get() {
+        touched.push(method);
+        throw new Error(`reader boundary exposed forbidden Linear write method: ${method}`);
+      }
+    });
+  }
+  return reader;
+}
+
 async function syntheticAgentOwnedComments(repo: string, issueIdentifier: string): Promise<IssueComment[]> {
   const run = await latestRun(repo, issueIdentifier);
   if (!run || !(await hasRecordedHandoff(repo, issueIdentifier))) return [];
@@ -172,6 +185,56 @@ class WarningWriteFailingLogger extends JsonlLogger {
 }
 
 describe("orchestrator", () => {
+  it("dispatches with a reader-only tracker and explicit scheduler-safety writer", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-reader-boundary-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const forbiddenReads: string[] = [];
+    const reader = readerWithForbiddenLinearWrites({
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      }
+    }, forbiddenReads);
+    const schedulerSafetyWriter: SchedulerSafetyWriter = {
+      async move() {},
+      async upsertComment() {
+        return "created";
+      }
+    };
+    let prompt = "";
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        prompt = input.prompt;
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, "AgentOS-Outcome: already-satisfied");
+        return { status: "succeeded" };
+      }
+    };
+
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: reader,
+      schedulerSafetyWriter,
+      agentLifecycleWriter: {},
+      runner,
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    await orchestrator.runOnce(true);
+
+    expect(prompt).toContain("Do AG-1");
+    expect(forbiddenReads).toEqual([]);
+  });
+
   it("dispatches eligible issues to a runner", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-"));
     const workflowPath = join(repo, "WORKFLOW.md");

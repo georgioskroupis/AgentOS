@@ -8,6 +8,7 @@ import { resolveRepoEnv } from "./env.js";
 import { exists, ensureDir, packageRoot, readText, writeTextEnsuringDir } from "./fs-utils.js";
 import { applyHarness, doctorHarness, runHarnessCheck } from "./harness.js";
 import { LinearClient, type LinearProject, type LinearState, type LinearTeam } from "./linear.js";
+import type { LinearSetupAdminClient } from "./linear-planned-issue-types.js";
 import { detectProjectMode, profileProject, type GreenfieldContext, type ProjectProfile, writeProjectSummary } from "./project-profiler.js";
 import { verifyCodexAppServer } from "./runner/app-server.js";
 import type { HarnessChange, HarnessProfile, ServiceConfig } from "./types.js";
@@ -25,18 +26,8 @@ export interface SetupWizardOptions {
   env?: NodeJS.ProcessEnv;
   interactive?: boolean;
   summaryProvider?: Parameters<typeof profileProject>[0]["summaryProvider"];
-  linearClient?: LinearSetupClient;
+  linearClient?: LinearSetupAdminClient;
   verify?: boolean;
-}
-
-interface LinearSetupClient {
-  listTeams(): Promise<LinearTeam[]>;
-  findProject(slugOrName: string): Promise<LinearProject | null>;
-  createProject(name: string, teamId: string): Promise<LinearProject>;
-  ensureWorkflowStates(
-    teamId: string,
-    required: Array<{ name: string; type: "backlog" | "unstarted" | "started" | "completed" | "canceled" }>
-  ): Promise<{ states: LinearState[]; created: LinearState[]; missing: Array<{ name: string; type: string }> }>;
 }
 
 export interface SetupReport {
