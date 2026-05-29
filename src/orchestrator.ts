@@ -7,7 +7,7 @@ import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, type PullReque
 import { readGitHubReviewContext } from "./github-context.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
 import { verifyAndRecordAgentOwnedLifecycleEvidence } from "./orchestrator-agent-owned-evidence.js";
-import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls, reviewTargetPullRequests } from "./issue-state.js";
+import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls } from "./issue-state.js";
 import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./landing-policy.js";
 import { landingFreshnessPatch } from "./landing-preflight.js";
 import { schedulerBookkeepingHandoffComment } from "./lifecycle.js";
@@ -30,7 +30,6 @@ import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCh
 import { evaluateOrchestratorStartupPreflight, type OrchestratorStartupPreflightResult } from "./orchestrator-startup-preflight.js";
 import { recordSingletonPreflightFailure } from "./orchestrator-singleton-preflight.js";
 import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
-import { requestFlakyCiRetriesIfEligible } from "./orchestrator-ci-retry.js";
 import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
 import { recoverMergeMetadataFromWorkspaceEvidence } from "./orchestrator-merge-recovery.js";
 import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, withRunnerActivityMonitorContext, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
@@ -46,30 +45,27 @@ import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
 import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
 import { autoRecoverPushedWork, finalizeCleanPushedWorkAfterRunnerStop, publishCleanRecoveryBranchIfSafe } from "./orchestrator-pushed-work-recovery.js";
 import { isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
-import { formatPullRequestTargets, formatRecordedPullRequests, handoffPullRequestValidationFinding, joinedHeadShas, reviewCheckFindings, reviewTargetSelectionError } from "./orchestrator-review-helpers.js";
 import { schedulerSafetyCommentIssue, schedulerSafetyMoveIssue } from "./orchestrator-scheduler-safety.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, dependencyDispatchStopPatch, isRecordedMergeTerminal, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { detectExternalHumanReviewStateDrift, recordExternalHumanReviewStateDrift } from "./orchestrator-state-drift.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, trackerDispatchStop } from "./orchestrator-tracker-guard.js";
-import { blockingFindings, ensureReviewIterationDir, fixPrompt, formatFindings, formatReviewRunnerFailures, repeatedBlockingHashes } from "./review.js";
-import { evaluateReviewBudget, formatReviewBudgetState, formatSplitRecommendation, isReviewSplitRecommendationBlocking, prepareReviewFollowUpProposal, reviewBudgetContinuation, reviewSupervisorMergeDecision } from "./review-budget.js";
-import { approvedReviewValidationBlockReason, formatApprovedReviewComment, formatReviewFixRequestedComment, formatReviewHumanRequiredComment, formatReviewSplitRecommendedComment, reviewHumanRequiredReason, reviewIterationLogMessage } from "./review-budget-orchestration.js";
-import { reviewerConcurrencyFor, runReviewerIteration } from "./reviewer-scheduler.js";
+import { isReviewSplitRecommendationBlocking, reviewSupervisorMergeDecision } from "./review-budget.js";
+import { approvedReviewValidationBlockReason } from "./review-budget-orchestration.js";
 import { categorizeRunError, isDependencyDispatchStop, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
 import { RuntimeStateStore, type RuntimeActiveRun, type RuntimeRecoverySummary } from "./runtime-state.js";
 import { logPreDispatchScopeReport, scopeReportStateFromReport, type PreDispatchScopeReport } from "./scope-report.js";
-import { validationEvidenceFinding, verifyValidationEvidence } from "./validation.js";
+import { verifyValidationEvidence } from "./validation.js";
 import { validationRunContext, verifyHandoffValidationEvidence } from "./orchestrator-validation.js";
 import { loadWorkflow, renderPrompt, resolveServiceConfig, validateDispatchConfig } from "./workflow.js";
 import { createWorkspaceForRun } from "./orchestrator-workspace-bootstrap.js";
 import { createTrackerCapabilitySet } from "./tracker-adapters.js";
 import { splitTrackerCapabilities, type AgentLifecycleWriter, type SchedulerSafetyWriter, type TrackerReader } from "./tracker-boundaries.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
-import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
+import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, LifecycleStatus, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: TrackerReader; schedulerSafetyWriter?: SchedulerSafetyWriter; agentLifecycleWriter?: AgentLifecycleWriter; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; postValidationExtension?: PostValidationExtension; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
 export interface OrchestratorRunSummary { dispatched: number; retryDispatched: number; candidateDispatched: number; candidates: number; }
@@ -106,7 +102,19 @@ export class Orchestrator {
     this.monitorEmitter = createMonitorEmitter({ sink: options.monitorSink ?? new NullMonitorSink(), logger: this.logger });
     this.runArtifacts = new RunArtifactStore(resolve(options.repoRoot));
     this.runtimeState = new RuntimeStateStore(resolve(options.repoRoot));
-    this.postValidationExtension = options.postValidationExtension ?? createReviewFixerCiPostValidationExtension((input) => this.reviewIfNeeded(input.issue, input.workspace, input.state, input.attempt, input.signal, input.runId));
+    this.postValidationExtension = options.postValidationExtension ?? createReviewFixerCiPostValidationExtension({
+      repoRoot: this.options.repoRoot,
+      config: () => this.config,
+      runner: () => this.runner,
+      logger: this.logger,
+      recordIssueState: (issue, patch) => this.recordIssueState(issue, patch),
+      commentIssue: (issue, body) => this.commentIssue(issue, body),
+      startRunPhase: (runId, issue, phase, label, metadata) => this.startRunPhase(runId, issue, phase, label, metadata),
+      finishRunPhase: (runId, issue, timing, status, metadata) => this.finishRunPhase(runId, issue, timing, status, metadata),
+      recordContextBudget: (issue, runId, kind, prompt) => this.recordContextBudget(issue, runId, kind, prompt),
+      writeRunEvent: (runId, entry) => this.writeRunEvent(runId, entry),
+      markRunningActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
+    });
   }
   async reload(): Promise<void> {
     const resolvedEnv = await resolveRepoEnv(resolve(this.options.repoRoot), this.options.env ?? process.env);
@@ -1637,467 +1645,6 @@ export class Orchestrator {
     for (const issue of issues) {
       await this.shepherdMergeIssue(issue);
     }
-  }
-
-  private async reviewIfNeeded(issue: Issue, workspace: Workspace, state: IssueState | null, attempt: number | null, signal?: AbortSignal, runId?: string): Promise<IssueState | null> {
-    if (!this.config.review.enabled) return state;
-    const reviewTargetMode = this.config.review.targetMode ?? "merge-eligible";
-    if (!state || state.outcome === "already_satisfied") return state;
-    let latestState: IssueState | null = state;
-    const initialReviewTargets = reviewTargetPullRequests(state, reviewTargetMode);
-    if (initialReviewTargets.length === 0 && pullRequestUrls(state).length === 0) return latestState;
-    const reviewTiming = runId ? await this.startRunPhase(runId, issue, "automated-review", "automated review", { reviewTargetMode }) : null;
-    const finishReviewTiming = async (unwoundByError: boolean): Promise<void> => {
-      if (!runId || !reviewTiming) return;
-      const reviewStatus = latestState?.reviewStatus;
-      await this.finishRunPhase(runId, issue, reviewTiming, reviewStatus === "approved" || (reviewStatus === "pending" && !unwoundByError) ? "completed" : "failed", {
-        reviewStatus,
-        reviewIteration: latestState?.reviewIteration,
-        reviewTargetMode,
-        ...(unwoundByError ? { reviewExit: "error" } : {})
-      });
-    };
-    let reviewUnwoundByError = false;
-    try {
-      if (initialReviewTargets.length === 0) {
-        latestState = await this.recordReviewTargetSelectionFailure(issue, state, reviewTargetMode);
-        return latestState;
-      }
-      const initialReviewTargetUrls = initialReviewTargets.map((target) => target.url);
-      const initialReviewTargetList = formatPullRequestTargets(initialReviewTargets);
-
-    await this.commentIssue(
-      issue,
-      [
-        "### AgentOS automated review started",
-        "",
-        "The Ralph Wiggum loop is reviewing the selected PR target(s) before moving the issue to Human Review.",
-        "",
-        `- Review target mode: ${reviewTargetMode}`,
-        initialReviewTargetList,
-        `- Required reviewers: ${this.config.review.requiredReviewers.join(", ")}`,
-        `- Reviewer concurrency: ${this.config.review.parallelReviewers ? `up to ${this.config.review.maxConcurrentReviewers}` : "sequential"}`,
-        `- Max iterations: ${this.config.review.maxIterations}`
-      ].join("\n")
-    );
-
-    const repoRoot = resolve(this.options.repoRoot);
-    let previousFindings = state.findings ?? [];
-    let reviewRunnerFailures: ReviewRunnerFailure[] = [];
-    let reviewTokenTotal = 0;
-    const initialReviewStatus = state.reviewStatus ?? null;
-    latestState = await this.recordIssueState(issue, {
-      phase: "review",
-      reviewStatus: "pending",
-      reviewIteration: state.reviewIteration ?? 0,
-      reviewTargetMode,
-      reviewTargetUrls: initialReviewTargetUrls,
-      reviewRunnerFailures: []
-    });
-    for (let iteration = (state.reviewIteration ?? 0) + 1; iteration <= this.config.review.maxIterations; iteration += 1) {
-      const reviewTargets = reviewTargetPullRequests(latestState, reviewTargetMode);
-      if (reviewTargets.length === 0) {
-        latestState = pullRequestUrls(latestState).length > 0 ? await this.recordReviewTargetSelectionFailure(issue, latestState, reviewTargetMode) : latestState;
-        return latestState;
-      }
-      const reviewPr = reviewTargets[0].url;
-      const reviewTargetUrls = reviewTargets.map((target) => target.url);
-      const reviewTargetList = formatPullRequestTargets(reviewTargets);
-      await ensureReviewIterationDir(workspace.path, issue.identifier, iteration);
-      const githubContext = await readGitHubReviewContext(reviewTargets, { githubCommand: this.config.github.command, repoRoot: this.options.repoRoot }).catch(async (error: Error) => {
-        latestState = await this.recordIssueState(issue, {
-          phase: "review",
-          reviewStatus: "human_required",
-          lastError: error.message,
-          errorCategory: "review",
-          reviewTargetMode,
-          reviewTargetUrls
-        });
-        await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nAgentOS could not read the selected pull request target(s) for review.\n\n${reviewTargetList}\n- Error: ${error.message}`);
-        await this.logger.write({
-          type: "review_human_required",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          message: error.message,
-          payload: { prUrls: reviewTargetUrls }
-        });
-        return null;
-      });
-      if (!githubContext) return latestState;
-      const nonOpen = githubContext.entries.find((entry) => entry.status.state && entry.status.state.toUpperCase() !== "OPEN");
-      if (nonOpen) {
-        latestState = await this.recordIssueState(issue, {
-          phase: "review",
-          reviewStatus: "human_required",
-          lastError: `pull request is ${nonOpen.status.state}`,
-          errorCategory: "review",
-          reviewTargetMode,
-          reviewTargetUrls
-        });
-        await this.commentIssue(issue, `### AgentOS automated review needs human judgment\n\nSelected pull request target is not open.\n\n- PR: ${nonOpen.target.url}\n- State: ${nonOpen.status.state}`);
-        return latestState;
-      }
-      const flakyRetry = await requestFlakyCiRetriesIfEligible({
-        issue,
-        state: latestState,
-        entries: githubContext.entries,
-        reviewTargetMode,
-        runId,
-        config: this.config,
-        repoRoot: this.options.repoRoot,
-        logger: this.logger,
-        recordIssueState: (patch) => this.recordIssueState(issue, patch),
-        commentIssue: (body) => this.commentIssue(issue, body)
-      });
-      if (flakyRetry.requested || flakyRetry.terminalState) {
-        latestState = flakyRetry.state;
-        return latestState;
-      }
-      const flakyRetryFindings = flakyRetry.findings;
-      const reviewers = this.reviewersFor([...new Set(githubContext.entries.flatMap((entry) => entry.status.changedFiles))]);
-      const reviewerConcurrency = reviewerConcurrencyFor(this.config, reviewers.length);
-      const parallelReviewers = reviewerConcurrency > 1;
-
-      const reviewIterationEvent = reviewIterationStartedMonitorEvent({ runId, issue, iteration, maxIterations: this.config.review.maxIterations, prUrls: reviewTargetUrls, reviewers, reviewerConcurrency, parallelReviewers });
-      if (runId) await this.writeRunEvent(runId, reviewIterationEvent);
-      else await this.logger.write(reviewIterationEvent);
-
-      const reviewerResult = await runReviewerIteration({
-        issue,
-        iteration,
-        reviewers,
-        reviewPr,
-        reviewTargetUrls,
-        githubContext,
-        previousFindings,
-        latestState,
-        workspace,
-        repoRoot,
-        attempt,
-        signal,
-        runId,
-        config: this.config,
-        runner: this.runner,
-        logger: this.logger,
-        onActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp),
-        writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry)
-      });
-      reviewRunnerFailures = [...reviewRunnerFailures, ...reviewerResult.reviewRunnerFailures];
-      reviewTokenTotal += reviewerResult.tokenTotal;
-      const artifacts = reviewerResult.artifacts;
-      const terminalReviewerFailure = reviewerResult.terminalReviewerFailure;
-      const reviewerStates = reviewerResult.reviewerStates;
-
-      const validationFinding = validationEvidenceFinding(latestState?.validation);
-      const findings = [
-        ...artifacts.flatMap((entry) => entry.artifact.findings),
-        ...githubContext.entries.flatMap((entry) => reviewCheckFindings(entry.status, this.config, entry.checkDiagnostics)),
-        ...flakyRetryFindings,
-        ...(validationFinding ? [validationFinding] : [])
-      ];
-      for (const finding of findings.filter((finding) => finding.reviewer === "checks")) {
-        await this.logger.write({
-          type: "review_finding",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          message: finding.body,
-          payload: finding
-        });
-      }
-      const blocking = blockingFindings(findings, this.config);
-      const currentBlockingHashes = new Set(blocking.map((finding) => finding.findingHash));
-      const resolvedFindingHashes = [
-        ...(latestState?.resolvedFindingHashes ?? []),
-        ...blockingFindings(previousFindings, this.config)
-          .map((finding) => finding.findingHash)
-          .filter((hash) => !currentBlockingHashes.has(hash))
-      ];
-      const humanRequired =
-        Boolean(terminalReviewerFailure) ||
-        artifacts.some((entry) => entry.artifact.decision === "human_required") ||
-        findings.some((finding) => finding.decision === "human_required");
-      const allRequiredApproved = this.config.review.requiredReviewers.every((reviewer) =>
-        artifacts.some((entry) => entry.artifact.reviewer === reviewer && entry.artifact.decision === "approved")
-      );
-      const repeated = repeatedBlockingHashes(previousFindings, findings, this.config);
-      const status: ReviewStatus = humanRequired ? "human_required" : blocking.length > 0 || !allRequiredApproved ? "changes_requested" : "approved";
-      const budgetDecision = evaluateReviewBudget({
-        issue,
-        config: this.config,
-        iteration,
-        reviewStartedAt: reviewTiming?.startedAt,
-        changedFiles: githubContext.entries.flatMap((entry) => entry.status.changedFiles),
-        previousFindings,
-        currentFindings: findings,
-        repeatedFindingHashes: repeated,
-        reviewTokenTotal,
-        fixerIterations: iteration - 1,
-        validation: latestState?.validation,
-        initialReviewStatus
-      });
-
-      latestState = await this.recordIssueState(issue, {
-        phase: "review",
-        reviewIteration: iteration,
-        reviewStatus: status,
-        reviewers: reviewerStates,
-        findings,
-        resolvedFindingHashes: [...new Set(resolvedFindingHashes)],
-        headSha: joinedHeadShas(githubContext.entries),
-        lastReviewedSha: joinedHeadShas(githubContext.entries),
-        reviewTargetMode,
-        reviewTargetUrls,
-        reviewRunnerFailures,
-        reviewBudget: budgetDecision.budget,
-        splitRecommendation: budgetDecision.splitRecommendation ?? undefined,
-        ...(reviewerResult.contextBudget ? { contextBudget: reviewerResult.contextBudget } : {})
-      });
-
-      const reviewCompleteEvent = reviewIterationFinishedMonitorEvent({ runId, issue, iteration, maxIterations: this.config.review.maxIterations, status, message: reviewIterationLogMessage(iteration, status, budgetDecision.shouldRecommendSplit), blocking: blocking.length, repeated });
-      if (runId) await this.writeRunEvent(runId, reviewCompleteEvent);
-      else await this.logger.write(reviewCompleteEvent);
-
-      if (status === "approved") {
-        let advisorySplitRecommendation = budgetDecision.splitRecommendation;
-        const reportOnlyCheckFindings = findings.filter((finding) => finding.reviewer === "checks" && finding.findingHash.startsWith("checks-failing-report-only-"));
-        const reportOnlyCheckDiagnostics = reportOnlyCheckFindings.length > 0 ? formatFindings(reportOnlyCheckFindings, resolve(this.options.repoRoot), { includeLogExcerpts: false }) : null;
-        if (budgetDecision.shouldRecommendSplit && budgetDecision.splitRecommendation) {
-          advisorySplitRecommendation = await prepareReviewFollowUpProposal(repoRoot, issue, budgetDecision.splitRecommendation);
-          latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "approved", reviewBudget: budgetDecision.budget, splitRecommendation: advisorySplitRecommendation, findings, reviewRunnerFailures });
-          await this.logger.write({
-            type: "review_split_recommended",
-            issueId: issue.id,
-            issueIdentifier: issue.identifier,
-            message: `advisory: ${advisorySplitRecommendation.reason}`,
-            payload: { splitRecommendation: advisorySplitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls, advisory: true }
-          });
-        }
-        await this.commentIssue(
-          issue,
-          formatApprovedReviewComment({ reviewTargetList, iteration, reviewers: reviewerStates, budget: budgetDecision.budget, splitRecommendation: advisorySplitRecommendation, reportOnlyCheckDiagnostics })
-        );
-        return latestState;
-      }
-
-      const { advisoryMechanicalSplitRecommendation, hardReviewBudgetStop } = reviewBudgetContinuation({ budgetDecision, blockingFindings: blocking, config: this.config, humanRequired, repeatedFindingHashes: repeated, iteration });
-
-      if (budgetDecision.shouldRecommendSplit && budgetDecision.splitRecommendation && !advisoryMechanicalSplitRecommendation) {
-        const splitRecommendation = await prepareReviewFollowUpProposal(repoRoot, issue, budgetDecision.splitRecommendation);
-        latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", reviewBudget: budgetDecision.budget, splitRecommendation, findings, reviewRunnerFailures });
-        await this.commentIssue(issue, formatReviewSplitRecommendedComment({ reviewTargetList, iteration, budget: budgetDecision.budget, splitRecommendation }));
-        await this.logger.write({ type: "review_split_recommended", issueId: issue.id, issueIdentifier: issue.identifier, message: splitRecommendation.reason, payload: { splitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls } });
-        return latestState;
-      }
-
-      if (advisoryMechanicalSplitRecommendation && budgetDecision.splitRecommendation) {
-        await this.logger.write({
-          type: "review_split_recommended",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          message: `advisory: ${budgetDecision.splitRecommendation.reason}`,
-          payload: { splitRecommendation: budgetDecision.splitRecommendation, reviewBudget: budgetDecision.budget, prUrls: reviewTargetUrls, advisory: true }
-        });
-      }
-
-      if (humanRequired || repeated.length > 0 || iteration >= this.config.review.maxIterations || hardReviewBudgetStop) {
-        const reason = reviewHumanRequiredReason({ terminalReviewerFailure, humanRequired, repeatedFindingHashes: repeated, hardReviewBudgetStop });
-        latestState = await this.recordIssueState(issue, { phase: "review", reviewStatus: "human_required", findings, reviewRunnerFailures });
-        await this.commentIssue(
-          issue,
-          formatReviewHumanRequiredComment({
-            reason,
-            reviewTargetList,
-            iteration,
-            reviewRunnerFailuresText: formatReviewRunnerFailures(reviewRunnerFailures),
-            blockingFindingsText: formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false })
-          })
-        );
-        await this.logger.write({
-          type: "review_human_required",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          message: reason,
-          payload: { findings: blocking, repeated, prUrls: reviewTargetUrls, reviewRunnerFailures }
-        });
-        return latestState;
-      }
-      await this.logger.write({
-        type: "review_fix_started",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: `iteration ${iteration}`,
-        payload: { findings: blocking }
-      });
-      await this.commentIssue(
-        issue,
-        formatReviewFixRequestedComment({
-          reviewTargetList,
-          iteration,
-          blockingFindingsText: formatFindings(blocking, resolve(this.options.repoRoot), { includeLogExcerpts: false }),
-          budget: budgetDecision.budget,
-          splitRecommendation: budgetDecision.splitRecommendation,
-          advisorySplitRecommendation: advisoryMechanicalSplitRecommendation
-        })
-      );
-      await this.recordIssueState(issue, { phase: "fix", reviewStatus: "changes_requested" });
-      const fixTiming = runId ? await this.startRunPhase(runId, issue, "fixer-turn", `fixer turn ${iteration}`, { iteration, blockingFindings: blocking.length }) : null;
-      let fixResult: AgentRunResult;
-      let fixContextKind: "ci-repair" | "fixer" = "fixer";
-      try {
-        fixContextKind = blocking.some((finding) => finding.reviewer === "checks") ? "ci-repair" : "fixer";
-        const fixerPrompt = fixPrompt({
-          issue,
-          prUrl: reviewPr,
-          reviewTargets: reviewTargetUrls,
-          iteration,
-          findings: blocking,
-          handoffPath: join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`),
-          feedbackSummary: githubContext.feedback,
-          contextPack: buildTargetedContextPack({ kind: fixContextKind, issue, state: latestState, pullRequests: githubContext.entries, findings: blocking, validation: latestState?.validation, feedback: githubContext.feedback, artifactRefs: [join(workspace.path, ".agent-os", `handoff-${issue.identifier}.md`)], runId, iteration })
-        });
-        const fixerBudget = await this.recordContextBudget(issue, runId, "fixer", fixerPrompt);
-        if (fixerBudget.status === "exceeded") {
-          latestState = await this.recordIssueState(issue, {
-            phase: "fix",
-            reviewStatus: "human_required",
-            contextBudget: fixerBudget,
-            lastError: contextBudgetExceededMessage(fixerBudget),
-            errorCategory: "fix"
-          });
-          await this.commentIssue(issue, `### AgentOS review fix needs human judgment\n\nThe focused fixer prompt exceeded the configured context budget.\n\n- PR: ${reviewPr}\n- ${fixerBudget.summary}`);
-          if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, "failed", { iteration, reason: "context_budget_exceeded" });
-          return latestState;
-        }
-        if (runId && fixTiming) await writeTurnStartedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: fixTiming, label: `fixer turn ${iteration}`, current: iteration, max: this.config.review.maxIterations });
-        fixResult = await this.runner.run({
-          issue,
-          prompt: fixerPrompt,
-          attempt,
-          workspace,
-          config: this.config, modelRouting: { role: fixContextKind === "ci-repair" ? "ci-repair" : "fixer", attempt: iteration, risk: blocking.map((finding) => finding.reviewer) },
-          signal,
-          onEvent: (event) => {
-            this.markRunningActivity(issue.id, event.timestamp);
-            void this.logger.write({ ...event, type: `review_fix_${event.type}` });
-          }
-        });
-      } catch (error) {
-        if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, "failed", { iteration, error: error instanceof Error ? error.message : String(error) });
-        throw error;
-      }
-      if (runId) await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result: fixResult, role: fixContextKind, attempt: iteration });
-      if (runId && fixTiming) await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: fixTiming, label: `fixer turn ${iteration}`, current: iteration, result: fixResult, max: this.config.review.maxIterations });
-      if (runId && fixTiming) await this.finishRunPhase(runId, issue, fixTiming, timingStatusForRunResult(fixResult), { iteration, resultStatus: fixResult.status });
-      reviewTokenTotal += fixResult.totalTokens ?? 0;
-      if (fixResult.status !== "succeeded") {
-        latestState = await this.recordIssueState(issue, {
-          phase: "fix",
-          reviewStatus: "human_required",
-          lastError: fixResult.error ?? fixResult.status,
-          errorCategory: "fix"
-        });
-        await this.commentIssue(issue, `### AgentOS review fix failed\n\nThe fixer turn did not complete successfully.\n\n- PR: ${reviewPr}\n- Error: ${fixResult.error ?? fixResult.status}`);
-        return latestState;
-      }
-      const updatedHandoff = await readHandoff(workspace.path, issue.identifier);
-      if (updatedHandoff) {
-        const handoffPrUrls = extractPullRequestUrls(updatedHandoff);
-        try {
-          await assertPullRequestUrlsMatchRepo(resolve(this.options.repoRoot), handoffPrUrls);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          const finding = handoffPullRequestValidationFinding(message);
-          latestState = await this.recordIssueState(issue, {
-            phase: "review",
-            reviewStatus: "human_required",
-            lastError: message,
-            errorCategory: "review",
-            findings: [finding]
-          });
-          await this.commentIssue(
-            issue,
-            [
-              "### AgentOS automated review needs human judgment",
-              "",
-              "The focused fixer handoff contained pull request metadata that AgentOS could not validate against the current repository.",
-              "",
-              `- Error: ${message}`,
-              "",
-              "Blocking findings:",
-              formatFindings([finding], resolve(this.options.repoRoot), { includeLogExcerpts: false })
-            ].join("\n")
-          );
-          await this.logger.write({
-            type: "review_human_required",
-            issueId: issue.id,
-            issueIdentifier: issue.identifier,
-            message,
-            payload: { findings: [finding], prUrls: handoffPrUrls }
-          });
-          return latestState;
-        }
-        const validation = await verifyHandoffValidationEvidence({ config: this.config, issue, handoff: updatedHandoff, workspacePath: workspace.path, runId, selectedHeadSha: joinedHeadShas(githubContext.entries) });
-        if (runId) await writeValidationCommandMonitorEvents({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, validation });
-        const updated = issueStateFromHandoff(issue, updatedHandoff);
-        const fixPatch = { phase: "fix" as const, reviewIteration: iteration, lastFixedSha: joinedHeadShas(githubContext.entries), reviewTargetMode, validation: validation.state };
-        if (updated) {
-          latestState = await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, { ...updated, ...fixPatch });
-        } else {
-          latestState = await this.recordIssueState(issue, fixPatch);
-        }
-      }
-      previousFindings = findings;
-    }
-    return latestState;
-    } catch (error) {
-      reviewUnwoundByError = true;
-      throw error;
-    } finally {
-      await finishReviewTiming(reviewUnwoundByError);
-    }
-  }
-
-  private async recordReviewTargetSelectionFailure(issue: Issue, state: IssueState, reviewTargetMode: ReviewTargetMode): Promise<IssueState> {
-    const recordedPrUrls = pullRequestUrls(state);
-    const error = reviewTargetSelectionError(state, reviewTargetMode);
-    const latestState = await this.recordIssueState(issue, {
-      phase: "review",
-      reviewStatus: "human_required",
-      lastError: error,
-      errorCategory: "review",
-      reviewTargetMode,
-      reviewTargetUrls: []
-    });
-    await this.commentIssue(
-      issue,
-      [
-        "### AgentOS automated review needs human judgment",
-        "",
-        "AgentOS could not select a pull request target for automated review.",
-        "",
-        `- Review target mode: ${reviewTargetMode}`,
-        formatRecordedPullRequests(state),
-        `- Error: ${error}`
-      ].join("\n")
-    );
-    await this.logger.write({
-      type: "review_human_required",
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      message: error,
-      payload: { prUrls: recordedPrUrls, reviewTargetMode }
-    });
-    return latestState;
-  }
-
-  private reviewersFor(changedFiles: string[]): string[] {
-    const reviewers = [...this.config.review.requiredReviewers];
-    const securityNeeded = changedFiles.some((file) => /(^|\/)(auth|security|secrets?|config|env|api|github|linear|runner|orchestrator)/i.test(file));
-    for (const reviewer of this.config.review.optionalReviewers) {
-      if (reviewer === "security" && !securityNeeded) continue;
-      if (!reviewers.includes(reviewer)) reviewers.push(reviewer);
-    }
-    return reviewers;
   }
 
   private async shepherdMergeIssue(issue: Issue): Promise<void> {
