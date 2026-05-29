@@ -296,4 +296,46 @@ describe("monitor emitter", () => {
       }
     });
   });
+
+  it("does not emit token activity for delta or ambiguous generic usage payloads", () => {
+    const timing = {
+      id: "run-1:implementation:1",
+      phase: "implementation",
+      label: "implementation turn 1",
+      status: "running",
+      startedAt: "2026-05-25T00:00:00.000Z"
+    };
+
+    const delta = withRunnerActivityMonitorContext(
+      {
+        type: "thread/tokenUsage/updated",
+        issueId: "AG-1",
+        issueIdentifier: "AG-1",
+        timestamp: "2026-05-25T00:00:08.000Z",
+        payload: {
+          params: {
+            tokenUsage: { delta: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }
+          }
+        }
+      },
+      timing
+    );
+    const ambiguous = withRunnerActivityMonitorContext(
+      {
+        type: "thread/tokenUsage/updated",
+        issueId: "AG-1",
+        issueIdentifier: "AG-1",
+        timestamp: "2026-05-25T00:00:08.000Z",
+        payload: {
+          params: {
+            usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }
+          }
+        }
+      },
+      timing
+    );
+
+    expect(delta.payload).not.toHaveProperty("monitor");
+    expect(ambiguous.payload).not.toHaveProperty("monitor");
+  });
 });

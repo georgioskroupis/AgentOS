@@ -1,4 +1,5 @@
-import type { MonitorActivityKind, MonitorFileActivitySummary, MonitorStatus, MonitorTimeClass } from "./monitor-contracts.js";
+import type { MonitorTokenTotals } from "./monitor-accounting.js";
+import type { MonitorActivityKind, MonitorFileActivitySummary, MonitorRateLimitPressure, MonitorStatus, MonitorTimeClass } from "./monitor-contracts.js";
 
 export const monitorSnapshotStatuses = ["idle", "active", "waiting", "human_action", "failed", "completed"] as const;
 export type MonitorSnapshotStatus = (typeof monitorSnapshotStatuses)[number];
@@ -31,6 +32,11 @@ export type MonitorSnapshot = {
         ageMs: number;
         observedAt: string;
         fileActivity?: MonitorFileActivitySummary;
+        tokenUsage?: MonitorTokenTotals;
+        rateLimit?: {
+          pressure: MonitorRateLimitPressure;
+          resetAt?: string;
+        };
       };
       model?: string;
     };

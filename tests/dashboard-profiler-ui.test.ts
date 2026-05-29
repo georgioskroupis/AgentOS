@@ -80,7 +80,12 @@ describe("dashboard live profiler UI", () => {
         kind: "token_usage",
         label: "Runner token usage observed",
         ageMs: 3000,
-        observedAt: "2026-05-26T00:00:07.000Z"
+        observedAt: "2026-05-26T00:00:07.000Z",
+        tokenUsage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15
+        }
       }
     };
 
@@ -91,7 +96,64 @@ describe("dashboard live profiler UI", () => {
     expect(freshHtml).toContain("Token update");
     expect(freshHtml).toContain("Low-level activity age");
     expect(freshHtml).toContain('data-ms="5000"');
+    expect(freshHtml).toContain("Thread tokens");
+    expect(freshHtml).toContain(">15<");
+    expect(freshHtml).toContain("Input tokens");
+    expect(freshHtml).toContain(">10<");
+    expect(freshHtml).toContain("Output tokens");
+    expect(freshHtml).toContain(">5<");
     expect(unavailableHtml).toContain("Unavailable");
+  });
+
+  it("renders ambiguous token data as unavailable and rate-limit data as compact pressure only", () => {
+    const { profiler } = loadProfiler();
+    const tokenSnapshot = activeSnapshot();
+    const tokenRun = tokenSnapshot.run as Record<string, unknown>;
+    tokenRun.currentActivity = {
+      stage: "implementation",
+      step: "render UI",
+      stepElapsedMs: 4000,
+      lastEventAgeMs: 1000,
+      lastMeaningfulActivity: {
+        kind: "token_usage",
+        label: "Runner token usage observed",
+        ageMs: 3000,
+        observedAt: "2026-05-26T00:00:07.000Z",
+        tokenUsage: {}
+      }
+    };
+
+    const rateSnapshot = activeSnapshot();
+    const rateRun = rateSnapshot.run as Record<string, unknown>;
+    rateRun.currentActivity = {
+      stage: "implementation",
+      step: "render UI",
+      stepElapsedMs: 4000,
+      lastEventAgeMs: 1000,
+      lastMeaningfulActivity: {
+        kind: "rate_limit",
+        label: "Runner rate-limit pressure observed",
+        ageMs: 3000,
+        observedAt: "2026-05-26T00:00:07.000Z",
+        rateLimit: {
+          pressure: "high",
+          resetAt: "2026-05-26T00:05:00.000Z",
+          rawRateLimitPayload: { remaining: 0 }
+        }
+      }
+    };
+
+    const tokenHtml = profiler.renderSnapshot(tokenSnapshot, { serverNow: "2026-05-26T00:00:12.000Z" });
+    const rateHtml = profiler.renderSnapshot(rateSnapshot, { serverNow: "2026-05-26T00:00:12.000Z" });
+
+    expect(tokenHtml).toContain("Thread tokens");
+    expect((tokenHtml.match(/Unavailable/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(rateHtml).toContain("Rate-limit pressure");
+    expect(rateHtml).toContain(">high<");
+    expect(rateHtml).toContain("Rate-limit reset");
+    expect(rateHtml).toContain("2026-05-26T00:05:00.000Z");
+    expect(rateHtml).not.toContain("rawRateLimitPayload");
+    expect(rateHtml).not.toContain("remaining");
   });
 
   it("renders compact file activity summary without exposing diff text", () => {

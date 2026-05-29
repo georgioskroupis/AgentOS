@@ -125,6 +125,7 @@ the cross-boundary assertion.
 | `tests/maintenance.test.ts` | Boundary | Maintenance templates and seeding helper stay available and structurally valid |
 | `tests/mvp-certification.test.ts` | Certification | MVP certification evidence and source-alignment score remain current |
 | `tests/model-routing.test.ts` | Unit | Per-role model policy defaults, configured reviewer routes, promotion/refusal rules, and telemetry |
+| `tests/monitor-accounting.test.ts` | Unit | Monitor token accounting prefers absolute thread totals and rejects delta or ambiguous usage payloads |
 | `tests/monitor-aggregator.test.ts` | Unit | Extension-owned monitor reducer timing math, event ordering, nested rows, terminal closure, and bounded retention |
 | `tests/monitor-contracts.test.ts` | Unit | Lean monitor event, snapshot, UI-section, human-action, and launcher-boundary contracts |
 | `tests/monitor-launcher.test.ts` | Unit | Extension-owned macOS launcher process manager command construction, app bundle/config generation, CLI install, owned start/stop, read-only attach, failure handling, and source-core import boundary |

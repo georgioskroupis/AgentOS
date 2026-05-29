@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { DEFAULT_CODEX_APP_SERVER_COMMAND } from "../defaults.js";
 import { defaultModelRoutingConfig, modelTelemetry, selectModelRoute } from "../model-routing.js";
+import { absoluteThreadTokenTotalsFromMessage } from "../monitor-accounting.js";
 import { BoundedTextAccumulator, summarizeText } from "../output-capture.js";
 import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js";
 import { handleClientToolCall, linearGraphqlClientTools } from "./client-tools.js";
@@ -431,11 +432,11 @@ function mayBeJsonRpcLine(value: string): boolean {
 }
 
 function tokenMetricsFrom(message: Record<string, any>): { input?: number; output?: number; total?: number } | null {
-  const usage = message.params?.tokenUsage?.total ?? message.params?.tokenUsage ?? message.params?.usage ?? null;
-  if (!usage || typeof usage !== "object") return null;
-  const input = numberValue(usage.inputTokens ?? usage.input_tokens ?? usage.input);
-  const output = numberValue(usage.outputTokens ?? usage.output_tokens ?? usage.output);
-  const total = numberValue(usage.totalTokens ?? usage.total_tokens ?? usage.total);
+  const usage = absoluteThreadTokenTotalsFromMessage(message);
+  if (!usage) return null;
+  const input = numberValue(usage.inputTokens);
+  const output = numberValue(usage.outputTokens);
+  const total = numberValue(usage.totalTokens);
   if (input == null && output == null && total == null) return null;
   return { input, output, total };
 }

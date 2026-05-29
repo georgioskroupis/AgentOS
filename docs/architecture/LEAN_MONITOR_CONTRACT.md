@@ -68,7 +68,11 @@ renders the human-action fields as `Not needed`.
 compact low-level activity tied to the active turn span. It exposes only the
 activity kind, compact label, observation timestamp, and age in milliseconds.
 For file-change activity it may also expose `MonitorFileActivitySummary`, which
-contains only changed-file count, safe last file, and category. Command output,
+contains only changed-file count, safe last file, and category. Token activity
+exposes only absolute thread totals when the runner identifies them as totals;
+delta-style updates and ambiguous generic usage maps stay unavailable instead
+of being accumulated. Rate-limit activity exposes only compact pressure and an
+optional reset time, never the raw rate-limit payload. Command output,
 file-change metadata, token updates, rate-limit updates, and generic activity
 are meaningful categories. Missing low-level activity is an unavailable display
 state, not a stale or failed scheduler signal.
@@ -196,6 +200,11 @@ Snapshot status is exactly one of:
 - File-change activity renders the compact file summary only. Missing count,
   path, or category data renders as `Unknown`, `Unavailable`, or `unknown`
   without showing raw diffs or expanding the monitor API surface.
+- Token activity renders absolute thread total, input, and output counts when
+  available. Missing or ambiguous token fields render as `Unavailable`, not
+  zero. Delta-style runner payloads are not added to previous totals.
+- Rate-limit activity renders compact pressure and optional reset time only;
+  raw rate-limit payloads are not part of the snapshot or UI.
 - Sanitized command execution activity may render as `tool` timing rows under
   the active turn span. Command rows expose the compact command label, status,
   elapsed time, and bounded result such as `running` or `exit 0`; they must not
