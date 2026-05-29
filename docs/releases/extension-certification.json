@@ -13,6 +13,12 @@
       "summary": "Automated review, reviewer artifact retry, and review-budget split behavior are extension proof outside source-core certification.",
       "evidence": [
         {
+          "path": "src/post-validation-review-adapter.ts"
+        },
+        {
+          "path": "tests/post-validation-review-adapter.test.ts"
+        },
+        {
           "path": "tests/review-retry.test.ts"
         },
         {
@@ -23,6 +29,7 @@
         }
       ],
       "proofCommands": [
+        "npm test -- tests/post-validation-review-adapter.test.ts --reporter verbose",
         "npm test -- tests/review-retry.test.ts tests/review.test.ts tests/review-budget.test.ts --reporter verbose"
       ]
     },
