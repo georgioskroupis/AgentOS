@@ -153,6 +153,17 @@ The command refuses dirty, missing, detached, diverged, or ambiguous worktree
 evidence and records the branch, handoff, validation, and proof artifacts so the
 old failure remains historical in `status` and `inspect`.
 
+For recovered pushed work that already has a clean branch, PR, handoff, and
+passing validation evidence, do not redispatch implementation. Record or let
+AgentOS reconstruct the recovery, review the handoff in `Human Review`, then
+post a trusted structured `AgentOS-Human-Decision: approve-as-is` or other
+applicable decision with `PR-Head-SHA`, `Validation-JSON`, `CI-State`, and
+`Findings`. After the decision and green CI are current, move the issue to
+`Merging`; the shepherd uses the recovered primary PR metadata to merge and move
+the issue to `Done`. If the daemon restarts after that point, startup
+reconciliation treats already-merged PRs or Linear `Done` as terminal truth and
+does not start another implementation run.
+
 If the output reports `planning_required`, create or attach a planning or
 decomposition artifact, or split the work into follow-up issues, before
 returning the issue to implementation. The orchestrator owns the pause and
