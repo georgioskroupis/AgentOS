@@ -29,6 +29,11 @@ and `generic`. Activity output must not include raw stdout or stderr, raw diffs,
 prompts, model responses, full runner payloads, raw rate-limit payloads,
 stack traces except compact labels, secrets, or environment values. Rate-limit
 activity exposes compact pressure only, not raw limit payloads.
+File-change activity exposes only changed-file count, an optional safe
+repo-relative last file, and category `source`, `test`, `docs`, `config`, or
+`unknown`. Absolute paths under the current repo or workspace are normalized to
+repo-relative paths; home, temp, user-specific, escaping, and raw diff-like
+paths are omitted.
 Runner activity observations must be emitted as `activity_observed` events tied
 to the active run and monitor span, with `turnId` included only when available.
 
@@ -62,9 +67,11 @@ renders the human-action fields as `Not needed`.
 `run.currentActivity.lastMeaningfulActivity`, when present, is the most recent
 compact low-level activity tied to the active turn span. It exposes only the
 activity kind, compact label, observation timestamp, and age in milliseconds.
-Command output, file-change metadata, token updates, rate-limit updates, and
-generic activity are meaningful categories. Missing low-level activity is an
-unavailable display state, not a stale or failed scheduler signal.
+For file-change activity it may also expose `MonitorFileActivitySummary`, which
+contains only changed-file count, safe last file, and category. Command output,
+file-change metadata, token updates, rate-limit updates, and generic activity
+are meaningful categories. Missing low-level activity is an unavailable display
+state, not a stale or failed scheduler signal.
 
 The in-memory reducer lives in `src/monitor-aggregator.ts`. It is an
 extension-owned `MonitorSink` implementation that combines monitor events and
@@ -186,6 +193,9 @@ Snapshot status is exactly one of:
 - Terminal snapshots close active rows.
 - Current Activity renders the last meaningful low-level activity category and
   age when available. Missing low-level activity renders as unavailable.
+- File-change activity renders the compact file summary only. Missing count,
+  path, or category data renders as `Unknown`, `Unavailable`, or `unknown`
+  without showing raw diffs or expanding the monitor API surface.
 - Sanitized command execution activity may render as `tool` timing rows under
   the active turn span. Command rows expose the compact command label, status,
   elapsed time, and bounded result such as `running` or `exit 0`; they must not

@@ -154,6 +154,46 @@ describe("monitor contracts", () => {
     });
   });
 
+  it("normalizes safe file activity paths and redacts user-specific or raw diff paths", () => {
+    expect(buildMonitorActivity({ kind: "file_change", label: "Repo absolute path", changedFileCount: 2, lastFile: `${process.cwd()}/src/monitor-contracts.ts` })).toEqual({
+      kind: "file_change",
+      label: "Repo absolute path",
+      changedFileCount: 2,
+      lastFile: "src/monitor-contracts.ts",
+      category: "source"
+    });
+    expect(buildMonitorActivity({ kind: "file_change", label: "Docs path", path: "docs/product/README.md" })).toEqual({
+      kind: "file_change",
+      label: "Docs path",
+      lastFile: "docs/product/README.md",
+      category: "docs"
+    });
+    expect(buildMonitorActivity({ kind: "file_change", label: "Config path", path: "WORKFLOW.md" })).toEqual({
+      kind: "file_change",
+      label: "Config path",
+      lastFile: "WORKFLOW.md",
+      category: "config"
+    });
+    expect(buildMonitorActivity({ kind: "file_change", label: "Raw diff ignored", changedFileCount: 1, path: "diff --git a/src/private.ts b/src/private.ts\n+secret" })).toEqual({
+      kind: "file_change",
+      label: "Raw diff ignored",
+      changedFileCount: 1,
+      category: "unknown"
+    });
+    expect(buildMonitorActivity({ kind: "file_change", label: "Home prefix ignored", changedFileCount: 1, path: "~/repo/src/private.ts" })).toEqual({
+      kind: "file_change",
+      label: "Home prefix ignored",
+      changedFileCount: 1,
+      category: "unknown"
+    });
+    expect(buildMonitorActivity({ kind: "file_change", label: "Temp prefix ignored", changedFileCount: 1, path: "/tmp/agent-os/private.ts" })).toEqual({
+      kind: "file_change",
+      label: "Temp prefix ignored",
+      changedFileCount: 1,
+      category: "unknown"
+    });
+  });
+
   it("keeps extension-only snapshot and launcher shapes type-checkable", () => {
     const config: LauncherConfig = {
       repo: "/repo",
