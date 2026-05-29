@@ -8,6 +8,10 @@ type ProfilerApi = {
   setStandaloneMode(enabled: boolean, launcherState?: Record<string, unknown>): void;
 };
 
+type LoadProfilerOptions = {
+  launcherApi?: Record<string, unknown>;
+};
+
 describe("dashboard live profiler UI", () => {
   it("renders idle browser mode with exactly seven sections and disabled link placeholders", () => {
     const { profiler } = loadProfiler();
@@ -314,25 +318,49 @@ describe("dashboard live profiler UI", () => {
     expect(completed).toContain('data-ms="5000"');
   });
 
-  it("renders the standalone launcher strip only when standalone mode is enabled", () => {
-    const { profiler, strip, document } = loadProfiler();
+  it("renders standalone launcher ownership and Stop availability from existing launcher state", () => {
+    const { profiler, strip, document } = loadProfiler({ launcherApi: {} });
 
     profiler.setStandaloneMode(false);
     expect(strip.hidden).toBe(true);
     expect(strip.innerHTML).toBe("");
     expect(document.body.dataset.mode).toBe("browser");
 
-    profiler.setStandaloneMode(true, { status: "running" });
+    profiler.setStandaloneMode(true, { status: "running", managedByLauncher: true, stopEnabled: true, pid: 1234 });
     expect(strip.hidden).toBe(false);
     expect(document.body.dataset.mode).toBe("standalone");
     expect(strip.innerHTML).toContain("Launcher: running");
+    expect(strip.innerHTML).toContain("Daemon: launcher-owned pid 1234");
+    expect(strip.innerHTML).toContain("Stop available: launcher owns this daemon");
     expect(strip.innerHTML).toContain(">Start<");
     expect(strip.innerHTML).toContain(">Stop<");
     expect(strip.innerHTML).toContain(">Reload/Open<");
+    expect(strip.innerHTML).toContain('data-launcher-action="stop">Stop');
+  });
+
+  it("shows why standalone Stop is unavailable for externally managed daemons", () => {
+    const { profiler, strip } = loadProfiler({ launcherApi: {} });
+
+    profiler.setStandaloneMode(true, { status: "attached", managedByLauncher: false, stopEnabled: false });
+
+    expect(strip.innerHTML).toContain("Launcher: attached");
+    expect(strip.innerHTML).toContain("Daemon: externally managed");
+    expect(strip.innerHTML).toContain("Stop unavailable: daemon is externally managed");
+    expect(strip.innerHTML).toContain('data-launcher-action="stop" disabled');
+  });
+
+  it("keeps browser mode read-only with no standalone launcher controls", () => {
+    const { profiler, strip, document } = loadProfiler({ launcherApi: {} });
+
+    profiler.setStandaloneMode(false, { status: "running", managedByLauncher: true, stopEnabled: true });
+
+    expect(document.body.dataset.mode).toBe("browser");
+    expect(strip.hidden).toBe(true);
+    expect(strip.innerHTML).toBe("");
   });
 });
 
-function loadProfiler(): { profiler: ProfilerApi; strip: FakeElement; document: FakeDocument } {
+function loadProfiler(options: LoadProfilerOptions = {}): { profiler: ProfilerApi; strip: FakeElement; document: FakeDocument } {
   const dashboard = readFileSync(join(process.cwd(), "dashboard", "index.html"), "utf8");
   const script = dashboard.match(/<script>([\s\S]*?)<\/script>/)?.[1];
   if (!script) throw new Error("dashboard script not found");
@@ -343,7 +371,8 @@ function loadProfiler(): { profiler: ProfilerApi; strip: FakeElement; document: 
   const window = {
     __AGENTOS_MONITOR_TEST__: true,
     __AgentOSMonitorProfiler: undefined as ProfilerApi | undefined,
-    location: { search: "" }
+    location: { search: "" },
+    ...(options.launcherApi ? { agentOsLauncher: options.launcherApi } : {})
   };
   const sandbox = {
     window,

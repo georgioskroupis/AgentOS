@@ -25,6 +25,14 @@ describe("AgentOS monitor launcher process manager", () => {
     });
   });
 
+  it("preserves LauncherConfig.command as only the executable override", () => {
+    expect(buildLauncherCommand({ ...config, command: "/usr/local/bin/agent-os" })).toEqual<LauncherCommand>({
+      command: "/usr/local/bin/agent-os",
+      args: ["orchestrator", "run", "--repo", "/repo", "--workflow", "WORKFLOW.md", "--port", "4317"],
+      cwd: "/repo"
+    });
+  });
+
   it("loads LauncherConfig from the local macOS config path", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agentos-launcher-config-"));
     const configPath = join(dir, "config.json");
@@ -213,6 +221,17 @@ describe("AgentOS monitor launcher process manager", () => {
     expect(main).toContain('const launcherGracefulShutdownSignal = "SIGTERM"');
     expect(main).toContain('const launcherEscalationSignal = "SIGKILL"');
     expect(main).toContain("waitForExit(child, gracefulShutdownMs)");
+  });
+
+  it("keeps generated Electron launch command and config validation unchanged", () => {
+    const main = monitorElectronMain();
+
+    expect(main).toContain(
+      'if (config.command != null && (typeof config.command !== "string" || config.command.length === 0)) throw new Error("Launcher config command must be a non-empty string when provided");'
+    );
+    expect(main).toContain('command: config.command || "bin/agent-os"');
+    expect(main).toContain('args: ["orchestrator", "run", "--repo", config.repo, "--workflow", config.workflow, "--port", String(config.port)]');
+    expect(main).toContain("cwd: config.repo");
   });
 
   it("detects a non-monitor process already using the configured port", async () => {
