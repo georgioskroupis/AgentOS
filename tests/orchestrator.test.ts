@@ -15,6 +15,7 @@ import { writeValidationEvidence } from "../src/validation.js";
 import { inspectIssue } from "../src/status.js";
 import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
 import { validationReuseProfileForConfig } from "../src/validation-profile.js";
+import { noopPostValidationExtension } from "../src/post-validation-extension.js";
 import type { MonitorEvent } from "../src/monitor-contracts.js";
 import type { SchedulerSafetyWriter, TrackerReader } from "../src/tracker-boundaries.js";
 
@@ -321,6 +322,65 @@ describe("orchestrator", () => {
         startGitSha: expect.any(String)
       })
     });
+  });
+
+  it("uses no-op post-validation extension path for source-core runs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-post-validation-noop-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\nagent:\n  max_turns: 1\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: definitely-not-gh\nreview:\n  enabled: true\n  required_reviewers: [self]\n  optional_reviewers: []\n  max_iterations: 1\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+
+    const comments: string[] = [];
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      },
+      async fetchIssueComments() {
+        return [];
+      },
+      async comment(_issue, body) {
+        comments.push(body);
+      },
+      async move() {}
+    };
+    const prUrl = "https://github.com/o/r/pull/1";
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, `AgentOS-Outcome: implemented\n\nPrimary PR: ${prUrl}`);
+        return { status: "succeeded" };
+      }
+    };
+    let extensionCalls = 0;
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
+      runner,
+      postValidationExtension: {
+        name: "test-noop-post-validation",
+        async afterValidation(input) {
+          extensionCalls += 1;
+          expect(input.state?.prUrl).toBe(prUrl);
+          return noopPostValidationExtension.afterValidation(input);
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(extensionCalls).toBe(1);
+    expect(state?.prUrl).toBe(prUrl);
+    expect(state?.reviewTargetUrls).toBeUndefined();
+    expect(comments.join("\n")).not.toContain("AgentOS automated review started");
   });
 
   it("emits source-core monitor events without letting sink failures fail orchestration", async () => {

@@ -20,6 +20,8 @@ import { initialDaemonFreshnessState, isDaemonFreshnessStale } from "./daemon-fr
 import { type ReadDaemonIdentityOptions } from "./daemon-identity.js";
 import { summarizeText } from "./output-capture.js";
 import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
+import { createReviewFixerCiPostValidationExtension } from "./post-validation-review-adapter.js";
+import type { PostValidationExtension } from "./post-validation-extension.js";
 import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequestRefsForUrls } from "./context-pack.js";
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
@@ -68,7 +70,7 @@ import { createTrackerCapabilitySet } from "./tracker-adapters.js";
 import { splitTrackerCapabilities, type AgentLifecycleWriter, type SchedulerSafetyWriter, type TrackerReader } from "./tracker-boundaries.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, LifecycleStatus, ReviewFinding, ReviewRunnerFailure, ReviewStatus, ReviewTargetMode, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
-export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: TrackerReader; schedulerSafetyWriter?: SchedulerSafetyWriter; agentLifecycleWriter?: AgentLifecycleWriter; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; }
+export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: TrackerReader; schedulerSafetyWriter?: SchedulerSafetyWriter; agentLifecycleWriter?: AgentLifecycleWriter; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; postValidationExtension?: PostValidationExtension; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
 export interface OrchestratorRunSummary { dispatched: number; retryDispatched: number; candidateDispatched: number; candidates: number; }
 interface RunningEntry { issue: Issue; startedAt: number; runId: string | null; lastCodexEventAt: number | null; abortController: AbortController; promise: Promise<void>; }
@@ -98,11 +100,13 @@ export class Orchestrator {
   private startupPreflight: OrchestratorStartupPreflightResult | null = null;
   private startupSingletonPreflightDone = false;
   private preflightWarningMarker: string | null = null;
+  private postValidationExtension: PostValidationExtension;
   constructor(private readonly options: OrchestratorOptions) {
     this.logger = options.logger ?? new JsonlLogger(resolve(options.repoRoot));
     this.monitorEmitter = createMonitorEmitter({ sink: options.monitorSink ?? new NullMonitorSink(), logger: this.logger });
     this.runArtifacts = new RunArtifactStore(resolve(options.repoRoot));
     this.runtimeState = new RuntimeStateStore(resolve(options.repoRoot));
+    this.postValidationExtension = options.postValidationExtension ?? createReviewFixerCiPostValidationExtension((input) => this.reviewIfNeeded(input.issue, input.workspace, input.state, input.attempt, input.signal, input.runId));
   }
   async reload(): Promise<void> {
     const resolvedEnv = await resolveRepoEnv(resolve(this.options.repoRoot), this.options.env ?? process.env);
@@ -1264,7 +1268,7 @@ export class Orchestrator {
           persistedState = verification.state;
           if (!verification.passed) return;
         }
-        const reviewedState = await this.reviewIfNeeded(issue, workspace, persistedState, attempt, abortController.signal, runId);
+        const reviewedState = await this.postValidationExtension.afterValidation({ issue, workspace, state: persistedState, attempt, signal: abortController.signal, runId });
         await this.markLinearSucceeded(issue, workspace, handoff, reviewedState ?? persistedState ?? undefined);
         await this.writeRunEvent(runId, {
           type: "run_succeeded",

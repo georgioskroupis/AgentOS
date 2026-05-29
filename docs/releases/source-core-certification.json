@@ -183,6 +183,24 @@
       ]
     },
     {
+      "id": "post-validation-noop-boundary",
+      "classification": "source-core",
+      "status": "covered",
+      "summary": "Source-core completion can use the no-op post-validation extension after handoff validation and lifecycle evidence without invoking optional extension work.",
+      "evidence": [
+        {
+          "path": "src/post-validation-extension.ts"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "uses no-op post-validation extension path for source-core runs"
+        }
+      ],
+      "proofCommands": [
+        "npm test -- tests/orchestrator.test.ts -t \"uses no-op post-validation extension path for source-core runs\" --reporter verbose"
+      ]
+    },
+    {
       "id": "context-budget-safety-stop",
       "classification": "source-core",
       "status": "covered",
