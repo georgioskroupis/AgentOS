@@ -58,7 +58,12 @@ function checkArchitectureMapBoundaries() {
     return;
   }
 
-  const classifications = map && typeof map === "object" && !Array.isArray(map) ? map.classifications : null;
+  if (!map || typeof map !== "object" || Array.isArray(map)) {
+    fail(`${mapPath} must be a JSON object`, "Use an object with schemaVersion and classifications.");
+    return;
+  }
+
+  const classifications = map.classifications;
   if (map.schemaVersion !== 1) fail(`${mapPath} has unsupported schemaVersion`, "Set schemaVersion to 1.");
   if (!classifications || typeof classifications !== "object" || Array.isArray(classifications)) {
     fail(`${mapPath} is missing classifications`, "Add classifications.source-core, classifications.extension-interface, and classifications.extension-implementation.");
@@ -77,6 +82,10 @@ function checkArchitectureMapBoundaries() {
         continue;
       }
       const normalized = normalizeRepoPath(path);
+      if (!isRepoRelativePath(normalized)) {
+        fail(`${mapPath} references non-repo-relative module ${path}`, "Use repo-relative module paths inside the repository.");
+        continue;
+      }
       if (moduleClassifications.has(normalized)) {
         fail(`${mapPath} classifies ${normalized} more than once`, "Each module must have exactly one architecture classification.");
       }
@@ -95,6 +104,7 @@ function checkArchitectureMapBoundaries() {
 
   for (const sourceCorePath of classifications["source-core"] ?? []) {
     const normalizedSource = normalizeRepoPath(sourceCorePath);
+    if (!isRepoRelativePath(normalizedSource)) continue;
     if (!normalizedSource.endsWith(".ts")) continue;
     const text = readOptional(normalizedSource);
     if (text == null) continue;
@@ -569,4 +579,8 @@ function escapeRegExp(value) {
 
 function normalizeRepoPath(path) {
   return normalize(path).replace(/\\/g, "/");
+}
+
+function isRepoRelativePath(path) {
+  return path !== ".." && !path.startsWith("../") && !path.startsWith("/");
 }

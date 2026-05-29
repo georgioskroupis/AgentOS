@@ -229,6 +229,30 @@ describe("architecture and docs checks", () => {
     });
   });
 
+  it("reports malformed architecture map root values", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-map-root-fail-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(join(repo, "docs", "architecture", "source-module-map.json"), "null\n", "utf8");
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("docs/architecture/source-module-map.json must be a JSON object"),
+      code: 1
+    });
+  });
+
+  it("reports architecture map entries outside the repository", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-map-path-fail-"));
+    await writeArchitectureFixture(repo);
+    const map = JSON.parse(await readFile(join(repo, "docs", "architecture", "source-module-map.json"), "utf8"));
+    map.classifications["source-core"].push("../outside.ts");
+    await writeFile(join(repo, "docs", "architecture", "source-module-map.json"), JSON.stringify(map, null, 2), "utf8");
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("docs/architecture/source-module-map.json references non-repo-relative module ../outside.ts"),
+      code: 1
+    });
+  });
+
   it("allows mapped source-core imports of extension interfaces", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-map-interface-boundary-"));
     await writeArchitectureFixture(repo);
