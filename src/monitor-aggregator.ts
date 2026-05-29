@@ -370,6 +370,7 @@ function compactRateLimit(activity: Extract<MonitorEvent["activity"], { kind: "r
 
 function topTimeSinks(rows: TimingRow[], spans: Map<string, SpanState>, limit: number): TimeSink[] {
   return [...rows]
+    .filter((row) => row.children.length === 0 && row.selfMs > 0)
     .sort((left, right) => {
       if (right.selfMs !== left.selfMs) return right.selfMs - left.selfMs;
       const leftSpan = spans.get(left.id);

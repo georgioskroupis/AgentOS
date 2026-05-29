@@ -40,7 +40,10 @@ describe("in-memory monitor aggregator", () => {
       ["wait", 3000, 3000, 3000],
       ["step", 10000, 10000, 0]
     ]);
-    expect(run?.topTimeSinks.map((sink) => sink.id)).toEqual(["run", "step", "stage", "wait"]);
+    expect(run?.topTimeSinks.map((sink) => [sink.id, sink.selfMs, sink.timeClass])).toEqual([
+      ["step", 10000, "agent"],
+      ["wait", 3000, "external-wait"]
+    ]);
   });
 
   it("keeps finished rows immutable while active rows derive duration from serverNow", () => {
@@ -94,8 +97,31 @@ describe("in-memory monitor aggregator", () => {
       ["cmd-pass", "Command: npm run pass", "pass", 2000, "exit 0"],
       ["cmd-fail", "Command: npm run fail", "failed", 4000, "exit 2"]
     ]);
+    expect(aggregator.snapshot({ serverNow: "2026-05-25T00:00:12.000Z" }).run?.topTimeSinks.map((sink) => sink.id)).toEqual([
+      "cmd-active",
+      "cmd-fail",
+      "cmd-pass"
+    ]);
     expect(JSON.stringify(turn)).not.toContain("stdout");
     expect(JSON.stringify(turn)).not.toContain("stderr");
+  });
+
+  it("suppresses duplicate parent sinks when a child accounts for the same elapsed work", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext(runContext);
+    emitAll(aggregator, [
+      event("parent", "stage_started", "Parent duplicate", "2026-05-25T00:00:00.000Z"),
+      event("child", "step_started", "Actionable child", "2026-05-25T00:00:00.000Z", { parentSpanId: "parent" }),
+      event("child", "step_finished", "Actionable child", "2026-05-25T00:00:10.000Z"),
+      event("parent", "stage_finished", "Parent duplicate", "2026-05-25T00:00:10.000Z")
+    ]);
+
+    const snapshot = aggregator.snapshot({ serverNow: "2026-05-25T00:00:10.000Z", topTimeSinkLimit: 5 });
+    const parent = snapshot.run?.timing[0];
+
+    expect(parent).toMatchObject({ id: "parent", durationMs: 10000, selfMs: 0 });
+    expect(parent?.children[0]).toMatchObject({ id: "child", durationMs: 10000, selfMs: 10000 });
+    expect(snapshot.run?.topTimeSinks.map((sink) => sink.id)).toEqual(["child"]);
   });
 
   it.each(monitorActivityKinds)("shows %s as the last meaningful low-level activity without changing scheduler status", (kind) => {
