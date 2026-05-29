@@ -540,7 +540,18 @@ async function writeArchitectureFixture(repo: string): Promise<void> {
       'import type { IssueTracker } from "./types.js";',
       'export interface TrackerReader { fetchCandidates: IssueTracker["fetchCandidates"]; fetchIssueStates: IssueTracker["fetchIssueStates"]; fetchTerminalIssues?: IssueTracker["fetchTerminalIssues"]; fetchIssueComments?: IssueTracker["fetchIssueComments"]; }',
       'export interface TrackerLifecycleWriter { comment?: IssueTracker["comment"]; upsertComment?: IssueTracker["upsertComment"]; move?: IssueTracker["move"]; }',
-      "export interface TrackerCapabilities extends TrackerReader, TrackerLifecycleWriter {}"
+      "export interface SchedulerSafetyWriter extends TrackerLifecycleWriter {}",
+      "export interface AgentLifecycleWriter extends TrackerLifecycleWriter {}",
+      "export interface TrackerCapabilities extends TrackerReader, TrackerLifecycleWriter {}",
+      "export function splitTrackerCapabilities(tracker: TrackerCapabilities) { return { reader: tracker, schedulerSafetyWriter: tracker, agentLifecycleWriter: tracker }; }"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    join(repo, "src", "linear-planned-issue-types.ts"),
+    [
+      "export interface PlanningIssueWriter { createIssue(input: unknown): Promise<unknown>; createIssueRelation(input: unknown): Promise<void>; }",
+      "export interface LinearAdminClient { listTeams(): Promise<unknown[]>; createProject(name: string, teamId: string): Promise<unknown>; }"
     ].join("\n"),
     "utf8"
   );

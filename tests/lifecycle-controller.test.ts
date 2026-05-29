@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TrackerLifecycleController } from "../src/lifecycle-controller.js";
 import type { LifecycleEvent } from "../src/lifecycle-events.js";
 import type { JsonlLogger } from "../src/logging.js";
-import type { TrackerCapabilities } from "../src/tracker-boundaries.js";
+import { splitTrackerCapabilities, type TrackerCapabilities } from "../src/tracker-boundaries.js";
 import type { AgentOSLogEntry } from "../src/logging.js";
 import type { ServiceConfig } from "../src/types.js";
 import { fakeIssue, fakeServiceConfig } from "./fixtures/agentos-fakes.js";
@@ -250,6 +250,7 @@ function controllerFixture(input: { config?: ServiceConfig; issueState?: string;
     async comment() {},
     ...input.tracker
   };
+  const capabilities = splitTrackerCapabilities(tracker);
   return {
     controller: new TrackerLifecycleController({
       config: input.config ?? fakeServiceConfig({
@@ -258,7 +259,9 @@ function controllerFixture(input: { config?: ServiceConfig; issueState?: string;
           maturityAcknowledgement: "test-only-orchestrator-lifecycle-fixture"
         }
       }),
-      tracker,
+      reader: capabilities.reader,
+      schedulerSafetyWriter: capabilities.schedulerSafetyWriter,
+      agentLifecycleWriter: capabilities.agentLifecycleWriter,
       logger
     }),
     logEntries

@@ -77,6 +77,7 @@ describe("agent lifecycle CLI", () => {
       await chmod(target, 0o755);
       await execOk(target, item.args, {
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        AGENT_OS_SOURCE_REPO: "",
         AGENT_OS_WRAPPER_CAPTURE: capture
       });
     }
@@ -258,6 +259,7 @@ describe("agent lifecycle CLI", () => {
       ],
       {
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        AGENT_OS_SOURCE_REPO: "",
         AGENT_OS_WRAPPER_CAPTURE: capture
       }
     );

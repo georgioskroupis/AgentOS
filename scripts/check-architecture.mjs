@@ -181,9 +181,22 @@ function checkLifecycleBoundaryContracts() {
   if (trackerBoundaries == null) {
     fail("src/tracker-boundaries.ts tracker boundary contract file is missing", "Add src/tracker-boundaries.ts before lifecycle extraction.");
   } else {
-    for (const token of ["export interface TrackerReader", "export interface TrackerLifecycleWriter", "export interface TrackerCapabilities"]) {
+    for (const token of [
+      "export interface TrackerReader",
+      "export interface TrackerLifecycleWriter",
+      "export interface SchedulerSafetyWriter",
+      "export interface AgentLifecycleWriter",
+      "export interface TrackerCapabilities",
+      "export function splitTrackerCapabilities"
+    ]) {
       if (!trackerBoundaries.includes(token)) {
         fail("src/tracker-boundaries.ts is missing tracker boundary capability types", `Add ${token} so tracker reads and lifecycle writes are separated at the type boundary.`);
+      }
+    }
+    const plannedIssueTypes = readOptional("src/linear-planned-issue-types.ts");
+    for (const token of ["export interface PlanningIssueWriter", "export interface LinearAdminClient"]) {
+      if (!plannedIssueTypes?.includes(token)) {
+        fail("src/linear-planned-issue-types.ts is missing Linear capability type", `Add ${token} so planning/admin writes stay outside the scheduler reader boundary.`);
       }
     }
     if (!/export\s+interface\s+TrackerCapabilities\s+extends\s+TrackerReader\s*,\s*TrackerLifecycleWriter/.test(trackerBoundaries)) {

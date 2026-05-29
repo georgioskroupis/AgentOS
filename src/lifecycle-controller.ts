@@ -5,14 +5,16 @@ import type { LifecycleController, LifecycleControllerRecordResult, LifecycleEve
 import type { JsonlLogger } from "./logging.js";
 import { reviewStateBlocksTrackerUpdate } from "./orchestrator-tracker-guard.js";
 import { redactText } from "./redaction.js";
-import type { TrackerCapabilities } from "./tracker-boundaries.js";
+import type { AgentLifecycleWriter, SchedulerSafetyWriter, TrackerReader } from "./tracker-boundaries.js";
 import type { Issue, ServiceConfig } from "./types.js";
 
 export type { LifecycleTrackerUpdateResult } from "./lifecycle-events.js";
 
 export interface TrackerLifecycleControllerOptions {
   config: ServiceConfig;
-  tracker: TrackerCapabilities;
+  reader: TrackerReader;
+  schedulerSafetyWriter: SchedulerSafetyWriter;
+  agentLifecycleWriter?: AgentLifecycleWriter;
   logger: JsonlLogger;
 }
 
@@ -31,14 +33,15 @@ export class TrackerLifecycleController implements LifecycleController {
 
   private async moveIssue(event: LifecycleEvent): Promise<LifecycleTrackerUpdateResult> {
     const stateName = event.requestedState ?? null;
-    if (!stateName || !this.options.tracker.move || !mayWriteLifecycle(event, orchestratorMayMoveIssue(this.options.config))) {
+    const writer = this.writerFor(event);
+    if (!stateName || !writer.move || !mayWriteLifecycle(event, orchestratorMayMoveIssue(this.options.config))) {
       return this.withSchedulerSafetyLog(event, "move", "unsupported");
     }
     const issue = issueFromLifecycleEvent(event);
     if (
       await reviewStateBlocksTrackerUpdate({
         config: this.options.config,
-        tracker: this.options.tracker,
+        tracker: this.options.reader,
         logger: this.options.logger,
         issue,
         operation: `move to ${stateName}`
@@ -47,7 +50,7 @@ export class TrackerLifecycleController implements LifecycleController {
       return this.withSchedulerSafetyLog(event, "move", "blocked");
     }
     try {
-      await this.options.tracker.move(issue.identifier, stateName);
+      await writer.move(issue.identifier, stateName);
       return this.withSchedulerSafetyLog(event, "move", "applied");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -65,12 +68,13 @@ export class TrackerLifecycleController implements LifecycleController {
     const kind: LifecycleCommentKind = event.commentKind ?? "bookkeeping";
     if (isSchedulerSafetyWrite(event) && kind === "substantive") return this.withSchedulerSafetyLog(event, "comment", "unsupported");
     if (!mayWriteLifecycle(event, orchestratorMayComment(this.options.config, kind))) return this.withSchedulerSafetyLog(event, "comment", "unsupported");
-    if (!this.options.tracker.comment && !this.options.tracker.upsertComment) return this.withSchedulerSafetyLog(event, "comment", "unsupported");
+    const writer = this.writerFor(event);
+    if (!writer.comment && !writer.upsertComment) return this.withSchedulerSafetyLog(event, "comment", "unsupported");
     const issue = issueFromLifecycleEvent(event);
     if (
       await reviewStateBlocksTrackerUpdate({
         config: this.options.config,
-        tracker: this.options.tracker,
+        tracker: this.options.reader,
         logger: this.options.logger,
         issue,
         operation: "comment"
@@ -80,9 +84,9 @@ export class TrackerLifecycleController implements LifecycleController {
     }
     const safeBody = redactText(event.commentKey ? `${lifecycleCommentMarker(event.commentKey, issue.identifier)}\n${event.commentBody ?? ""}` : event.commentBody ?? "");
     const operation =
-      event.commentKey && this.options.tracker.upsertComment
-        ? this.options.tracker.upsertComment(issue.identifier, safeBody, lifecycleCommentKey(event.commentKey, issue.identifier))
-        : this.options.tracker.comment!(issue.identifier, safeBody);
+      event.commentKey && writer.upsertComment
+        ? writer.upsertComment(issue.identifier, safeBody, lifecycleCommentKey(event.commentKey, issue.identifier))
+        : writer.comment!(issue.identifier, safeBody);
     try {
       await operation;
       return this.withSchedulerSafetyLog(event, "comment", "applied");
@@ -108,6 +112,10 @@ export class TrackerLifecycleController implements LifecycleController {
       payload: { reason: event.safetyReason, operation, result, requestedState: event.requestedState, commentKey: event.commentKey }
     });
     return result;
+  }
+
+  private writerFor(event: LifecycleEvent): SchedulerSafetyWriter | AgentLifecycleWriter {
+    return isSchedulerSafetyWrite(event) ? this.options.schedulerSafetyWriter : this.options.agentLifecycleWriter ?? {};
   }
 }
 

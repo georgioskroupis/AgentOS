@@ -1,4 +1,5 @@
 import { LinearClient } from "./linear.js";
+import { splitTrackerCapabilities, type SplitTrackerCapabilities } from "./tracker-boundaries.js";
 import type { IssueTracker, ServiceConfig } from "./types.js";
 
 export type TrackerErrorCategory =
@@ -66,6 +67,10 @@ export function createIssueTracker(config: ServiceConfig): IssueTracker {
   const tracker = trackerAdapterForKind(config.tracker.kind).create(config);
   assertIssueTracker(tracker, config.tracker.kind);
   return tracker;
+}
+
+export function createTrackerCapabilitySet(config: ServiceConfig): SplitTrackerCapabilities {
+  return splitTrackerCapabilities(createIssueTracker(config));
 }
 
 export function assertIssueTracker(value: unknown, kind = "unknown"): asserts value is IssueTracker {

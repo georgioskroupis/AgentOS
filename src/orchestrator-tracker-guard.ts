@@ -1,10 +1,11 @@
 import type { JsonlLogger } from "./logging.js";
 import { isDependencyDispatchStop } from "./run-errors.js";
-import type { Issue, IssueTracker, ServiceConfig } from "./types.js";
+import type { TrackerReader } from "./tracker-boundaries.js";
+import type { Issue, ServiceConfig } from "./types.js";
 
 export type TrackerUpdateResult = "applied" | "unsupported" | "failed" | "blocked";
 
-export async function trackerDispatchStop(config: ServiceConfig, tracker: IssueTracker, issue: Issue): Promise<string | null> {
+export async function trackerDispatchStop(config: ServiceConfig, tracker: TrackerReader, issue: Issue): Promise<string | null> {
   const states = await tracker.fetchIssueStates([issue.id]).catch(() => null);
   const current = states?.get(issue.id);
   if (current === null) return "issue_no_longer_exists";
@@ -35,7 +36,7 @@ export function isPreRunDispatchSkipStop(config: ServiceConfig, reason: string):
 
 export async function reviewStateBlocksTrackerUpdate(input: {
   config: ServiceConfig;
-  tracker: IssueTracker;
+  tracker: TrackerReader;
   logger: JsonlLogger;
   issue: Issue;
   operation: string;
