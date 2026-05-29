@@ -191,7 +191,7 @@ export class InMemoryMonitorAggregator implements MonitorSink {
       }
 
       if (isFinishKind(event.kind)) {
-        const span = spans.get(event.spanId);
+        const span = spans.get(event.spanId) ?? correlatedOpenToolSpan(spans, event, eventMs);
         if (span && span.endedAt == null) closeSpan(span, event);
       }
 
@@ -386,6 +386,27 @@ function topTimeSinks(rows: TimingRow[], spans: Map<string, SpanState>, limit: n
       ...(row.model ? { model: row.model } : {}),
       ...(row.result ? { result: row.result } : {})
     }));
+}
+
+function correlatedOpenToolSpan(spans: Map<string, SpanState>, event: MonitorEvent, eventMs: number): SpanState | undefined {
+  if (event.kind !== "step_finished") return undefined;
+  if ((event.timeClass ?? defaultTimeClass(event.kind)) !== "tool") return undefined;
+  if (!event.parentSpanId) return undefined;
+  const candidates = [...spans.values()]
+    .filter(
+      (span) =>
+        span.endedAt == null &&
+        span.kind === "step_started" &&
+        span.timeClass === "tool" &&
+        span.parentSpanId === event.parentSpanId &&
+        span.label === event.label &&
+        span.startedMs <= eventMs
+    )
+    .sort((left, right) => {
+      const timeDelta = right.startedMs - left.startedMs;
+      return timeDelta === 0 ? right.order - left.order : timeDelta;
+    });
+  return candidates[0];
 }
 
 function flattenRows(rows: TimingRow[]): TimingRow[] {
