@@ -118,7 +118,9 @@ describe("in-memory monitor aggregator", () => {
       label: activityForKind(kind).label,
       ageMs: 7000,
       observedAt: "2026-05-25T00:00:03.000Z",
-      ...(kind === "file_change" ? { fileActivity: { changedFileCount: 2, lastFile: "src/monitor-aggregator.ts", category: "source" } } : {})
+      ...(kind === "file_change" ? { fileActivity: { changedFileCount: 2, lastFile: "src/monitor-aggregator.ts", category: "source" } } : {}),
+      ...(kind === "token_usage" ? { tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } } : {}),
+      ...(kind === "rate_limit" ? { rateLimit: { pressure: "medium", resetAt: "2026-05-25T00:05:00.000Z" } } : {})
     });
   });
 

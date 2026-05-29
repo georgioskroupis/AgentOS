@@ -550,10 +550,12 @@
           const meaningfulAge =
             meaningfulActivity?.ageMs != null ? tickingDuration(meaningfulActivity.ageMs, snapshot, serverNowMs) : null;
           const fileActivity = fileActivityMetrics(meaningfulActivity);
+          const tokenActivity = tokenActivityMetrics(meaningfulActivity);
+          const rateLimitActivity = rateLimitActivityMetrics(meaningfulActivity);
           return section(
             sectionNames[2],
             "current-activity",
-            `<div class="activity-grid">${metric("Stage", activity?.stage ?? "Idle")}${metric("Step", activity?.step ?? "None")}${metric("Step elapsed", formatSeconds(stepElapsed), ` data-ms="${stepElapsed}"`)}${metric("Loop", activity?.loop ?? "None")}${metric("Loop elapsed", loopElapsed == null ? "None" : formatSeconds(loopElapsed), loopElapsed == null ? "" : ` data-ms="${loopElapsed}"`)}${metric("Last event age", activity ? formatSeconds(activity.lastEventAgeMs) : "None")}${metric("Last low-level activity", meaningfulActivity ? activityKindLabel(meaningfulActivity.kind) : "Unavailable")}${metric("Low-level activity age", meaningfulAge == null ? "Unavailable" : formatSeconds(meaningfulAge), meaningfulAge == null ? "" : ` data-ms="${meaningfulAge}"`)}${fileActivity}</div>`
+            `<div class="activity-grid">${metric("Stage", activity?.stage ?? "Idle")}${metric("Step", activity?.step ?? "None")}${metric("Step elapsed", formatSeconds(stepElapsed), ` data-ms="${stepElapsed}"`)}${metric("Loop", activity?.loop ?? "None")}${metric("Loop elapsed", loopElapsed == null ? "None" : formatSeconds(loopElapsed), loopElapsed == null ? "" : ` data-ms="${loopElapsed}"`)}${metric("Last event age", activity ? formatSeconds(activity.lastEventAgeMs) : "None")}${metric("Last low-level activity", meaningfulActivity ? activityKindLabel(meaningfulActivity.kind) : "Unavailable")}${metric("Low-level activity age", meaningfulAge == null ? "Unavailable" : formatSeconds(meaningfulAge), meaningfulAge == null ? "" : ` data-ms="${meaningfulAge}"`)}${fileActivity}${tokenActivity}${rateLimitActivity}</div>`
           );
         }
 
@@ -564,6 +566,24 @@
           const lastFile = typeof summary.lastFile === "string" && summary.lastFile.trim() ? summary.lastFile : "Unavailable";
           const category = ["source", "test", "docs", "config", "unknown"].includes(summary.category) ? summary.category : "unknown";
           return `${metric("Changed files", count)}${metric("Last file", lastFile)}${metric("File category", category)}`;
+        }
+
+        function tokenActivityMetrics(activity) {
+          if (!activity || activity.kind !== "token_usage") return "";
+          const usage = activity.tokenUsage ?? {};
+          return `${metric("Thread tokens", tokenValue(usage.totalTokens))}${metric("Input tokens", tokenValue(usage.inputTokens))}${metric("Output tokens", tokenValue(usage.outputTokens))}`;
+        }
+
+        function tokenValue(value) {
+          return Number.isInteger(value) && value >= 0 ? String(value) : "Unavailable";
+        }
+
+        function rateLimitActivityMetrics(activity) {
+          if (!activity || activity.kind !== "rate_limit") return "";
+          const rateLimit = activity.rateLimit ?? {};
+          const pressure = ["none", "low", "medium", "high", "blocked"].includes(rateLimit.pressure) ? rateLimit.pressure : "Unavailable";
+          const resetAt = typeof rateLimit.resetAt === "string" && rateLimit.resetAt.trim() ? rateLimit.resetAt : "Unavailable";
+          return `${metric("Rate-limit pressure", pressure)}${metric("Rate-limit reset", resetAt)}`;
         }
 
         function activityKindLabel(kind) {

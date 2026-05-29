@@ -345,10 +345,27 @@ function meaningfulActivityForActiveTurn(orderedEvents: StoredMonitorEvent[], ac
               category: event.activity.category ?? "unknown"
             }
           }
-        : {})
+        : {}),
+      ...(event.activity.kind === "token_usage" ? { tokenUsage: compactTokenUsage(event.activity) } : {}),
+      ...(event.activity.kind === "rate_limit" ? { rateLimit: compactRateLimit(event.activity) } : {})
     };
   }
   return undefined;
+}
+
+function compactTokenUsage(activity: Extract<MonitorEvent["activity"], { kind: "token_usage" }>): MeaningfulActivity["tokenUsage"] {
+  return {
+    ...(activity.inputTokens != null ? { inputTokens: activity.inputTokens } : {}),
+    ...(activity.outputTokens != null ? { outputTokens: activity.outputTokens } : {}),
+    ...(activity.totalTokens != null ? { totalTokens: activity.totalTokens } : {})
+  };
+}
+
+function compactRateLimit(activity: Extract<MonitorEvent["activity"], { kind: "rate_limit" }>): NonNullable<MeaningfulActivity["rateLimit"]> {
+  return {
+    pressure: activity.pressure,
+    ...(activity.resetAt ? { resetAt: activity.resetAt } : {})
+  };
 }
 
 function topTimeSinks(rows: TimingRow[], spans: Map<string, SpanState>, limit: number): TimeSink[] {

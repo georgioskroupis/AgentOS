@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { absoluteThreadTokenTotalsFromParams } from "./monitor-accounting.js";
 import { buildMonitorActivity, type MonitorActivity } from "./monitor-contracts.js";
 import type { RunPhaseTiming } from "./runs.js";
 import type { AgentEvent, AgentRunResult, Issue, ModelRoutingRole } from "./types.js";
@@ -331,17 +332,7 @@ function bytesObserved(event: AgentEvent): number | undefined {
 
 function runnerTokenUsage(event: AgentEvent): { inputTokens?: number; outputTokens?: number; totalTokens?: number } | null {
   const params = recordValue(recordValue(event.payload)?.params);
-  const usage = recordValue(recordValue(params?.tokenUsage)?.total) ?? recordValue(params?.tokenUsage) ?? recordValue(params?.usage);
-  if (!usage) return null;
-  const inputTokens = integerValue(usage.inputTokens ?? usage.input_tokens ?? usage.input);
-  const outputTokens = integerValue(usage.outputTokens ?? usage.output_tokens ?? usage.output);
-  const totalTokens = integerValue(usage.totalTokens ?? usage.total_tokens ?? usage.total);
-  if (inputTokens == null && outputTokens == null && totalTokens == null) return null;
-  return {
-    ...(inputTokens != null ? { inputTokens } : {}),
-    ...(outputTokens != null ? { outputTokens } : {}),
-    ...(totalTokens != null ? { totalTokens } : {})
-  };
+  return absoluteThreadTokenTotalsFromParams(params);
 }
 
 function runnerRateLimit(event: AgentEvent): { pressure: "none" | "low" | "medium" | "high" | "blocked"; resetAt?: string } {
