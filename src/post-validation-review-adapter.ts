@@ -10,4 +10,3 @@ export function createReviewFixerCiPostValidationExtension(
 }
 
 type IssueStateOrNull = Awaited<ReturnType<PostValidationExtension["afterValidation"]>>;
-

@@ -20,4 +20,3 @@ export const noopPostValidationExtension: PostValidationExtension = {
     return input.state;
   }
 };
-
