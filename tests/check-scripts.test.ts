@@ -209,6 +209,68 @@ describe("architecture and docs checks", () => {
     });
   });
 
+  it("reports mapped source-core imports of extension implementations", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-map-implementation-boundary-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(
+      join(repo, "src", "orchestrator.ts"),
+      [
+        'import { runReview } from "./review.js";',
+        "export class Orchestrator {",
+        "  async run() { return runReview(); }",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("src/orchestrator.ts imports extension implementation src/review.ts"),
+      code: 1
+    });
+  });
+
+  it("reports malformed architecture map root values", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-map-root-fail-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(join(repo, "docs", "architecture", "source-module-map.json"), "null\n", "utf8");
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("docs/architecture/source-module-map.json must be a JSON object"),
+      code: 1
+    });
+  });
+
+  it("reports architecture map entries outside the repository", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-map-path-fail-"));
+    await writeArchitectureFixture(repo);
+    const map = JSON.parse(await readFile(join(repo, "docs", "architecture", "source-module-map.json"), "utf8"));
+    map.classifications["source-core"].push("../outside.ts");
+    await writeFile(join(repo, "docs", "architecture", "source-module-map.json"), JSON.stringify(map, null, 2), "utf8");
+
+    await expect(execNode(architectureScript, repo)).rejects.toMatchObject({
+      stderr: expect.stringContaining("docs/architecture/source-module-map.json references non-repo-relative module ../outside.ts"),
+      code: 1
+    });
+  });
+
+  it("allows mapped source-core imports of extension interfaces", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-architecture-map-interface-boundary-"));
+    await writeArchitectureFixture(repo);
+    await writeFile(
+      join(repo, "src", "orchestrator.ts"),
+      [
+        'import type { ExtensionBoundary } from "./extension-interface.js";',
+        "export class Orchestrator {",
+        "  boundary?: ExtensionBoundary;",
+        "  async run() { return true; }",
+        "}"
+      ].join("\n"),
+      "utf8"
+    );
+
+    await expect(execNode(architectureScript, repo)).resolves.toMatchObject({ stdout: expect.stringContaining("Architecture check passed.") });
+  });
+
   it("accepts a minimal docs fixture", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-docs-pass-"));
     await writeDocsFixture(repo);
@@ -389,7 +451,7 @@ describe("architecture and docs checks", () => {
 });
 
 async function writeArchitectureFixture(repo: string): Promise<void> {
-  for (const dir of ["src/runner", "templates/base-harness/.agents/skills/implement-feature", "skills/implement-feature"]) {
+  for (const dir of ["docs/architecture", "src/runner", "templates/base-harness/.agents/skills/implement-feature", "skills/implement-feature"]) {
     await mkdir(join(repo, dir), { recursive: true });
   }
   const workflow = [
@@ -419,6 +481,42 @@ async function writeArchitectureFixture(repo: string): Promise<void> {
   await writeFile(join(repo, "README.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
   await writeFile(join(repo, "skills/implement-feature/SKILL.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
   await writeFile(join(repo, "templates/base-harness/.agents/skills/implement-feature/SKILL.md"), "Issues are the unit of work. PRs are optional outputs.\n", "utf8");
+  await writeFile(
+    join(repo, "docs/architecture/source-module-map.json"),
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        classifications: {
+          "source-core": [
+            "src/types.ts",
+            "src/tracker-boundaries.ts",
+            "src/lifecycle-events.ts",
+            "src/lifecycle-controller.ts",
+            "src/orchestrator.ts",
+            "src/runner/app-server.ts",
+            "src/fs-utils.ts",
+            "src/github.ts",
+            "src/linear.ts",
+            "src/status.ts",
+            "src/cli.ts"
+          ],
+          "extension-interface": ["src/extension-interface.ts"],
+          "extension-implementation": ["src/review.ts"]
+        },
+        rules: [
+          {
+            id: "source-core-no-extension-implementation-imports",
+            from: "source-core",
+            allowedTo: ["source-core", "extension-interface"],
+            disallowedTo: ["extension-implementation"]
+          }
+        ]
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
   await writeFile(
     join(repo, "src", "types.ts"),
     [
@@ -499,6 +597,8 @@ async function writeArchitectureFixture(repo: string): Promise<void> {
   await writeFile(join(repo, "src", "github.ts"), "export const github = true;\n", "utf8");
   await writeFile(join(repo, "src", "linear.ts"), "export const linear = true;\n", "utf8");
   await writeFile(join(repo, "src", "status.ts"), "export const status = true;\n", "utf8");
+  await writeFile(join(repo, "src", "extension-interface.ts"), "export interface ExtensionBoundary { enabled: boolean }\n", "utf8");
+  await writeFile(join(repo, "src", "review.ts"), "export function runReview() { return true; }\n", "utf8");
   await writeFile(join(repo, "src", "cli.ts"), 'const program = { command() { return this; } };\nprogram.command("init");\nprogram.command("status");\n', "utf8");
 }
 

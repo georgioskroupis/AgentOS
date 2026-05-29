@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "classifications": {
+    "source-core": [
+      "src/agent-lifecycle.ts",
+      "src/agent-owned-lifecycle-evidence.ts",
+      "src/agentOwnedEvidenceTypes.ts",
+      "src/cycle-time.ts",
+      "src/defaults.ts",
+      "src/env.ts",
+      "src/fs-utils.ts",
+      "src/github-repository.ts",
+      "src/issue-state.ts",
+      "src/lifecycle-comment-markers.ts",
+      "src/lifecycle-controller.ts",
+      "src/lifecycle-events.ts",
+      "src/lifecycle.ts",
+      "src/linear.ts",
+      "src/logging.ts",
+      "src/monitor-contracts.ts",
+      "src/monitor-sink.ts",
+      "src/orchestrator-agent-owned-evidence.ts",
+      "src/orchestrator-tracker-guard.ts",
+      "src/orchestrator-validation.ts",
+      "src/output-capture.ts",
+      "src/recovery.ts",
+      "src/redaction.ts",
+      "src/review-finding-hash.ts",
+      "src/run-artifact-names.ts",
+      "src/run-capture-artifacts.ts",
+      "src/run-errors.ts",
+      "src/runs.ts",
+      "src/runtime-state.ts",
+      "src/tracker-boundaries.ts",
+      "src/tracker-normalization.ts",
+      "src/types.ts",
+      "src/validation-profile.ts",
+      "src/validation.ts",
+      "src/workspace.ts"
+    ],
+    "extension-interface": [
+      "src/context-budget.ts",
+      "src/github-context.ts",
+      "src/linear-planned-issue-types.ts",
+      "src/model-routing.ts",
+      "src/phase-timing.ts",
+      "src/prompt-context.ts",
+      "src/runner/command-stop.ts",
+      "src/runner/stderr-classification.ts",
+      "src/status-validation.ts",
+      "src/trust.ts"
+    ],
+    "extension-implementation": [
+      "src/branch-update.ts",
+      "src/ci-diagnostics.ts",
+      "src/ci-retry.ts",
+      "src/http-server-cli.ts",
+      "src/http-server.ts",
+      "src/landing-policy.ts",
+      "src/landing-preflight.ts",
+      "src/linear-planned-issues.ts",
+      "src/maintenance.ts",
+      "src/monitor-aggregator.ts",
+      "src/monitor-extension-contracts.ts",
+      "src/monitor-generated-text.ts",
+      "src/monitor-launcher.ts",
+      "src/monitor-macos-app.ts",
+      "src/orchestrator-branch-update.ts",
+      "src/orchestrator-ci-retry.ts",
+      "src/orchestrator-human-decisions.ts",
+      "src/orchestrator-landing-preflight.ts",
+      "src/orchestrator-merge-cleanup.ts",
+      "src/orchestrator-merge-recovery.ts",
+      "src/orchestrator-planning-guardrail.ts",
+      "src/orchestrator-pr-ready.ts",
+      "src/review-budget-orchestration.ts",
+      "src/review-budget.ts",
+      "src/review.ts",
+      "src/reviewer-runner.ts",
+      "src/reviewer-scheduler.ts",
+      "src/runner/client-tools.ts",
+      "src/scope-report-scoring.ts",
+      "src/tracker-adapters.ts"
+    ],
+    "mixed-boundary-host": [
+      "src/cli-linear-helpers.ts",
+      "src/cli.ts",
+      "src/context-pack.ts",
+      "src/index.ts",
+      "src/orchestrator.ts",
+      "src/runner/app-server.ts",
+      "src/status.ts",
+      "src/workflow.ts"
+    ],
+    "dogfood-only": [
+      "src/registry-orchestrator.ts",
+      "src/registry.ts"
+    ],
+    "harness-extension": [
+      "scripts/agent-create-pr.sh",
+      "scripts/agent-linear-plan-issues.sh"
+    ]
+  },
+  "rules": [
+    {
+      "id": "source-core-no-extension-implementation-imports",
+      "from": "source-core",
+      "allowedTo": ["source-core", "extension-interface"],
+      "disallowedTo": ["extension-implementation"]
+    }
+  ]
+}

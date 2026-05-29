@@ -3,6 +3,10 @@
 This contract defines the smallest AgentOS behavior set that counts as
 source-faithful core. It is the reference for later architecture checks and
 module mapping. A module can ship in this repository without being core.
+The machine-readable module map lives in
+`docs/architecture/source-module-map.json`; `npm run check:architecture`
+uses it to reject source-core imports of concrete extension implementations
+while allowing imports of explicit extension interfaces.
 
 ## Classifications
 
