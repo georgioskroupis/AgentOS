@@ -24,6 +24,9 @@ For code-changing tasks:
 4. Otherwise make the smallest coherent change.
 5. Add or update validation where useful.
 6. Run the narrowest relevant check, then `npm run agent-check` when present.
+   When wrapping `npm run agent-check` or focused tests with timestamp capture,
+   use portable shell variable names such as `exit_code`; avoid zsh special
+   names like `status`, which is read-only in zsh.
 7. Update docs if behavior, workflow, or public commands changed.
 8. When a PR is needed, use `scripts/agent-create-pr.sh` or explicit
    non-interactive `gh pr create` arguments instead of GitHub app/MCP PR tools.

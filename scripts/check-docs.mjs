@@ -39,6 +39,7 @@ for (const path of requiredDocs) {
 checkDocsIndexCoverage();
 checkMarkdownLinks();
 checkCommandReferences();
+checkAgentValidationWrapperGuidance();
 checkSourceAlignmentCurrency();
 checkNoPublicLegacyLifecycleModes();
 checkQualityScoreRubric();
@@ -108,6 +109,16 @@ function checkCommandReferences() {
       if (!commands.includes(command)) {
         fail(`${path} references unknown CLI command agent-os ${command}`, "Update the command reference to match src/cli.ts or add the missing command intentionally.");
       }
+    }
+  }
+}
+
+function checkAgentValidationWrapperGuidance() {
+  const text = read("AGENTS.md");
+  if (text == null) return;
+  for (const snippet of ["npm run agent-check", "focused tests", "timestamp", "exit_code", "status", "zsh"]) {
+    if (!text.includes(snippet)) {
+      fail(`AGENTS.md missing validation wrapper guidance for ${snippet}`, "Document zsh-safe validation wrappers using exit_code instead of the reserved status parameter.");
     }
   }
 }
