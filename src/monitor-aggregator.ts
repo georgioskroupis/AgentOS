@@ -336,7 +336,16 @@ function meaningfulActivityForActiveTurn(orderedEvents: StoredMonitorEvent[], ac
       kind: event.activity.kind,
       label: event.activity.label,
       ageMs: Math.max(0, serverNowMs - timestampMs(event.timestamp)),
-      observedAt: event.timestamp
+      observedAt: event.timestamp,
+      ...(event.activity.kind === "file_change"
+        ? {
+            fileActivity: {
+              ...(event.activity.changedFileCount != null ? { changedFileCount: event.activity.changedFileCount } : {}),
+              ...(event.activity.lastFile ? { lastFile: event.activity.lastFile } : {}),
+              category: event.activity.category ?? "unknown"
+            }
+          }
+        : {})
     };
   }
   return undefined;

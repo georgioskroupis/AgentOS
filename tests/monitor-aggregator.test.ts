@@ -117,8 +117,45 @@ describe("in-memory monitor aggregator", () => {
       kind,
       label: activityForKind(kind).label,
       ageMs: 7000,
-      observedAt: "2026-05-25T00:00:03.000Z"
+      observedAt: "2026-05-25T00:00:03.000Z",
+      ...(kind === "file_change" ? { fileActivity: { changedFileCount: 2, lastFile: "src/monitor-aggregator.ts", category: "source" } } : {})
     });
+  });
+
+  it("surfaces only compact file activity summary in the current activity snapshot", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext(runContext);
+    emitAll(aggregator, [
+      event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z"),
+      event("turn", "step_started", "implementation turn 1", "2026-05-25T00:00:01.000Z", { parentSpanId: "run" }),
+      event("turn", "activity_observed", "File activity", "2026-05-25T00:00:03.000Z", {
+        parentSpanId: "run",
+        activity: buildMonitorActivity({
+          kind: "file_change",
+          label: "File-change metadata observed",
+          changedFileCount: 3,
+          lastFile: `${process.cwd()}/tests/monitor-aggregator.test.ts`,
+          diff: "+raw diff should stay out",
+          patch: "-raw patch should stay out"
+        })
+      })
+    ]);
+
+    const activity = aggregator.snapshot({ serverNow: "2026-05-25T00:00:10.000Z" }).run?.currentActivity.lastMeaningfulActivity;
+
+    expect(activity).toEqual({
+      kind: "file_change",
+      label: "File-change metadata observed",
+      ageMs: 7000,
+      observedAt: "2026-05-25T00:00:03.000Z",
+      fileActivity: {
+        changedFileCount: 3,
+        lastFile: "tests/monitor-aggregator.test.ts",
+        category: "test"
+      }
+    });
+    expect(JSON.stringify(activity)).not.toContain("raw diff");
+    expect(JSON.stringify(activity)).not.toContain("raw patch");
   });
 
   it("keeps missing low-level activity unavailable instead of treating freshness as a stale failure", () => {

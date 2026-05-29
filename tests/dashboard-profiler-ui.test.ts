@@ -94,6 +94,71 @@ describe("dashboard live profiler UI", () => {
     expect(unavailableHtml).toContain("Unavailable");
   });
 
+  it("renders compact file activity summary without exposing diff text", () => {
+    const { profiler } = loadProfiler();
+    const snapshot = activeSnapshot();
+    const run = snapshot.run as Record<string, unknown>;
+    run.currentActivity = {
+      stage: "implementation",
+      step: "edit monitor",
+      stepElapsedMs: 4000,
+      lastEventAgeMs: 1000,
+      lastMeaningfulActivity: {
+        kind: "file_change",
+        label: "File-change metadata observed",
+        ageMs: 3000,
+        observedAt: "2026-05-26T00:00:07.000Z",
+        fileActivity: {
+          changedFileCount: 2,
+          lastFile: "src/monitor-contracts.ts",
+          category: "source",
+          diff: "+raw diff should not render"
+        }
+      }
+    };
+
+    const html = profiler.renderSnapshot(snapshot, { serverNow: "2026-05-26T00:00:12.000Z" });
+
+    expect(html).toContain("File change");
+    expect(html).toContain("Changed files");
+    expect(html).toContain(">2<");
+    expect(html).toContain("Last file");
+    expect(html).toContain("src/monitor-contracts.ts");
+    expect(html).toContain("File category");
+    expect(html).toContain(">source<");
+    expect(html).not.toContain("raw diff");
+  });
+
+  it("renders missing file activity fields compactly", () => {
+    const { profiler } = loadProfiler();
+    const snapshot = activeSnapshot();
+    const run = snapshot.run as Record<string, unknown>;
+    run.currentActivity = {
+      stage: "implementation",
+      step: "edit monitor",
+      stepElapsedMs: 4000,
+      lastEventAgeMs: 1000,
+      lastMeaningfulActivity: {
+        kind: "file_change",
+        label: "File-change metadata observed",
+        ageMs: 3000,
+        observedAt: "2026-05-26T00:00:07.000Z",
+        fileActivity: {
+          category: "unknown"
+        }
+      }
+    };
+
+    const html = profiler.renderSnapshot(snapshot, { serverNow: "2026-05-26T00:00:12.000Z" });
+
+    expect(html).toContain("Changed files");
+    expect(html).toContain("Unknown");
+    expect(html).toContain("Last file");
+    expect(html).toContain("Unavailable");
+    expect(html).toContain("File category");
+    expect(html).toContain(">unknown<");
+  });
+
   it("renders required Human Action details only when action is required", () => {
     const { profiler } = loadProfiler();
     const html = profiler.renderSnapshot(humanActionSnapshot(), { serverNow: "2026-05-26T00:00:08.000Z" });

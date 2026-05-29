@@ -1,3 +1,6 @@
+import { relative, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
+
 export type MonitorTimeClass = "agent" | "validation" | "scheduler" | "external-wait" | "human-wait" | "tool";
 export type MonitorStatus = "active" | "done" | "failed" | "waiting" | "pass" | "skipped";
 export type MonitorValidationStatus = "pass" | "fail" | "skipped";
@@ -33,7 +36,7 @@ export type MonitorActivity =
       label: string;
       changedFileCount?: number;
       lastFile?: string;
-      category?: "source" | "test" | "docs" | "config" | "unknown";
+      category: MonitorFileActivityCategory;
     }
   | {
       kind: "token_usage";
@@ -55,6 +58,14 @@ export type MonitorActivity =
 
 export type MonitorActivityInput = Record<string, unknown> & {
   kind: MonitorActivityKind;
+};
+
+export type MonitorFileActivityCategory = "source" | "test" | "docs" | "config" | "unknown";
+
+export type MonitorFileActivitySummary = {
+  changedFileCount?: number;
+  lastFile?: string;
+  category: MonitorFileActivityCategory;
 };
 
 export type MonitorSink = {
@@ -121,12 +132,15 @@ export function buildMonitorActivity(input: MonitorActivityInput): MonitorActivi
     };
   }
   if (input.kind === "file_change") {
+    const changedFileCount = nonNegativeInteger(input.changedFileCount ?? input.fileCount);
+    const lastFile = repoRelativeActivityPath(input.lastFile ?? input.path);
+    const category = monitorFileCategory(input.category) ?? categoryForActivityPath(lastFile);
     return {
       kind: input.kind,
       label,
-      ...(nonNegativeInteger(input.changedFileCount ?? input.fileCount) != null ? { changedFileCount: nonNegativeInteger(input.changedFileCount ?? input.fileCount)! } : {}),
-      ...(repoRelativeActivityPath(input.lastFile ?? input.path) ? { lastFile: repoRelativeActivityPath(input.lastFile ?? input.path) } : {}),
-      ...(monitorFileCategory(input.category) ? { category: monitorFileCategory(input.category) } : {})
+      ...(changedFileCount != null ? { changedFileCount } : {}),
+      ...(lastFile ? { lastFile } : {}),
+      category
     };
   }
   if (input.kind === "token_usage") {
@@ -180,7 +194,7 @@ function monitorActivityStream(value: unknown): "stdout" | "stderr" | undefined 
   return value === "stdout" || value === "stderr" ? value : undefined;
 }
 
-function monitorFileCategory(value: unknown): "source" | "test" | "docs" | "config" | "unknown" | undefined {
+function monitorFileCategory(value: unknown): MonitorFileActivityCategory | undefined {
   return value === "source" || value === "test" || value === "docs" || value === "config" || value === "unknown" ? value : undefined;
 }
 
@@ -190,8 +204,63 @@ function monitorRateLimitPressure(value: unknown): MonitorRateLimitPressure | un
 
 function repoRelativeActivityPath(value: unknown): string | undefined {
   const compact = compactActivityString(value);
-  if (!compact || compact.startsWith("/") || compact.startsWith("~") || compact.includes("..")) return undefined;
-  return compact;
+  if (!compact || looksLikeRawDiff(compact)) return undefined;
+
+  const normalized = normalizeSeparators(compact);
+  if (normalized.startsWith("~")) return undefined;
+  if (normalized.startsWith("/")) return normalizeAbsoluteActivityPath(normalized);
+  if (hasUnsafeSegments(normalized)) return undefined;
+  if (looksUserSpecificOrTempRelative(normalized)) return undefined;
+  return normalized;
+}
+
+function normalizeAbsoluteActivityPath(value: string): string | undefined {
+  for (const root of activityPathRoots()) {
+    const relativePath = normalizeRelativeFromRoot(root, value);
+    if (relativePath) return relativePath;
+  }
+  return undefined;
+}
+
+function activityPathRoots(): string[] {
+  return [...new Set([process.cwd(), process.env.AGENT_OS_WORKSPACE, process.env.AGENTOS_WORKSPACE].filter((value): value is string => typeof value === "string" && value.trim().length > 0))];
+}
+
+function normalizeRelativeFromRoot(root: string, value: string): string | undefined {
+  const resolvedRoot = resolve(root);
+  const resolvedValue = resolve(value);
+  if (resolvedValue !== resolvedRoot && !resolvedValue.startsWith(`${resolvedRoot}${sep}`)) return undefined;
+  const relativePath = normalizeSeparators(relative(resolvedRoot, resolvedValue));
+  return relativePath && relativePath !== "." && !hasUnsafeSegments(relativePath) ? relativePath : undefined;
+}
+
+function normalizeSeparators(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+/g, "/");
+}
+
+function hasUnsafeSegments(value: string): boolean {
+  return value.split("/").some((segment) => segment === ".." || segment === "");
+}
+
+function looksUserSpecificOrTempRelative(value: string): boolean {
+  const lowered = value.toLowerCase();
+  const tempRoot = normalizeSeparators(tmpdir()).replace(/^\//, "").toLowerCase();
+  return lowered.startsWith("users/") || lowered.startsWith("home/") || lowered.startsWith("var/folders/") || lowered.startsWith("tmp/") || lowered.startsWith(`${tempRoot}/`);
+}
+
+function looksLikeRawDiff(value: string): boolean {
+  return /(^|\s)(diff --git|@@ |\+\+\+ |--- |\*\*\* Begin Patch|\*\*\* End Patch)/.test(value);
+}
+
+function categoryForActivityPath(path: string | undefined): MonitorFileActivityCategory {
+  if (!path) return "unknown";
+  const lowered = path.toLowerCase();
+  if (/(^|\/)(test|tests|__tests__|spec)\//.test(lowered) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(lowered)) return "test";
+  if (/(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|tsconfig[^/]*\.json|vite\.config\.[^/]+|vitest\.config\.[^/]+|eslint[^/]*|prettier[^/]*)$/.test(lowered)) return "config";
+  if (lowered.startsWith(".github/") || lowered.startsWith(".agent-os/") || lowered === "workflow.md" || lowered === "agents.md") return "config";
+  if (lowered.startsWith("docs/") || /\.mdx?$/.test(lowered)) return "docs";
+  if (lowered.startsWith("src/") || /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts|py|rb|go|rs|java|kt|swift|cs|php|css|scss|html)$/.test(lowered)) return "source";
+  return "unknown";
 }
 
 function nonNegativeInteger(value: unknown): number | undefined {
