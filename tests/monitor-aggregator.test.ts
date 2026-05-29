@@ -106,6 +106,48 @@ describe("in-memory monitor aggregator", () => {
     expect(JSON.stringify(turn)).not.toContain("stderr");
   });
 
+  it("correlates completed command rows with imperfect span identity", () => {
+    const aggregator = new InMemoryMonitorAggregator();
+    aggregator.updateRunContext(runContext);
+    emitAll(aggregator, [
+      event("run", "run_started", "Run", "2026-05-25T00:00:00.000Z"),
+      event("turn", "step_started", "implementation turn 1", "2026-05-25T00:00:01.000Z", { parentSpanId: "run" }),
+      event("turn:command:runner-item-1", "step_started", "Command: npm run check:dashboard", "2026-05-25T00:00:02.000Z", {
+        parentSpanId: "turn",
+        status: "active",
+        timeClass: "tool",
+        result: "running"
+      }),
+      event("turn:command:command-hash", "step_finished", "Command: npm run check:dashboard", "2026-05-25T00:00:05.000Z", {
+        parentSpanId: "turn",
+        status: "pass",
+        timeClass: "tool",
+        result: "exit 0"
+      })
+    ]);
+
+    const snapshot = aggregator.snapshot({ serverNow: "2026-05-25T00:00:20.000Z" });
+    const command = snapshot.run?.timing[0]?.children[0]?.children[0];
+
+    expect(command).toMatchObject({
+      id: "turn:command:runner-item-1",
+      status: "pass",
+      endedAt: "2026-05-25T00:00:05.000Z",
+      durationMs: 3000,
+      result: "exit 0"
+    });
+    expect(snapshot.run?.topTimeSinks).toEqual([
+      {
+        id: "turn:command:runner-item-1",
+        label: "Command: npm run check:dashboard",
+        selfMs: 3000,
+        timeClass: "tool",
+        result: "exit 0"
+      }
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("raw");
+  });
+
   it("suppresses duplicate parent sinks when a child accounts for the same elapsed work", () => {
     const aggregator = new InMemoryMonitorAggregator();
     aggregator.updateRunContext(runContext);
