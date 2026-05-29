@@ -6001,6 +6001,182 @@ describe("orchestrator", () => {
     expect(logs.some((entry) => entry.type === "merge_failed")).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("covers recovered pushed work through trusted approval, merge, and Done startup reconciliation", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-recovered-pushed-merge-e2e-"));
+    await initGitRemote(repo);
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready, In Progress]\n  running_state: In Progress\n  review_state: Human Review\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\n  merge_mode: shepherd\n  done_state: Done\n  allow_human_merge_override: false\nreview:\n  enabled: true\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(ghState, "{}\n", "utf8");
+
+    const moves: string[] = [];
+    const comments: string[] = [];
+    const prUrl = "https://github.com/o/r/pull/177";
+    let currentIssue: Issue = { ...readyIssue, ...supervisorAssignee };
+    let headSha = "";
+    let trustedApprovalAvailable = false;
+    let runnerCalls = 0;
+
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        if (states.includes(currentIssue.state)) return [currentIssue];
+        return [];
+      },
+      async fetchIssueStates(issueIds) {
+        return new Map(issueIds.map((issueId) => [issueId, issueId === currentIssue.id ? currentIssue : null]));
+      },
+      async fetchIssueComments(issueIdentifier) {
+        expect(issueIdentifier).toBe("AG-1");
+        if (!trustedApprovalAvailable) return [];
+        return [
+          {
+            id: "comment-approve-recovered-pushed-work",
+            ...supervisorCommentAuthor,
+            createdAt: "2026-05-29T10:00:00.000Z",
+            body: [
+              "AgentOS-Human-Decision: approve-as-is",
+              `PR-Head-SHA: ${headSha}`,
+              "Validation-JSON: .agent-os/validation/AG-1.json",
+              "CI-State: passed",
+              "Findings: accepted",
+              "Decision-Summary: recovered pushed branch is approved for merge"
+            ].join("\n")
+          }
+        ];
+      },
+      async move(issueIdentifier, state) {
+        moves.push(`${issueIdentifier} -> ${state}`);
+        if (state !== "In Progress") {
+          currentIssue = { ...currentIssue, state, updated_at: new Date().toISOString() };
+        }
+      },
+      async comment(_issueIdentifier, body) {
+        comments.push(body);
+      }
+    };
+
+    const runner: AgentRunner = {
+      async run(input): Promise<AgentRunResult> {
+        runnerCalls += 1;
+        await initCleanWorkspaceAtOriginMain(input.workspace.path);
+        await run("git", ["checkout", "-b", "agent/AG-1"], input.workspace.path);
+        await writeFile(join(input.workspace.path, "README.md"), "recovered pushed work\n", "utf8");
+        await run("git", ["add", "README.md"], input.workspace.path);
+        await run("git", ["commit", "-m", "recover pushed work"], input.workspace.path);
+        await run("git", ["push", "-u", "origin", "agent/AG-1"], input.workspace.path);
+        headSha = await run("git", ["rev-parse", "HEAD"], input.workspace.path);
+        await writeFile(
+          ghState,
+          JSON.stringify({
+            view: {
+              url: prUrl,
+              state: "OPEN",
+              isDraft: false,
+              mergeable: "MERGEABLE",
+              headRefName: "agent/AG-1",
+              headRefOid: headSha,
+              statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }]
+            }
+          }),
+          "utf8"
+        );
+        await writePassingHandoff(input.workspace.path, "AG-1", input.prompt, `AgentOS-Outcome: implemented\n\nPrimary PR: ${prUrl}`, {
+          repoHead: headSha
+        });
+        return { status: "canceled", error: "codex_app_server_closed: exit 0" };
+      }
+    };
+    const logger = new JsonlLogger(repo);
+
+    const firstPass = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
+      runner,
+      postValidationExtension: noopPostValidationExtension,
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(firstPass.dispatched).toBe(1);
+    expect(runnerCalls).toBe(1);
+    expect(currentIssue.state).toBe("Human Review");
+    expect(comments.join("\n")).toContain("Primary PR: https://github.com/o/r/pull/177");
+    expect(comments.join("\n")).toContain("Recovery-Summary: reconstructed after Codex app-server/session closure");
+
+    trustedApprovalAvailable = true;
+    currentIssue = { ...currentIssue, state: "Merging", updated_at: "2026-05-29T10:05:00.000Z" };
+
+    const secondPass = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
+      runner,
+      postValidationExtension: noopPostValidationExtension,
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(secondPass.dispatched).toBe(0);
+    expect(runnerCalls).toBe(1);
+    expect(currentIssue.state).toBe("Done");
+    expect(moves).toEqual(["AG-1 -> In Progress", "AG-1 -> Human Review", "AG-1 -> Done"]);
+    expect(comments.join("\n")).toContain("Merged successfully");
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(state).toMatchObject({
+      phase: "completed",
+      outcome: "implemented",
+      prUrl,
+      mergeTargetUrl: prUrl,
+      headSha,
+      validation: expect.objectContaining({ status: "passed", repoHead: headSha }),
+      lastHumanDecision: {
+        type: "approve_as_is",
+        trusted: true,
+        commentId: "comment-approve-recovered-pushed-work"
+      }
+    });
+    expect(["merge_success", "post_merge_cleanup_warning"]).toContain(state?.lifecycleStatus);
+
+    const runStore = new RunArtifactStore(repo);
+    const staleRun = await runStore.startRun({ issue: { ...readyIssue, state: "In Progress" }, attempt: 2 });
+    await new RuntimeStateStore(repo).upsertActiveRun({
+      issueId: readyIssue.id,
+      identifier: readyIssue.identifier,
+      issue: { ...readyIssue, state: "In Progress" },
+      attempt: 2,
+      runId: staleRun.runId,
+      startedAt: staleRun.startedAt,
+      lastEventAt: staleRun.startedAt,
+      phase: "streaming-turn"
+    });
+
+    const thirdPass = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
+      runner,
+      postValidationExtension: noopPostValidationExtension,
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(thirdPass.dispatched).toBe(0);
+    expect(runnerCalls).toBe(1);
+    expect((await new RuntimeStateStore(repo).read()).activeRuns).toEqual([]);
+    const inspectedStaleRun = await runStore.inspect(staleRun.runId);
+    expect(inspectedStaleRun.summary.status).toBe("canceled");
+    expect(inspectedStaleRun.summary.stopReason).toContain("terminal issue already reconciled");
+    const logs = await logger.tail(200);
+    expect(logs.some((entry) => entry.type === "pushed_work_recovered")).toBe(true);
+    expect(logs.some((entry) => entry.type === "human_decision_recorded" && entry.message === "approve_as_is")).toBe(true);
+    expect(logs.some((entry) => (entry.type === "merge_succeeded" || entry.type === "merge_succeeded_with_cleanup_warnings") && entry.message === prUrl)).toBe(true);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("does not start merge shepherding when landing gates are only partially enabled", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-landing-blocked-"));
     const workflowPath = join(repo, "WORKFLOW.md");
