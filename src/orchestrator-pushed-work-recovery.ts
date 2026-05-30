@@ -213,7 +213,13 @@ async function finalizeCleanPushedWorkEvidence(input: AutoRecoverPushedWorkInput
   });
   if (validation.state.status === "passed") return true;
 
-  const rerun = await runRecoveryValidation(input.config.validationBudget.fullValidationCommand, recovery.workspacePath);
+  const rerun = await runRecoveryValidation({
+    command: input.config.validationBudget.fullValidationCommand,
+    cwd: recovery.workspacePath,
+    timeoutMs: input.config.codex.turnTimeoutMs,
+    issue,
+    logger: input.logger
+  });
   const refreshed = await inspectWorkspaceRecovery(repoRoot, {
     issueIdentifier: issue.identifier,
     workspacePath: recovery.workspacePath,
@@ -321,19 +327,101 @@ async function repairRecoveryHandoff(handoffPath: string, issueIdentifier: strin
   await writeTextEnsuringDir(handoffPath, `${lines.join("\n")}\n`);
 }
 
-async function runRecoveryValidation(command: string, cwd: string): Promise<ValidationCommandEvidence> {
+async function runRecoveryValidation(input: {
+  command: string;
+  cwd: string;
+  timeoutMs: number;
+  issue: Issue;
+  logger: JsonlLogger;
+}): Promise<ValidationCommandEvidence> {
   const startedAt = new Date().toISOString();
-  const exitCode = await runShellExitCode(command, cwd);
+  const heartbeatWrites: Array<Promise<unknown>> = [];
+  const result = await runShellExitCode({
+    command: input.command,
+    cwd: input.cwd,
+    timeoutMs: input.timeoutMs,
+    onHeartbeat: (elapsedMs) => {
+      heartbeatWrites.push(input.logger.write({
+        type: "recovery_validation_heartbeat",
+        issueId: input.issue.id,
+        issueIdentifier: input.issue.identifier,
+        message: "recovery validation still running",
+        payload: { command: input.command, elapsedMs, timeoutMs: input.timeoutMs }
+      }));
+    }
+  });
+  await Promise.allSettled(heartbeatWrites);
   const finishedAt = new Date().toISOString();
-  return { name: command, exitCode, startedAt, finishedAt };
+  if (result.timedOut) {
+    await input.logger.write({
+      type: "recovery_validation_timeout",
+      issueId: input.issue.id,
+      issueIdentifier: input.issue.identifier,
+      message: "recovery validation timed out",
+      payload: { command: input.command, timeoutMs: input.timeoutMs }
+    });
+  }
+  return { name: input.command, exitCode: result.exitCode, startedAt, finishedAt };
 }
 
-function runShellExitCode(command: string, cwd: string): Promise<number> {
+function runShellExitCode(input: {
+  command: string;
+  cwd: string;
+  timeoutMs: number;
+  onHeartbeat: (elapsedMs: number) => void;
+}): Promise<{ exitCode: number; timedOut: boolean }> {
   return new Promise((resolveExitCode) => {
-    const child = spawn("bash", ["-lc", command], { cwd, stdio: ["ignore", "ignore", "ignore"] });
-    child.on("error", () => resolveExitCode(1));
-    child.on("close", (code) => resolveExitCode(code ?? 1));
+    const startedAt = Date.now();
+    const child = spawn("bash", ["-lc", input.command], {
+      cwd: input.cwd,
+      detached: true,
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+    let timedOut = false;
+    let settled = false;
+    const heartbeat = setInterval(() => {
+      input.onHeartbeat(Date.now() - startedAt);
+    }, recoveryValidationHeartbeatMs(input.timeoutMs));
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      terminateProcessGroup(child.pid, "SIGTERM");
+      setTimeout(() => {
+        if (!settled) terminateProcessGroup(child.pid, "SIGKILL");
+      }, 1000).unref();
+    }, input.timeoutMs);
+    child.on("error", () => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      clearTimeout(timeout);
+      resolveExitCode({ exitCode: 1, timedOut });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      clearTimeout(timeout);
+      resolveExitCode({ exitCode: code ?? (timedOut ? 124 : 1), timedOut });
+    });
   });
+}
+
+function recoveryValidationHeartbeatMs(timeoutMs: number): number {
+  if (timeoutMs < 1000) return Math.max(10, Math.floor(timeoutMs / 3));
+  return Math.min(30_000, Math.max(1000, Math.floor(timeoutMs / 4)));
+}
+
+function terminateProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (!pid) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // The process already exited.
+    }
+  }
 }
 
 function runShell(command: string, cwd: string): Promise<string> {

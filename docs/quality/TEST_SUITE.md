@@ -71,10 +71,13 @@ During VER-110 validation, local `npm run agent-check` with
   lines beyond 600s before the supervisor stopped the local run to avoid tying
   up the shared shell session.
 
-That run demonstrates the issue is no longer silent/stall-like locally. It also
-confirms the remaining cost problem is the deliberate full test plus full
-coverage double pass, which should be handled by future validation-budget work
-only with a replacement proof strategy.
+That run demonstrated the issue was no longer silent/stall-like locally, but it
+also confirmed the cost problem in the deliberate full test plus full coverage
+double pass. VER-178 removed that duplicate foreground pass from
+`npm run agent-check`: standalone `npm test` remains available for focused
+unit/integration validation, while the harness treats `npm run coverage` as the
+authoritative test-plus-coverage phase because it runs the Vitest suite and
+collects coverage in the same process.
 
 ## Slow-Path Timing Notes
 

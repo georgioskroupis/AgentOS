@@ -193,8 +193,7 @@ fi
 run_phase "format check" npm --prefix "$root" run format:check
 run_phase "lint" npm --prefix "$root" run lint
 run_phase "typecheck" npm --prefix "$root" run typecheck
-run_phase "unit/integration tests" npm --prefix "$root" run test
-run_phase "coverage" npm --prefix "$root" run coverage
+run_phase "coverage (tests + coverage)" npm --prefix "$root" run coverage
 run_phase "build" npm --prefix "$root" run build
 run_phase "architecture check" npm --prefix "$root" run check:architecture
 run_phase "dashboard check" npm --prefix "$root" run check:dashboard
