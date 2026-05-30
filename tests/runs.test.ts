@@ -2,7 +2,9 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createOversizedRunEventSummaryFixture, oversizedRunEventSentinels } from "./fixtures/run-event-summary.js";
 import { BoundedTextAccumulator } from "../src/output-capture.js";
+import { summarizeRunEvents } from "../src/run-event-summary.js";
 import { formatRunInspect, formatRunReplay, RunArtifactStore } from "../src/runs.js";
 import type { RunPhaseTiming, RunSummary } from "../src/runs.js";
 import type { Issue } from "../src/types.js";
@@ -554,6 +556,25 @@ describe("run artifacts", () => {
 
     const events = await store.replay(summary.runId);
     expect(events[0].payload).toMatchObject({ self: "[Circular]" });
+  });
+
+  it("summarizes oversized run events without emitting raw payload bodies", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-runs-summary-fixture-"));
+    const fixture = await createOversizedRunEventSummaryFixture(repo, issue);
+
+    const eventsJsonl = await readFile(fixture.eventsPath, "utf8");
+    const summaries = summarizeRunEvents(await fixture.store.replay(fixture.runId));
+    const serialized = JSON.stringify(summaries);
+
+    expect(eventsJsonl.trim().split("\n")).toHaveLength(4);
+    expect(summaries).toHaveLength(4);
+    expect(summaries.map((summary) => summary.type)).toEqual(["codex_stdout", "git_diff", "coverage_report", "generic_payload"]);
+    expect(summaries.every((summary) => summary.timestamp.startsWith("2026-05-01T00:00:"))).toBe(true);
+    expect(summaries.every((summary) => summary.message && summary.artifact && summary.size.originalPayloadChars && summary.size.originalPayloadChars > 8_000)).toBe(true);
+    for (const sentinel of Object.values(oversizedRunEventSentinels)) {
+      expect(serialized).not.toContain(sentinel);
+    }
+    expect(serialized).not.toContain("diff --git");
   });
 
   it("continues reading legacy event logs with malformed trailing lines", async () => {
