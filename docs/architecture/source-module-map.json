@@ -28,6 +28,7 @@
       "src/review-finding-hash.ts",
       "src/run-artifact-names.ts",
       "src/run-capture-artifacts.ts",
+      "src/run-event-summary.ts",
       "src/run-errors.ts",
       "src/runs.ts",
       "src/runtime-state.ts",
