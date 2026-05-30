@@ -962,6 +962,19 @@ describe("issue inspection", () => {
       ),
       "utf8"
     );
+    const historicalSentinel = "historical giant payload must stay out of status";
+    await appendFile(
+      join(repo, ".agent-os", "runs", "agent-os.jsonl"),
+      `${JSON.stringify({
+        type: "historical_unbounded_payload",
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        message: "historical oversized payload",
+        payload: { stdout: historicalSentinel.repeat(220_000) },
+        timestamp: "2026-05-01T00:00:01.000Z"
+      })}\n`,
+      "utf8"
+    );
     await appendFile(
       join(repo, ".agent-os", "runs", "agent-os.jsonl"),
       `${JSON.stringify({
@@ -982,6 +995,7 @@ describe("issue inspection", () => {
     expect(output).toContain("2026-05-01T00:00:02.000Z legacy_unbounded_payload AG-1 - legacy oversized payload [payload:");
     expect(output).toContain("Recent event recovery: raw event payloads are omitted here");
     expect(output.length).toBeLessThan(8_000);
+    expect(output).not.toContain(historicalSentinel);
     for (const sentinel of Object.values(oversizedRunEventSentinels)) {
       expect(output).not.toContain(sentinel);
     }
