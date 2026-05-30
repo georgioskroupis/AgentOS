@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { oversizedRunEventSentinels } from "./fixtures/run-event-summary.js";
 import { RegistryStateStore } from "../src/registry.js";
 import { JsonlLogger } from "../src/logging.js";
 import { RuntimeStateStore } from "../src/runtime-state.js";
@@ -13,6 +14,66 @@ import { writeDaemonIdentity } from "../src/daemon-identity.js";
 const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
 
 describe("issue inspection", () => {
+  it("keeps recent event rendering concise for oversized issue inspect events", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-status-oversized-events-"));
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "streaming-turn",
+          updatedAt: "2026-05-01T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const logger = new JsonlLogger(repo);
+    await logger.write({
+      type: "small_event",
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      message: "normal small event",
+      timestamp: "2026-05-01T00:00:00.000Z"
+    });
+    await logger.write({
+      type: "captured_payload",
+      issueId: "issue-1",
+      issueIdentifier: "AG-1",
+      message: "oversized command output",
+      payload: { stdout: `${oversizedRunEventSentinels.commandOutput}\n`.repeat(500) },
+      timestamp: "2026-05-01T00:00:01.000Z"
+    });
+    await appendFile(
+      logger.logPath,
+      `${JSON.stringify({
+        type: "legacy_unbounded_payload",
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        message: "legacy oversized payload",
+        payload: { stdout: `${oversizedRunEventSentinels.generic}\n`.repeat(500) },
+        timestamp: "2026-05-01T00:00:02.000Z"
+      })}\n`,
+      "utf8"
+    );
+
+    const output = await inspectIssue(repo, "AG-1");
+
+    expect(output).toContain("2026-05-01T00:00:00.000Z small_event - normal small event");
+    expect(output).toContain("2026-05-01T00:00:01.000Z captured_payload - oversized command output");
+    expect(output).toContain("artifact: .agent-os/runs/artifacts/");
+    expect(output).toContain("2026-05-01T00:00:02.000Z legacy_unbounded_payload - legacy oversized payload [payload:");
+    expect(output.length).toBeLessThan(8_000);
+    for (const sentinel of Object.values(oversizedRunEventSentinels)) {
+      expect(output).not.toContain(sentinel);
+    }
+  });
+
   it("shows accepted validation commands and failed historical attempts", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-status-"));
     const stateRoot = join(repo, ".agent-os", "state", "issues");

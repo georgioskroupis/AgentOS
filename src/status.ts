@@ -14,9 +14,9 @@ import { branchUpdateDetails } from "./status-branch-update.js";
 import { contextBudgetDetails, modelTelemetryStatusSuffix, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
 import { externalStateDriftDetails, externalStateDriftWarning } from "./status-state-drift.js";
 import { appendEvidenceStatus, validationDetails } from "./status-validation.js";
+import { formatInspectRecentEvent } from "./status-recent-events.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationState } from "./types.js";
-
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
   const root = resolve(repo);
   const logger = new JsonlLogger(root);
@@ -147,7 +147,7 @@ export async function inspectIssue(repo = process.cwd(), identifier: string, lim
     "",
     "Recent events:",
     entries.length
-      ? entries.map((entry) => `${entry.timestamp} ${entry.type}${entry.message ? ` - ${recentEventMessage(entry)}` : ""}`).join("\n")
+      ? entries.map(formatInspectRecentEvent).join("\n")
       : "No recent events for this issue."
   ].filter((line): line is string => line !== null);
   return lines.join("\n");
