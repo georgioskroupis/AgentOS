@@ -915,6 +915,76 @@ describe("issue inspection", () => {
     expect(output).not.toContain("AG-2: status warning");
     expect(output).not.toContain("AG-3: status warning");
     expect(output).toContain("AG-1: local full-suite validation timing failure recorded separately; focused test passed; GitHub CI passed at abc123");
+    expect(output).not.toContain("Recent event summaries:");
+  });
+
+  it("keeps registry status usable for oversized legacy run event payloads", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-os-registry-status-oversized-events-"));
+    const repo = join(root, "alpha");
+    await mkdir(join(repo, ".agent-os", "state", "issues"), { recursive: true });
+    await mkdir(join(repo, ".agent-os", "runs"), { recursive: true });
+    await writeFile(
+      join(repo, "WORKFLOW.md"),
+      [
+        "---",
+        "trust_mode: danger",
+        "automation:",
+        "  profile: high-throughput",
+        "  repair_policy: mechanical-first",
+        "lifecycle:",
+        "  mode: agent-owned",
+        "tracker:",
+        "  api_key: lin_test",
+        "  project_slug: AgentOS",
+        "---",
+        "Do work"
+      ].join("\n"),
+      "utf8"
+    );
+    const registryPath = join(root, "agent-os.yml");
+    await writeFile(
+      registryPath,
+      ["version: 1", "projects:", "  - name: alpha", "    repo: ./alpha", "    workflow: WORKFLOW.md"].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      join(repo, ".agent-os", "state", "issues", "AG-1.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          issueId: "issue-1",
+          issueIdentifier: "AG-1",
+          phase: "streaming-turn",
+          updatedAt: "2026-05-01T00:00:00.000Z"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    await appendFile(
+      join(repo, ".agent-os", "runs", "agent-os.jsonl"),
+      `${JSON.stringify({
+        type: "legacy_unbounded_payload",
+        issueId: "issue-1",
+        issueIdentifier: "AG-1",
+        message: "legacy oversized payload",
+        payload: { stdout: `${oversizedRunEventSentinels.generic}\n`.repeat(500) },
+        timestamp: "2026-05-01T00:00:02.000Z"
+      })}\n`,
+      "utf8"
+    );
+
+    const output = await getRegistryStatus(registryPath);
+
+    expect(output).toContain("alpha: idle");
+    expect(output).toContain("Recent event summaries:");
+    expect(output).toContain("2026-05-01T00:00:02.000Z legacy_unbounded_payload AG-1 - legacy oversized payload [payload:");
+    expect(output).toContain("Recent event recovery: raw event payloads are omitted here");
+    expect(output.length).toBeLessThan(8_000);
+    for (const sentinel of Object.values(oversizedRunEventSentinels)) {
+      expect(output).not.toContain(sentinel);
+    }
   });
 
   it("summarizes plugin/cache stderr warning noise without dumping raw logs", async () => {

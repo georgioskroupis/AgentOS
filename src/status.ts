@@ -14,7 +14,7 @@ import { branchUpdateDetails } from "./status-branch-update.js";
 import { contextBudgetDetails, modelTelemetryStatusSuffix, recentEventMessage, runtimeWarningDetails, runtimeWarningSummary, scopeReportDetails, scopeReportStatusSuffix } from "./status-diagnostics.js";
 import { externalStateDriftDetails, externalStateDriftWarning } from "./status-state-drift.js";
 import { appendEvidenceStatus, validationDetails } from "./status-validation.js";
-import { formatInspectRecentEvent } from "./status-recent-events.js";
+import { formatInspectRecentEvent, formatRegistryRecentEventSummaries } from "./status-recent-events.js";
 import { loadWorkflow, resolveServiceConfig } from "./workflow.js";
 import type { IssueState, ValidationState } from "./types.js";
 export async function getStatus(repo = process.cwd(), limit = 20): Promise<string> {
@@ -47,7 +47,6 @@ export async function getStatus(repo = process.cwd(), limit = 20): Promise<strin
   ];
   return lines.join("\n");
 }
-
 export async function getRegistryStatus(registryPath = "agent-os.yml", limit = 20): Promise<string> {
   const registry = await loadRegistry(registryPath);
   const registryState = await new RegistryStateStore(registryPath).read();
@@ -93,6 +92,7 @@ export async function getRegistryStatus(registryPath = "agent-os.yml", limit = 2
     const issueLines = issues.map((issue, index) => `  - ${issue.issueIdentifier}: ${issueStatusLine(issue, runtime, logs, recoveries[index] ?? null)}`);
     lines.push(issueLines.length ? "  Issues:" : "  Issues: none recorded");
     lines.push(...issueLines);
+    lines.push(...formatRegistryRecentEventSummaries(logs));
   }
 
   return lines.join("\n");
