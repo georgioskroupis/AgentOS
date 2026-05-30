@@ -12262,6 +12262,82 @@ describe("orchestrator", () => {
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("times out hanging clean-pushed recovery validation and records heartbeat evidence", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-validation-timeout-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\ncodex:\n  turn_timeout_ms: 80\nvalidation_budget:\n  full_validation_command: node -e "setInterval(() => {}, 1000)"\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const { workspacePath, headSha } = await createCleanPushedIssueWorkspace(repo);
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        viewErrors: { "agent/AG-1": "no pull request found for branch" },
+        createUrl: "https://github.com/o/r/pull/78"
+      }),
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "implementation_failure",
+      lastError: "codex_app_server_closed: exit 0",
+      workspacePath,
+      updatedAt: "2026-05-21T10:00:00.000Z"
+    });
+    const comments: string[] = [];
+    const moves: string[] = [];
+    let runnerCalled = false;
+
+    const result = await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, {
+        async fetchCandidates() {
+          return [readyIssue];
+        },
+        async fetchIssueStates() {
+          return new Map([[readyIssue.id, readyIssue]]);
+        },
+        async comment(_issue, body) {
+          comments.push(body);
+        },
+        async move(issue, state) {
+          moves.push(`${issue} -> ${state}`);
+        }
+      }),
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          runnerCalled = true;
+          return { status: "succeeded" };
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(result.dispatched).toBe(0);
+    expect(runnerCalled).toBe(false);
+    expect(moves).toEqual(["AG-1 -> Human Review"]);
+    expect(comments.join("\n")).toContain("AgentOS recovery needed");
+    const logs = await new JsonlLogger(repo).tail(50);
+    expect(logs.some((entry) => entry.type === "recovery_validation_heartbeat")).toBe(true);
+    expect(logs.some((entry) => entry.type === "recovery_validation_timeout")).toBe(true);
+    expect(logs.some((entry) => entry.type === "pushed_work_recovery_skipped" && entry.message?.includes("validation command failed"))).toBe(true);
+    const validation = JSON.parse(await readFile(join(workspacePath, ".agent-os", "validation", "AG-1.json"), "utf8"));
+    expect(validation).toMatchObject({
+      issueIdentifier: "AG-1",
+      repoHead: headSha,
+      status: "failed",
+      commands: [expect.objectContaining({ name: 'node -e "setInterval(() => {}, 1000)"', exitCode: 124 })]
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("refuses clean pushed finalization when pull request head is stale", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-stale-pr-"));
     const workflowPath = join(repo, "WORKFLOW.md");
