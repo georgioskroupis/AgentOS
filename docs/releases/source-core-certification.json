@@ -186,18 +186,25 @@
       "id": "post-validation-noop-boundary",
       "classification": "source-core",
       "status": "covered",
-      "summary": "Source-core completion can use the no-op post-validation extension after handoff validation and lifecycle evidence without invoking optional extension work.",
+      "summary": "Source-core completion can use no-op post-validation and merge-state extensions without invoking optional review, landing, or merge shepherd work.",
       "evidence": [
         {
           "path": "src/post-validation-extension.ts"
         },
         {
+          "path": "src/merge-state-extension.ts"
+        },
+        {
           "path": "tests/orchestrator.test.ts",
           "testName": "uses no-op post-validation extension path for source-core runs"
+        },
+        {
+          "path": "tests/orchestrator.test.ts",
+          "testName": "uses no-op merge-state extension path for source-core runs"
         }
       ],
       "proofCommands": [
-        "npm test -- tests/orchestrator.test.ts -t \"uses no-op post-validation extension path for source-core runs\" --reporter verbose"
+        "npm test -- tests/orchestrator.test.ts -t \"uses no-op post-validation extension path for source-core runs|uses no-op merge-state extension path for source-core runs\" --reporter verbose"
       ]
     },
     {

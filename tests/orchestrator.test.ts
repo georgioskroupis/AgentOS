@@ -15,6 +15,7 @@ import { writeValidationEvidence } from "../src/validation.js";
 import { inspectIssue } from "../src/status.js";
 import { loadWorkflow, resolveServiceConfig } from "../src/workflow.js";
 import { validationReuseProfileForConfig } from "../src/validation-profile.js";
+import { noopMergeStateExtension } from "../src/merge-state-extension.js";
 import { noopPostValidationExtension } from "../src/post-validation-extension.js";
 import type { MonitorEvent } from "../src/monitor-contracts.js";
 import type { SchedulerSafetyWriter, TrackerReader } from "../src/tracker-boundaries.js";
@@ -381,6 +382,50 @@ describe("orchestrator", () => {
     expect(state?.prUrl).toBe(prUrl);
     expect(state?.reviewTargetUrls).toBeUndefined();
     expect(comments.join("\n")).not.toContain("AgentOS automated review started");
+  });
+
+  it("uses no-op merge-state extension path for source-core runs", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-merge-noop-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\nautomation:\n  profile: high-throughput\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  merge_state: Merging\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  merge_mode: manual\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const fetchedStates: string[][] = [];
+    let mergeExtensionCalls = 0;
+    const tracker: IssueTracker = {
+      async fetchCandidates(states) {
+        fetchedStates.push(states);
+        return [];
+      },
+      async fetchIssueStates() {
+        return new Map();
+      }
+    };
+
+    await new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker,
+      runner: {
+        async run(): Promise<AgentRunResult> {
+          throw new Error("runner should not be called without active candidates");
+        }
+      },
+      mergeStateExtension: {
+        name: "test-noop-merge-state",
+        async processMergeState() {
+          mergeExtensionCalls += 1;
+          await noopMergeStateExtension.processMergeState();
+        }
+      },
+      logger: new JsonlLogger(repo),
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    }).runOnce(true);
+
+    expect(mergeExtensionCalls).toBe(1);
+    expect(fetchedStates).toEqual([["Ready"]]);
   });
 
   it("emits source-core monitor events without letting sink failures fail orchestration", async () => {
