@@ -12348,6 +12348,104 @@ describe("orchestrator", () => {
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("does not start duplicate clean-pushed recovery validation when one is already active for the workspace head", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-validation-active-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    const duplicateMarker = join(repo, "duplicate-validation-started");
+    const validationCommand = `node -e "require('fs').writeFileSync(${JSON.stringify(duplicateMarker)}, 'started')"`;
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\nvalidation_budget:\n  full_validation_command: ${validationCommand}\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    const { workspacePath, headSha } = await createCleanPushedIssueWorkspace(repo);
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        viewErrors: { "agent/AG-1": "no pull request found for branch" },
+        createUrl: "https://github.com/o/r/pull/78"
+      }),
+      "utf8"
+    );
+    await mkdir(join(workspacePath, ".agent-os", "recovery-validation"), { recursive: true });
+    const validationHolder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    await writeFile(
+      join(workspacePath, ".agent-os", "recovery-validation", "AG-1.json"),
+      `${JSON.stringify(
+        {
+          issueIdentifier: "AG-1",
+          workspacePath: resolve(workspacePath),
+          headSha,
+          command: validationCommand,
+          pid: validationHolder.pid,
+          startedAt: new Date().toISOString()
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+    await new IssueStateStore(repo).write({
+      schemaVersion: 1,
+      issueId: readyIssue.id,
+      issueIdentifier: readyIssue.identifier,
+      phase: "needs-input",
+      lifecycleStatus: "implementation_failure",
+      lastError: "codex_app_server_closed: exit 0",
+      workspacePath,
+      updatedAt: "2026-05-21T10:00:00.000Z"
+    });
+    const comments: string[] = [];
+    const moves: string[] = [];
+    let runnerCalled = false;
+
+    try {
+      const result = await new Orchestrator({
+        repoRoot: repo,
+        workflowPath,
+        tracker: withAgentOwnedLifecycleEvidence(repo, {
+          async fetchCandidates() {
+            return [readyIssue];
+          },
+          async fetchIssueStates() {
+            return new Map([[readyIssue.id, readyIssue]]);
+          },
+          async comment(_issue, body) {
+            comments.push(body);
+          },
+          async move(issue, state) {
+            moves.push(`${issue} -> ${state}`);
+          }
+        }),
+        runner: {
+          async run(): Promise<AgentRunResult> {
+            runnerCalled = true;
+            return { status: "succeeded" };
+          }
+        },
+        logger: new JsonlLogger(repo),
+        env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+      }).runOnce(true);
+
+      expect(result.dispatched).toBe(0);
+      expect(runnerCalled).toBe(false);
+      expect(moves).toEqual(["AG-1 -> Human Review"]);
+      expect(comments.join("\n")).toContain("AgentOS recovery needed");
+      await expect(access(duplicateMarker)).rejects.toThrow();
+      const logs = await new JsonlLogger(repo).tail(50);
+      expect(
+        logs.some(
+          (entry) =>
+            entry.type === "pushed_work_recovery_skipped" &&
+            entry.message === "active recovery validation already running for this issue workspace and head"
+        )
+      ).toBe(true);
+    } finally {
+      await stopChild(validationHolder);
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("times out hanging clean-pushed recovery validation and records heartbeat evidence", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-validation-timeout-"));
     const workflowPath = join(repo, "WORKFLOW.md");
@@ -12919,6 +13017,20 @@ async function createCleanUnpushedIssueWorkspace(repo: string): Promise<{ worksp
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolvePromise) => {
+    const timer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }, 1000);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolvePromise();
+    });
+    child.kill("SIGTERM");
+  });
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { mkdir, open, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { readText, writeTextEnsuringDir } from "./fs-utils.js";
 import { GitHubClient, type PullRequestStatus } from "./github.js";
@@ -218,8 +219,19 @@ async function finalizeCleanPushedWorkEvidence(input: AutoRecoverPushedWorkInput
     cwd: recovery.workspacePath,
     timeoutMs: input.config.codex.turnTimeoutMs,
     issue,
-    logger: input.logger
+    logger: input.logger,
+    workspacePath: recovery.workspacePath,
+    headSha
   });
+  if (!rerun.started) {
+    await logPushedWorkRecoverySkipped(input, rerun.message, {
+      command: input.config.validationBudget.fullValidationCommand,
+      workspacePath: recovery.workspacePath,
+      headSha,
+      lock: rerun.lock ?? null
+    });
+    return false;
+  }
   const refreshed = await inspectWorkspaceRecovery(repoRoot, {
     issueIdentifier: issue.identifier,
     workspacePath: recovery.workspacePath,
@@ -333,41 +345,53 @@ async function runRecoveryValidation(input: {
   timeoutMs: number;
   issue: Issue;
   logger: JsonlLogger;
-}): Promise<ValidationCommandEvidence> {
+  workspacePath: string;
+  headSha: string;
+}): Promise<RecoveryValidationRunResult> {
+  const lock = await acquireRecoveryValidationLock(input);
+  if (!lock.acquired) return { started: false, message: lock.message, lock: lock.lock };
   const startedAt = new Date().toISOString();
   const heartbeatWrites: Array<Promise<unknown>> = [];
-  const result = await runShellExitCode({
-    command: input.command,
-    cwd: input.cwd,
-    timeoutMs: input.timeoutMs,
-    onHeartbeat: (elapsedMs) => {
-      heartbeatWrites.push(input.logger.write({
-        type: "recovery_validation_heartbeat",
+  try {
+    const result = await runShellExitCode({
+      command: input.command,
+      cwd: input.cwd,
+      timeoutMs: input.timeoutMs,
+      onStart: async (pid) => {
+        await writeRecoveryValidationLock(lock.path, { ...lock.metadata, pid: pid ?? null });
+      },
+      onHeartbeat: (elapsedMs) => {
+        heartbeatWrites.push(input.logger.write({
+          type: "recovery_validation_heartbeat",
+          issueId: input.issue.id,
+          issueIdentifier: input.issue.identifier,
+          message: "recovery validation still running",
+          payload: { command: input.command, elapsedMs, timeoutMs: input.timeoutMs }
+        }));
+      }
+    });
+    await Promise.allSettled(heartbeatWrites);
+    const finishedAt = new Date().toISOString();
+    if (result.timedOut) {
+      await input.logger.write({
+        type: "recovery_validation_timeout",
         issueId: input.issue.id,
         issueIdentifier: input.issue.identifier,
-        message: "recovery validation still running",
-        payload: { command: input.command, elapsedMs, timeoutMs: input.timeoutMs }
-      }));
+        message: "recovery validation timed out",
+        payload: { command: input.command, timeoutMs: input.timeoutMs }
+      });
     }
-  });
-  await Promise.allSettled(heartbeatWrites);
-  const finishedAt = new Date().toISOString();
-  if (result.timedOut) {
-    await input.logger.write({
-      type: "recovery_validation_timeout",
-      issueId: input.issue.id,
-      issueIdentifier: input.issue.identifier,
-      message: "recovery validation timed out",
-      payload: { command: input.command, timeoutMs: input.timeoutMs }
-    });
+    return { started: true, name: input.command, exitCode: result.exitCode, startedAt, finishedAt };
+  } finally {
+    await rm(lock.path, { force: true }).catch(() => undefined);
   }
-  return { name: input.command, exitCode: result.exitCode, startedAt, finishedAt };
 }
 
 function runShellExitCode(input: {
   command: string;
   cwd: string;
   timeoutMs: number;
+  onStart?: (pid: number | undefined) => Promise<void> | void;
   onHeartbeat: (elapsedMs: number) => void;
 }): Promise<{ exitCode: number; timedOut: boolean }> {
   return new Promise((resolveExitCode) => {
@@ -377,6 +401,7 @@ function runShellExitCode(input: {
       detached: true,
       stdio: ["ignore", "ignore", "ignore"]
     });
+    Promise.resolve(input.onStart?.(child.pid)).catch(() => undefined);
     let timedOut = false;
     let settled = false;
     const heartbeat = setInterval(() => {
@@ -422,6 +447,109 @@ function terminateProcessGroup(pid: number | undefined, signal: NodeJS.Signals):
       // The process already exited.
     }
   }
+}
+
+type RecoveryValidationLockMetadata = {
+  issueIdentifier: string;
+  workspacePath: string;
+  headSha: string;
+  command: string;
+  pid: number | null;
+  startedAt: string;
+};
+
+type RecoveryValidationRunResult =
+  | ({ started: true } & ValidationCommandEvidence)
+  | { started: false; message: string; lock?: RecoveryValidationLockMetadata | null };
+
+type RecoveryValidationLock =
+  | { acquired: true; path: string; metadata: RecoveryValidationLockMetadata }
+  | { acquired: false; message: string; lock?: RecoveryValidationLockMetadata | null };
+
+async function acquireRecoveryValidationLock(input: { issue: Issue; workspacePath: string; headSha: string; command: string }): Promise<RecoveryValidationLock> {
+  const lockPath = recoveryValidationLockPath(input.workspacePath, input.issue.identifier);
+  await mkdir(join(input.workspacePath, ".agent-os", "recovery-validation"), { recursive: true });
+  const metadata: RecoveryValidationLockMetadata = {
+    issueIdentifier: input.issue.identifier,
+    workspacePath: resolve(input.workspacePath),
+    headSha: input.headSha,
+    command: input.command,
+    pid: null,
+    startedAt: new Date().toISOString()
+  };
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let fileHandle: Awaited<ReturnType<typeof open>> | null = null;
+    try {
+      fileHandle = await open(lockPath, "wx");
+      await fileHandle.writeFile(`${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+      return { acquired: true, path: lockPath, metadata };
+    } catch (error) {
+      if (!isFileExistsError(error)) throw error;
+      const existing = await readRecoveryValidationLock(lockPath);
+      if (isActiveRecoveryValidationLock(existing)) {
+        const sameWorkspace = existing.workspacePath === metadata.workspacePath;
+        const sameHead = existing.headSha.toLowerCase() === metadata.headSha.toLowerCase();
+        const message =
+          sameWorkspace && sameHead
+            ? "active recovery validation already running for this issue workspace and head"
+            : "active recovery validation already running for this issue workspace";
+        return { acquired: false, message, lock: existing };
+      }
+      await rm(lockPath, { force: true }).catch(() => undefined);
+    } finally {
+      await fileHandle?.close().catch(() => undefined);
+    }
+  }
+
+  return { acquired: false, message: "recovery validation lock could not be acquired", lock: await readRecoveryValidationLock(lockPath) };
+}
+
+async function writeRecoveryValidationLock(lockPath: string, metadata: RecoveryValidationLockMetadata): Promise<void> {
+  await writeTextEnsuringDir(lockPath, `${JSON.stringify(metadata, null, 2)}\n`);
+}
+
+async function readRecoveryValidationLock(lockPath: string): Promise<RecoveryValidationLockMetadata | null> {
+  const text = await readText(lockPath).catch(() => null);
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as Partial<RecoveryValidationLockMetadata>;
+    if (!parsed.issueIdentifier || !parsed.workspacePath || !parsed.headSha || typeof parsed.command !== "string") return null;
+    return {
+      issueIdentifier: parsed.issueIdentifier,
+      workspacePath: resolve(parsed.workspacePath),
+      headSha: parsed.headSha,
+      command: parsed.command,
+      pid: typeof parsed.pid === "number" ? parsed.pid : null,
+      startedAt: typeof parsed.startedAt === "string" ? parsed.startedAt : ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isActiveRecoveryValidationLock(lock: RecoveryValidationLockMetadata | null): lock is RecoveryValidationLockMetadata {
+  if (!lock) return false;
+  if (lock.pid) return isProcessAlive(lock.pid);
+  const startedAtMs = Date.parse(lock.startedAt);
+  return Number.isFinite(startedAtMs) && Date.now() - startedAtMs < 30_000;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+function recoveryValidationLockPath(workspacePath: string, issueIdentifier: string): string {
+  return join(workspacePath, ".agent-os", "recovery-validation", `${issueIdentifier}.json`);
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 function runShell(command: string, cwd: string): Promise<string> {
