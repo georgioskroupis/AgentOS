@@ -4,6 +4,21 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script_name="$(basename "$0")"
 
+resolve_source_repo_from_git() {
+  local common_dir candidate
+  common_dir="$(git -C "$repo_root" rev-parse --git-common-dir 2>/dev/null || true)"
+  [[ -n "$common_dir" ]] || return 1
+  case "$common_dir" in
+    /*) ;;
+    *) common_dir="$repo_root/$common_dir" ;;
+  esac
+  common_dir="$(cd "$common_dir" 2>/dev/null && pwd -P || true)"
+  [[ -n "$common_dir" && "$(basename "$common_dir")" == ".git" ]] || return 1
+  candidate="$(cd "$(dirname "$common_dir")" && pwd -P)"
+  [[ -x "$candidate/bin/agent-os" ]] || return 1
+  printf '%s\n' "$candidate"
+}
+
 case "$script_name" in
   agent-linear-comment.sh) action="comment" ;;
   agent-linear-move.sh) action="move" ;;
@@ -15,8 +30,21 @@ case "$script_name" in
     ;;
 esac
 
-if [[ -n "${AGENT_OS_SOURCE_REPO:-}" && -x "$AGENT_OS_SOURCE_REPO/bin/agent-os" ]]; then
-  agent_os=("$AGENT_OS_SOURCE_REPO/bin/agent-os")
+source_repo="${AGENT_OS_SOURCE_REPO:-}"
+if [[ -z "$source_repo" || ! -x "$source_repo/bin/agent-os" ]]; then
+  source_repo="$(resolve_source_repo_from_git || true)"
+fi
+
+if [[ -n "$source_repo" && -x "$source_repo/bin/agent-os" ]]; then
+  export AGENT_OS_SOURCE_REPO="$source_repo"
+  if [[ -f "$source_repo/.agent-os/env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$source_repo/.agent-os/env"
+    set +a
+    export AGENT_OS_SOURCE_REPO="$source_repo"
+  fi
+  agent_os=("$source_repo/bin/agent-os")
 elif command -v agent-os >/dev/null 2>&1; then
   agent_os=("agent-os")
 else

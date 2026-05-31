@@ -88,6 +88,44 @@ describe("agent lifecycle CLI", () => {
     }
   });
 
+  it("bootstraps the AgentOS source repo and root env from worktree wrappers", async () => {
+    const sourceRepo = await realpath(await mkdtemp(join(tmpdir(), "agent-os-source-repo-")));
+    const workspace = join(sourceRepo, ".agent-os", "workspaces", "AG-1");
+    const capture = join(sourceRepo, "capture.log");
+    await mkdir(join(sourceRepo, "bin"), { recursive: true });
+    await mkdir(join(sourceRepo, ".agent-os"), { recursive: true });
+    await writeFile(join(sourceRepo, ".agent-os", "env"), "LINEAR_API_KEY=lin_from_root\n", "utf8");
+    await writeFakeAgentOs(join(sourceRepo, "bin"), capture);
+    await writeFile(join(sourceRepo, "README.md"), "source\n", "utf8");
+
+    await execOk("git", ["-C", sourceRepo, "init"]);
+    await execOk("git", ["-C", sourceRepo, "add", "README.md"]);
+    await execOk("git", ["-C", sourceRepo, "-c", "user.name=AgentOS", "-c", "user.email=agent-os@example.com", "commit", "-m", "initial commit"]);
+    await execOk("git", ["-C", sourceRepo, "worktree", "add", "-b", "agent/AG-1", workspace]);
+    await mkdir(join(workspace, "scripts"), { recursive: true });
+    const target = join(workspace, "scripts", "agent-linear-comment.sh");
+    await copyFile(join(sourceScripts, "agent-linear-comment.sh"), target);
+    await chmod(target, 0o755);
+
+    await execOk(
+      target,
+      ["AG-1", "--event", "run_started", "--run-id", "run-123", "--attempt", "0", "hello"],
+      {
+        PATH: "/usr/bin:/bin",
+        AGENT_OS_SOURCE_REPO: "",
+        LINEAR_API_KEY: "",
+        AGENT_OS_WRAPPER_CAPTURE: capture
+      }
+    );
+
+    const logged = await readFile(capture, "utf8");
+    expect(logged).toContain(`source: <${sourceRepo}>`);
+    expect(logged).toContain("linear: <lin_from_root>");
+    expect(logged).toContain(
+      `args: <linear> <lifecycle> <comment> <AG-1> <--event> <run_started> <--run-id> <run-123> <--attempt> <0> <hello> <--repo> <${workspace}> <--workflow> <WORKFLOW.md> <--tool> <scripts/agent-linear-comment.sh>`
+    );
+  });
+
   it("rejects supervisor moves for missing identifiers without a Linear write", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-supervisor-missing-cli-"));
     let writeCount = 0;
@@ -702,6 +740,8 @@ async function writeFakeAgentOs(fakeBin: string, capture: string): Promise<void>
       "set -euo pipefail",
       "mkdir -p \"$(dirname \"$AGENT_OS_WRAPPER_CAPTURE\")\"",
       "{",
+      "  printf 'source: <%s>\\n' \"${AGENT_OS_SOURCE_REPO:-}\"",
+      "  printf 'linear: <%s>\\n' \"${LINEAR_API_KEY:-}\"",
       "  printf 'args:'",
       "  for arg in \"$@\"; do printf ' <%s>' \"$arg\"; done",
       "  printf '\\n'",
