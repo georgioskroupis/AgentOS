@@ -20,6 +20,7 @@ export interface AutoRecoverPushedWorkInput {
   config: ServiceConfig;
   runId?: string | null;
   logger: JsonlLogger;
+  markRunningActivity?: (issueId: string, timestamp?: string) => void;
   markSucceeded: (workspace: Workspace, handoff: string | null, state: IssueState) => Promise<void>;
 }
 
@@ -40,6 +41,7 @@ export interface FinalizeCleanPushedWorkAfterRunnerStopInput {
   repoRoot: string;
   config: ServiceConfig;
   logger: JsonlLogger;
+  markRunningActivity?: (issueId: string, timestamp?: string) => void;
   markSucceeded: (workspace: Workspace, handoff: string | null, state: IssueState) => Promise<void>;
   writeRunHandoff: (handoff: string) => Promise<void>;
   writeRunEvent: (entry: Omit<AgentEvent, "timestamp"> & { timestamp?: string; runId?: string }) => Promise<void>;
@@ -96,6 +98,7 @@ export async function finalizeCleanPushedWorkAfterRunnerStop(input: FinalizeClea
     config: input.config,
     runId: input.runId,
     logger: input.logger,
+    markRunningActivity: input.markRunningActivity,
     markSucceeded: input.markSucceeded
   });
   if (!recovered) return false;
@@ -248,6 +251,7 @@ async function finalizeCleanPushedWorkEvidence(input: AutoRecoverPushedWorkInput
     timeoutMs: input.config.codex.turnTimeoutMs,
     issue,
     logger: input.logger,
+    markRunningActivity: input.markRunningActivity,
     workspacePath: recovery.workspacePath,
     headSha
   });
@@ -373,6 +377,7 @@ async function runRecoveryValidation(input: {
   timeoutMs: number;
   issue: Issue;
   logger: JsonlLogger;
+  markRunningActivity?: (issueId: string, timestamp?: string) => void;
   workspacePath: string;
   headSha: string;
 }): Promise<RecoveryValidationRunResult> {
@@ -389,6 +394,8 @@ async function runRecoveryValidation(input: {
         await writeRecoveryValidationLock(lock.path, { ...lock.metadata, pid: pid ?? null });
       },
       onHeartbeat: (elapsedMs) => {
+        const timestamp = new Date().toISOString();
+        input.markRunningActivity?.(input.issue.id, timestamp);
         heartbeatWrites.push(input.logger.write({
           type: "recovery_validation_heartbeat",
           issueId: input.issue.id,
