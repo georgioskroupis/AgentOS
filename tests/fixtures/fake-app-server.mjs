@@ -178,6 +178,30 @@ rl.on("line", (line) => {
       );
       process.exit(0);
     }
+    if (process.argv.includes("--active-validation-exit-before-completion")) {
+      write({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            command: "npm run agent-check",
+            status: "inProgress"
+          }
+        }
+      });
+      write({
+        method: "item/commandExecution/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          delta: "vitest still running"
+        }
+      });
+      setTimeout(() => process.exit(42), 10);
+      return;
+    }
     const complete = () => {
       write({
         method: "turn/completed",

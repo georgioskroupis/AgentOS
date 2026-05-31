@@ -22,6 +22,7 @@ const nestedOrchestratorShellFixtureCommand = `node ${JSON.stringify(fixture)} -
 const safeNestedTextSearchFixtureCommand = `node ${JSON.stringify(fixture)} --safe-nested-text-search`;
 const exitBeforeCompletionFixtureCommand = `node ${JSON.stringify(fixture)} --exit-before-completion`;
 const benignStderrExitBeforeCompletionFixtureCommand = `node ${JSON.stringify(fixture)} --benign-stderr-exit-before-completion`;
+const activeValidationExitBeforeCompletionFixtureCommand = `node ${JSON.stringify(fixture)} --active-validation-exit-before-completion`;
 const longRawStdoutAndStderrFixtureCommand = `node ${JSON.stringify(fixture)} --long-raw-stdout --large-stderr`;
 const ongoingRawStdoutFixtureCommand = `node ${JSON.stringify(fixture)} --ongoing-raw-stdout`;
 const largeJsonEventSplitFixtureCommand = `node ${JSON.stringify(fixture)} --large-json-event-split`;
@@ -531,6 +532,54 @@ describe("CodexAppServerRunner", () => {
       threadId: "thread-1",
       turnId: "turn-1"
     });
+  });
+
+  it("preserves active validation command evidence when the app-server stream closes", async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), "agent-os-runner-validation-stream-close-"));
+    const workspace: Workspace = { path: workspacePath, workspaceKey: "AG-1", createdNow: true };
+    const config = runnerConfig(workspacePath, activeValidationExitBeforeCompletionFixtureCommand);
+    const events: AgentEvent[] = [];
+
+    const result = await new CodexAppServerRunner().run({
+      issue,
+      prompt: "Run long validation",
+      attempt: null,
+      workspace,
+      config,
+      onEvent(event) {
+        events.push(event);
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("transport stream closed before command result was known"),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      transportClosure: {
+        kind: "app-server-stream-closed",
+        reason: "exit 42",
+        closedDuringActiveCommand: true,
+        recentValidationOutput: true,
+        activeCommand: expect.objectContaining({
+          command: "npm run agent-check",
+          validationCommand: true,
+          status: "active",
+          outputSeen: true
+        })
+      }
+    });
+    expect(result.error).toContain("validation command was active");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "codex_app_server_stream_closed",
+        payload: expect.objectContaining({
+          closedDuringActiveCommand: true,
+          recentValidationOutput: true,
+          activeCommand: expect.objectContaining({ command: "npm run agent-check" })
+        })
+      })
+    );
   });
 
   it("classifies clean app-server exits with only benign plugin stderr separately", async () => {

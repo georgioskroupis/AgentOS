@@ -51,6 +51,7 @@
       "src/prompt-context.ts",
       "src/runner/command-stop.ts",
       "src/runner/stderr-classification.ts",
+      "src/runner/transport-closure.ts",
       "src/status-validation.ts",
       "src/trust.ts"
     ],

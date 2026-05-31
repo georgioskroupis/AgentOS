@@ -22,6 +22,7 @@ export * from "./landing-preflight.js";
 export * from "./defaults.js";
 export * from "./runs.js";
 export * from "./run-event-summary.js";
+export * from "./runner/transport-closure.js";
 export * from "./cycle-time.js";
 export * from "./runtime-state.js";
 export * from "./daemon-identity.js";

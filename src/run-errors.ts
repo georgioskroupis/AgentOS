@@ -19,6 +19,7 @@ export function categorizeRunError(message: string): RunErrorCategory {
   const normalized = message.toLowerCase();
   if (normalized.includes("capacity_wait") || /\b(usage limit|rate limit|too many requests|quota)\b/.test(normalized)) return "capacity-wait";
   if (isHumanInputStop(normalized)) return "human-input";
+  if (normalized.includes("codex_app_server_closed")) return "streaming-turn";
   if (normalized.includes("timeout")) return "timeout";
   if (normalized.includes("stall")) return "stall";
   if (normalized.includes("cancel")) return "canceled";
