@@ -7,6 +7,7 @@ import type { AgentRunResult, AgentRunner, CodexEventPolicy } from "../types.js"
 import { handleClientToolCall, linearGraphqlClientTools } from "./client-tools.js";
 import { codexCommandStop } from "./command-stop.js";
 import { isBenignCodexPluginStderr } from "./stderr-classification.js";
+import { CommandEvidenceTracker, transportClosureMessage, type TransportClosureEvidence } from "./transport-closure.js";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -68,6 +69,8 @@ export class CodexAppServerRunner implements AgentRunner {
     let lastEventAt = Date.now();
     let ignoreChildClose = false;
     let turnFinished = false;
+    const commandEvidence = new CommandEvidenceTracker();
+    let lastTransportClosure: TransportClosureEvidence | undefined;
 
     const send = (method: string, params: Record<string, unknown>) => {
       const requestId = id++;
@@ -89,7 +92,8 @@ export class CodexAppServerRunner implements AgentRunner {
       child.stdin.write(`${JSON.stringify({ id: requestId, result })}\n`);
     };
 
-    const failAppServer = (error: Error) => {
+    const failAppServer = (error: Error, transportClosure?: TransportClosureEvidence) => {
+      if (transportClosure) lastTransportClosure = transportClosure;
       for (const [requestId, request] of pending.entries()) {
         clearTimeout(request.timer);
         pending.delete(requestId);
@@ -150,12 +154,24 @@ export class CodexAppServerRunner implements AgentRunner {
       if (ignoreChildClose || turnFinished) return;
       const reason = signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`;
       const stderrText = stderr.text().trim();
+      const transportClosure = commandEvidence.transportClosure(reason);
+      const transportMessage = transportClosure ? transportClosureMessage(reason, transportClosure) : null;
+      if (transportClosure) {
+        input.onEvent({
+          type: "codex_app_server_stream_closed",
+          issueId: input.issue.id,
+          issueIdentifier: input.issue.identifier,
+          message: transportMessage ?? `codex_app_server_closed: ${reason}`,
+          payload: transportClosure,
+          timestamp: transportClosure.closedAt
+        });
+      }
       if (!signal && code === 0 && isBenignCodexPluginStderr(stderrText)) {
-        failAppServer(new Error(`codex_app_server_closed_clean_exit: ${reason} before turn completion; benign plugin stderr captured separately`));
+        failAppServer(new Error(`codex_app_server_closed_clean_exit: ${reason} before turn completion; benign plugin stderr captured separately`), transportClosure);
         return;
       }
       const details = stderr.length > 0 ? `: ${summarizeText(stderr.tailText(500), 500).inline}` : "";
-      failAppServer(new Error(`codex_app_server_closed: ${reason}${details}`));
+      failAppServer(new Error(`${transportMessage ?? `codex_app_server_closed: ${reason}`}${details}`), transportClosure);
     });
 
     child.stderr.on("data", (chunk) => {
@@ -239,6 +255,7 @@ export class CodexAppServerRunner implements AgentRunner {
               interruptAndTerminate();
               continue;
             }
+            commandEvidence.update(message);
             input.onEvent({
               type: String(message.method ?? message.type ?? "codex_event"),
               issueId: input.issue.id,
@@ -383,7 +400,8 @@ export class CodexAppServerRunner implements AgentRunner {
         totalTokens,
         rateLimits,
         modelTelemetry: telemetry,
-        error: summarizeText(error instanceof Error ? error.message : String(error)).inline
+        error: summarizeText(error instanceof Error ? error.message : String(error)).inline,
+        ...(lastTransportClosure ? { transportClosure: lastTransportClosure } : {})
       };
     } finally {
       flushStdoutRemainder();
@@ -415,6 +433,7 @@ export class CodexAppServerRunner implements AgentRunner {
       ignoreChildClose = true;
       child.kill("SIGTERM");
     }
+
   }
 }
 

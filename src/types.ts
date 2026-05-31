@@ -217,6 +217,7 @@ export interface AgentRunResult {
   rateLimits?: Array<Record<string, unknown>>;
   modelTelemetry?: ModelTelemetryEntry;
   error?: string;
+  transportClosure?: unknown;
 }
 
 export interface AgentRunner {
