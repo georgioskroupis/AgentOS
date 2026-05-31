@@ -4104,6 +4104,7 @@ describe("orchestrator", () => {
       }),
       "utf8"
     );
+
     const moves: string[] = [];
     const tracker: IssueTracker = {
       async fetchCandidates() {
@@ -5860,7 +5861,6 @@ describe("orchestrator", () => {
       }),
       "utf8"
     );
-
     const moves: string[] = [];
     const comments: string[] = [];
     const tracker: IssueTracker = {
@@ -6960,6 +6960,26 @@ describe("orchestrator", () => {
       }),
       "utf8"
     );
+    const runtimeStore = new RuntimeStateStore(repo);
+    await runtimeStore.upsertActiveRun({
+      issueId: "issue-1",
+      identifier: "AG-1",
+      issue: mergingIssue,
+      attempt: 0,
+      runId: completedRun.runId,
+      startedAt: "2026-01-02T00:00:00.000Z",
+      lastEventAt: "2026-01-02T00:00:00.000Z",
+      phase: "merge-shepherding"
+    });
+    await runtimeStore.upsertRetry({
+      issueId: "issue-1",
+      identifier: "AG-1",
+      issue: mergingIssue,
+      attempt: 1,
+      dueAt: "2099-01-02T00:00:00.000Z",
+      error: "stale retry",
+      scheduledAt: "2026-01-02T00:00:00.000Z"
+    });
 
     const moves: string[] = [];
     const comments: string[] = [];
@@ -6982,21 +7002,27 @@ describe("orchestrator", () => {
         throw new Error("runner should not be called for no-PR Merging issues");
       }
     };
+    const logger = new JsonlLogger(repo);
 
     const orchestrator = new Orchestrator({
       repoRoot: repo,
       workflowPath,
       tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
       runner,
-      logger: new JsonlLogger(repo),
+      logger,
       env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
     });
 
+    await orchestrator.runOnce(true);
     await orchestrator.runOnce(true);
 
     expect(moves).toEqual(["AG-1 -> Done"]);
     expect(comments.join("\n")).toContain("No merge-eligible pull request output was selected");
     expect(comments.join("\n")).toContain("approval of the handoff without a merge");
+    expect(comments.join("\n").match(/approval of the handoff without a merge/g)).toHaveLength(1);
+    const logs = await logger.tail(100);
+    expect(logs.filter((entry) => entry.type === "merge_no_pr_succeeded")).toHaveLength(1);
+    expect(logs.filter((entry) => entry.type === "merge_no_pr_terminal_reconciled")).toHaveLength(1);
     const inspected = await runStore.inspect(completedRun.runId);
     expect(inspected.summary.timing?.phases.find((phase) => phase.phase === "human-wait")).toEqual(
       expect.objectContaining({
@@ -7005,6 +7031,21 @@ describe("orchestrator", () => {
         metadata: expect.objectContaining({ reason: "issue entered merge state" })
       })
     );
+    const runtime = await runtimeStore.read();
+    const state = await new IssueStateStore(repo).read("AG-1");
+    expect(runtime.activeRuns).toEqual([]);
+    expect(runtime.retryQueue).toEqual([]);
+    expect(state).toMatchObject({
+      phase: "completed",
+      lifecycleStatus: "terminal_linear",
+      terminalState: "Done",
+      terminalReason: "merge shepherd: approved no-PR handoff"
+    });
+    expect(state?.lastError).toBeUndefined();
+    expect(state?.nextRetryAt).toBeUndefined();
+    const inspectOutput = await inspectIssue(repo, "AG-1");
+    expect(inspectOutput).toContain("Next safe action: no operator action required; issue is already in terminal state Done");
+    expect(inspectOutput).not.toContain("move to Merging");
   });
 
   it("does not treat implemented handoffs without PR metadata as approved no-PR work", async () => {

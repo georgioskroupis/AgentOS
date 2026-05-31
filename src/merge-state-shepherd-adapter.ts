@@ -16,7 +16,7 @@ import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
 import { recoverMergeMetadataFromWorkspaceEvidence } from "./orchestrator-merge-recovery.js";
 import { markDraftPullRequestReadyIfConfigured } from "./orchestrator-pr-ready.js";
 import { isNoPrHandoffApproved } from "./orchestrator-state-helpers.js";
-import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, isRecordedMergeTerminal } from "./orchestrator-terminal.js";
+import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, isRecordedMergeTerminal, isRecordedNoPrMergeTerminal, noPrMergeTerminalPatch } from "./orchestrator-terminal.js";
 import { approvedReviewValidationBlockReason } from "./review-budget-orchestration.js";
 import { isReviewSplitRecommendationBlocking, reviewSupervisorMergeDecision } from "./review-budget.js";
 import { timingStartNoLaterThan, type PhaseTimingEventInput } from "./phase-timing.js";
@@ -277,10 +277,25 @@ export function createMergeShepherdExtension(deps: MergeShepherdExtensionDeps): 
     const mergePr = mergeTarget?.url ?? null;
     const mergeEligiblePrs = mergeEligiblePullRequests(state);
     try {
+      if (isRecordedNoPrMergeTerminal(state, config.github.doneState) && !mergePr && mergeEligiblePrs.length === 0) {
+        timingMetadata = { result: "recorded no-PR terminal", terminalState: config.github.doneState };
+        await deps.logger.write({
+          type: "merge_no_pr_terminal_reconciled",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          message: `recorded terminal no-PR handoff in ${config.github.doneState}`
+        });
+        return;
+      }
       if (state && !mergePr && isNoPrHandoffApproved(state) && mergeEligiblePrs.length === 0) {
-        timingMetadata = { result: "approved no-PR handoff" };
+        const terminalAt = new Date().toISOString();
+        const terminalReason = "merge shepherd: approved no-PR handoff";
+        timingMetadata = { result: "approved no-PR handoff", terminalState: config.github.doneState };
         await deps.commentIssue(issue, noPrMergeApprovalComment(state));
         await deps.moveIssue(issue, config.github.doneState);
+        await deps.recordIssueState(issue, noPrMergeTerminalPatch(state, config.github.doneState, terminalAt, terminalReason));
+        await deps.runtimeState.clearIssue(issue.id, issue.identifier);
+        deps.retries.delete(issue.id);
         await deps.logger.write({
           type: "merge_no_pr_succeeded",
           issueId: issue.id,
