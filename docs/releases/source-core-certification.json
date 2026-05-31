@@ -6,12 +6,12 @@
   "localFakeGated": true,
   "liveE2EGatedBy": "npm run certification:live-e2e",
   "excludes": [
-    "review/fixer loop",
-    "merge shepherd and GitHub checks",
-    "dashboard/API and monitor snapshot assembly",
+    "positive review/fixer loop behavior",
+    "positive merge shepherd and GitHub checks",
+    "positive dashboard/API and monitor snapshot assembly",
     "registry orchestration",
-    "planning/DAG issue creation",
-    "model routing",
+    "positive planning/DAG issue creation",
+    "applied model routing overrides",
     "raw GraphQL client tool",
     "non-Linear tracker adapters"
   ],
@@ -186,13 +186,33 @@
       "id": "post-validation-noop-boundary",
       "classification": "source-core",
       "status": "covered",
-      "summary": "Source-core completion can use no-op post-validation and merge-state extensions without invoking optional review, landing, or merge shepherd work.",
+      "summary": "Source-core completion and disabled extension configuration stay silent: no reviewer/fixer prompts, merge shepherd, monitor server/control API, model override application, or child-issue writer exposure.",
       "evidence": [
         {
           "path": "src/post-validation-extension.ts"
         },
         {
           "path": "src/merge-state-extension.ts"
+        },
+        {
+          "path": "tests/disabled-extension-noops.test.ts",
+          "testName": "does not build reviewer or fixer prompts when review is disabled"
+        },
+        {
+          "path": "tests/disabled-extension-noops.test.ts",
+          "testName": "does not run the merge shepherd when github.merge_mode is manual"
+        },
+        {
+          "path": "tests/disabled-extension-noops.test.ts",
+          "testName": "does not start the monitor server or control API when the monitor is disabled"
+        },
+        {
+          "path": "tests/disabled-extension-noops.test.ts",
+          "testName": "keeps report-only model routing from applying a model override"
+        },
+        {
+          "path": "tests/disabled-extension-noops.test.ts",
+          "testName": "keeps planning-disabled guardrails from exposing a child-issue writer"
         },
         {
           "path": "tests/orchestrator.test.ts",
@@ -204,6 +224,7 @@
         }
       ],
       "proofCommands": [
+        "npm test -- tests/disabled-extension-noops.test.ts --reporter verbose",
         "npm test -- tests/orchestrator.test.ts -t \"uses no-op post-validation extension path for source-core runs|uses no-op merge-state extension path for source-core runs\" --reporter verbose"
       ]
     },
