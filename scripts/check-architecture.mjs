@@ -478,6 +478,9 @@ function checkFileBudgets() {
     ["src/github.ts", 700],
     ["src/setup-wizard.ts", 700]
   ]);
+  const importBudgets = new Map([
+    ["src/orchestrator.ts", 60]
+  ]);
   for (const path of sourceFiles("src")) {
     const text = read(path);
     if (text == null) continue;
@@ -485,6 +488,13 @@ function checkFileBudgets() {
     const lines = text.split(/\r?\n/).length;
     if (lines > limit) {
       fail(`${path} is ${lines} lines, above the ${limit}-line budget`, "Split the next coherent behavior into a named module before adding more code to this file.");
+    }
+    const importLimit = importBudgets.get(path);
+    if (importLimit != null) {
+      const imports = importSpecifiers(text).length;
+      if (imports > importLimit) {
+        fail(`${path} has ${imports} import statements, above the ${importLimit}-import budget`, "Move the next coherent dependency group behind a named boundary module before adding more imports to this file.");
+      }
     }
   }
 }
