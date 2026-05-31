@@ -14,6 +14,8 @@ import { schedulerBookkeepingHandoffComment } from "./lifecycle.js";
 import { TrackerLifecycleController, type LifecycleTrackerUpdateResult } from "./lifecycle-controller.js";
 import type { SchedulerSafetyWriteReason } from "./lifecycle-events.js";
 import { JsonlLogger } from "./logging.js";
+import type { MergeStateExtension } from "./merge-state-extension.js";
+import { createMergeShepherdExtension } from "./merge-state-shepherd-adapter.js";
 import { NullMonitorSink, type MonitorSink } from "./monitor-contracts.js";
 import { createMonitorEmitter, type MonitorEmitter } from "./monitor-sink.js";
 import { initialDaemonFreshnessState, isDaemonFreshnessStale } from "./daemon-freshness.js";
@@ -26,7 +28,7 @@ import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequest
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { refreshOrchestratorDaemonRuntime } from "./orchestrator-daemon-runtime.js";
-import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment, runLandingShepherdGate } from "./orchestrator-landing-preflight.js";
+import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment } from "./orchestrator-landing-preflight.js";
 import { evaluateOrchestratorStartupPreflight, type OrchestratorStartupPreflightResult } from "./orchestrator-startup-preflight.js";
 import { recordSingletonPreflightFailure } from "./orchestrator-singleton-preflight.js";
 import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
@@ -66,7 +68,7 @@ import { createTrackerCapabilitySet } from "./tracker-adapters.js";
 import { splitTrackerCapabilities, type AgentLifecycleWriter, type SchedulerSafetyWriter, type TrackerReader } from "./tracker-boundaries.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, LifecycleStatus, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
-export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: TrackerReader; schedulerSafetyWriter?: SchedulerSafetyWriter; agentLifecycleWriter?: AgentLifecycleWriter; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; postValidationExtension?: PostValidationExtension; }
+export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: TrackerReader; schedulerSafetyWriter?: SchedulerSafetyWriter; agentLifecycleWriter?: AgentLifecycleWriter; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; postValidationExtension?: PostValidationExtension; mergeStateExtension?: MergeStateExtension; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
 export interface OrchestratorRunSummary { dispatched: number; retryDispatched: number; candidateDispatched: number; candidates: number; }
 interface RunningEntry { issue: Issue; startedAt: number; runId: string | null; lastCodexEventAt: number | null; abortController: AbortController; promise: Promise<void>; }
@@ -97,6 +99,7 @@ export class Orchestrator {
   private startupSingletonPreflightDone = false;
   private preflightWarningMarker: string | null = null;
   private postValidationExtension: PostValidationExtension;
+  private mergeStateExtension: MergeStateExtension;
   constructor(private readonly options: OrchestratorOptions) {
     this.logger = options.logger ?? new JsonlLogger(resolve(options.repoRoot));
     this.monitorEmitter = createMonitorEmitter({ sink: options.monitorSink ?? new NullMonitorSink(), logger: this.logger });
@@ -114,6 +117,13 @@ export class Orchestrator {
       recordContextBudget: (issue, runId, kind, prompt) => this.recordContextBudget(issue, runId, kind, prompt),
       writeRunEvent: (runId, entry) => this.writeRunEvent(runId, entry),
       markRunningActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
+    });
+    this.mergeStateExtension = options.mergeStateExtension ?? createMergeShepherdExtension({
+      config: () => this.config,
+      preflight: () => this.preflight,
+      runtimeState: this.runtimeState,
+      logger: this.logger,
+      shepherd: () => this.shepherdMergingIssues()
     });
   }
   async reload(): Promise<void> {
@@ -170,7 +180,7 @@ export class Orchestrator {
     validateDispatchConfig(this.config);
     retryDispatched = await this.dispatchDueRetries(remainingDispatchCapacity());
     dispatched += retryDispatched;
-    await runLandingShepherdGate({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, logger: this.logger, shepherd: () => this.shepherdMergingIssues() });
+    await this.mergeStateExtension.processMergeState();
     const candidates = await this.tracker.fetchCandidates(this.config.tracker.activeStates);
     for (const issue of candidates) {
       if (remainingDispatchCapacity() <= 0) break;
