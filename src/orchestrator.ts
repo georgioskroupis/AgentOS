@@ -3,13 +3,11 @@ import { exists } from "./fs-utils.js";
 import { detectCapacityWait } from "./capacity-wait.js";
 import { contextBudgetExceededMessage } from "./context-budget.js";
 import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPreflightResult, type RepoEnvLoadResult } from "./env.js";
-import { evaluateMergeReadiness, GitHubClient, summarizeFeedback, type PullRequestStatus } from "./github.js";
+import { GitHubClient, summarizeFeedback, type PullRequestStatus } from "./github.js";
 import { readGitHubReviewContext } from "./github-context.js";
 import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
 import { verifyAndRecordAgentOwnedLifecycleEvidence } from "./orchestrator-agent-owned-evidence.js";
 import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls } from "./issue-state.js";
-import { evaluateLandingPolicyForConfig, formatLandingPolicyResult } from "./landing-policy.js";
-import { landingFreshnessPatch } from "./landing-preflight.js";
 import { schedulerBookkeepingHandoffComment } from "./lifecycle.js";
 import { TrackerLifecycleController, type LifecycleTrackerUpdateResult } from "./lifecycle-controller.js";
 import type { SchedulerSafetyWriteReason } from "./lifecycle-events.js";
@@ -31,30 +29,24 @@ import { refreshOrchestratorDaemonRuntime } from "./orchestrator-daemon-runtime.
 import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment } from "./orchestrator-landing-preflight.js";
 import { evaluateOrchestratorStartupPreflight, type OrchestratorStartupPreflightResult } from "./orchestrator-startup-preflight.js";
 import { recordSingletonPreflightFailure } from "./orchestrator-singleton-preflight.js";
-import { handleMergeBranchFreshness } from "./orchestrator-branch-update.js";
-import { cleanupMergedPullRequest } from "./orchestrator-merge-cleanup.js";
-import { recoverMergeMetadataFromWorkspaceEvidence } from "./orchestrator-merge-recovery.js";
 import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, withRunnerActivityMonitorContext, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
 import { emitPreDispatchMonitorPause } from "./orchestrator-pre-dispatch-monitor.js";
 import { markLinearPlanningRecommended } from "./orchestrator-planning-guardrail.js";
-import { markDraftPullRequestReadyIfConfigured } from "./orchestrator-pr-ready.js";
 import { moveIssueToRunningState } from "./orchestrator-run-start-state-sync.js";
 import { handoffRunnerStreamStopPresentation, nonDispatchableRunnerStreamStopPresentation, TERMINAL_RUNNER_STREAM_STOP_REASON, HANDOFF_RUNNER_STREAM_STOP_REASON } from "./orchestrator-runner-stop-presentation.js";
 import { readRuntimeRetryForIssue, retryBackoffFinishMetadata, runtimeRetryToMemory, type RetryEntry } from "./orchestrator-retry.js";
 import { scheduleCapacityWait as scheduleCapacityWaitRetry } from "./orchestrator-capacity-wait.js";
 import { recordContextBudgetForIssue } from "./orchestrator-context-budget.js";
 import { safeGuardrailErrorMessage } from "./orchestrator-guardrail-errors.js";
-import { capacityWaitScheduledCommentBody, mergeFailedCommentBody, mergeFailureActiveRepairRoute, mergeFailureActiveRepairStatePatch, mergeWaitingCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody, type MergeFailureRoute } from "./orchestrator-lifecycle-comments.js";
+import { capacityWaitScheduledCommentBody, needsInputCommentBody, recoveryNeededCommentBody, retryScheduledCommentBody, runFailedCommentBody, runStartedCommentBody } from "./orchestrator-lifecycle-comments.js";
 import { autoRecoverPushedWork, finalizeCleanPushedWorkAfterRunnerStop, publishCleanRecoveryBranchIfSafe } from "./orchestrator-pushed-work-recovery.js";
 import { isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
 import { schedulerSafetyCommentIssue, schedulerSafetyMoveIssue } from "./orchestrator-scheduler-safety.js";
 import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
 import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
-import { alreadyMergedIssuePatch, completeRecordedMergeTerminal, dependencyDispatchStopPatch, isRecordedMergeTerminal, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
+import { alreadyMergedIssuePatch, dependencyDispatchStopPatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { detectExternalHumanReviewStateDrift, recordExternalHumanReviewStateDrift } from "./orchestrator-state-drift.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, trackerDispatchStop } from "./orchestrator-tracker-guard.js";
-import { isReviewSplitRecommendationBlocking, reviewSupervisorMergeDecision } from "./review-budget.js";
-import { approvedReviewValidationBlockReason } from "./review-budget-orchestration.js";
 import { categorizeRunError, isDependencyDispatchStop, isDispatchTerminalStop, isHumanInputStop } from "./run-errors.js";
 import { CodexAppServerRunner } from "./runner/app-server.js";
 import { RunArtifactStore, type RunPhaseTiming, type RunSummary, type RunTimingPhase, type RunTimingStatus } from "./runs.js";
@@ -87,7 +79,6 @@ export class Orchestrator {
   private claimed = new Set<string>();
   private retries = new Map<string, RetryEntry>();
   private completedMarkers = new Map<string, string>();
-  private mergeWaitingMarkers = new Map<string, string>();
   private startupCleanupDone = false;
   private startupReconstructionDone = false;
   private daemonStartedAt = new Date().toISOString();
@@ -119,11 +110,22 @@ export class Orchestrator {
       markRunningActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
     });
     this.mergeStateExtension = options.mergeStateExtension ?? createMergeShepherdExtension({
+      repoRoot: this.options.repoRoot,
       config: () => this.config,
       preflight: () => this.preflight,
+      tracker: { fetchCandidates: (states) => this.tracker.fetchCandidates(states) },
       runtimeState: this.runtimeState,
+      retries: this.retries,
       logger: this.logger,
-      shepherd: () => this.shepherdMergingIssues()
+      fetchIssueComments: (issue) => this.fetchDispatchGuardrailIssueComments(issue),
+      ingestHumanDecisions: (issue, state, comments, options) => this.ingestHumanDecisions(issue, state, comments, options),
+      recordIssueState: (issue, patch) => this.recordIssueState(issue, patch),
+      commentIssue: (issue, body, key) => this.commentIssue(issue, body, key),
+      moveIssue: (issue, stateName) => this.moveIssue(issue, stateName),
+      schedulerSafetyMoveIssue: (issue, stateName, safetyReason) => schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName, safetyReason }),
+      finishOpenRunPhase: (runId, issue, phase, status, finishedAt, metadata) => this.finishOpenRunPhase(runId, issue, phase, status, finishedAt, metadata),
+      writePhaseTimingEvent: (issue, input) => this.writePhaseTimingEvent(issue, input),
+      refreshDaemonRuntimeState: (options) => this.refreshDaemonRuntimeState(options)
     });
   }
   async reload(): Promise<void> {
@@ -737,61 +739,7 @@ export class Orchestrator {
 
     const mergeTarget = mergeTargetPullRequest(state);
     if (state?.reviewStatus === "approved" && mergeTarget?.url && !allowImplementationContinuation) {
-      await this.runtimeState.clearIssue(issue.id);
-      this.retries.delete(issue.id);
-      const repoRoot = resolve(this.options.repoRoot);
-      const targetValid = await this.validateDispatchPullRequestTarget(issue, mergeTarget.url);
-      if (!targetValid) return true;
-      const landing = evaluateLandingPolicyForConfig(this.config);
-      if (!landing.enabled) {
-        const message = `approved PR landing ${formatLandingPolicyResult(landing)}`;
-        await this.recordIssueState(issue, { phase: state.phase, mergeTargetUrl: mergeTarget.url, mergeTargetRole: mergeTarget.role ?? "primary", stopReason: message, nextRetryAt: undefined, retryAttempt: undefined });
-        await this.logger.write({ type: `landing_${landing.status}`, issueId: issue.id, issueIdentifier: issue.identifier, message, payload: { prUrl: mergeTarget.url, landing } });
-        await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "pre_dispatch_safety_block" });
-        return true;
-      }
-      const github = new GitHubClient(this.config.github.command);
-      const pr = await github.getPullRequest(mergeTarget.url, repoRoot).catch(async (error: Error) => {
-        await this.logger.write({
-          type: "dispatch_skipped",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          message: `approved PR exists but GitHub status could not be read: ${error.message}`
-        });
-        return null;
-      });
-      if (pr?.merged) {
-        await this.classifyAlreadyMergedIssue(issue, state, "dispatch skipped because approved PR is already merged");
-        return true;
-      }
-      const refreshedState = pr ? await this.recordIssueState(issue, landingFreshnessPatch(state, pr, this.config.github.requireChecks)) : state;
-      const landingBlock = pr && refreshedState ? await approvedPrLandingPreflightBlock({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, state: refreshedState, pullRequest: pr, mergeTarget }) : null;
-      if (landingBlock) { await this.recordIssueState(issue, landingBlock.statePatch); await this.logger.write({ type: `landing_preflight_${landingBlock.status}`, issueId: issue.id, issueIdentifier: issue.identifier, message: landingBlock.message, payload: landingBlock.payload }); if (landingBlock.status === "blocked") await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "pre_dispatch_safety_block" }); return true; }
-      const readyPr =
-        pr && refreshedState
-          ? await markDraftPullRequestReadyIfConfigured({ issue, github, repoRoot, pr, prUrl: mergeTarget.url, state: refreshedState, requireChecks: this.config.github.requireChecks, markDraftReady: this.config.github.markDraftReady, reason: "approved PR landing preflight passed", recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch), commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key), logger: this.logger })
-          : pr;
-      const readiness = readyPr ? evaluateMergeReadiness(readyPr, this.config.github.requireChecks) : null;
-      const message = readiness?.ready
-        ? "approved PR is merge-ready; moved issue to Merging instead of redispatching implementation"
-        : `approved PR awaits merge readiness${readiness ? `: ${readiness.reason}` : ""}`;
-      await this.recordIssueState(issue, {
-        phase: readiness?.ready ? "merge" : state.phase,
-        mergeTargetUrl: mergeTarget.url,
-        mergeTargetRole: mergeTarget.role ?? "primary",
-        stopReason: message,
-        nextRetryAt: undefined,
-        retryAttempt: undefined
-      });
-      await this.logger.write({
-        type: "dispatch_skipped",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message,
-        payload: { prUrl: mergeTarget.url, readiness }
-      });
-      if (readiness?.ready) await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.mergeState, safetyReason: "pre_dispatch_safety_block" });
-      return true;
+      return this.mergeStateExtension.processApprovedPullRequestLanding({ issue, state, mergeTarget });
     }
 
     if (state && !allowImplementationContinuation && isLocallyCompletedState(state)) {
@@ -907,24 +855,6 @@ export class Orchestrator {
     return this.recordDispatchGuardrailStop(issue, message, {
       phase: "needs-input", lifecycleStatus: undefined, lastError: message, errorCategory: "prompt", stopReason: message
     });
-  }
-
-  private async validateDispatchPullRequestTarget(issue: Issue, prUrl: string): Promise<boolean> {
-    try {
-      await assertPullRequestUrlMatchesRepo(resolve(this.options.repoRoot), prUrl);
-      return true;
-    } catch (error) {
-      const message = safeGuardrailErrorMessage(error);
-      await this.recordDispatchGuardrailStop(issue, message, {
-        phase: "human-required",
-        reviewStatus: "human_required",
-        lastError: message,
-        errorCategory: "prompt",
-        stopReason: message
-      });
-      await schedulerSafetyMoveIssue({ controller: this.lifecycleController, issue, stateName: this.config.tracker.reviewState, safetyReason: "pre_dispatch_safety_block" });
-      return false;
-    }
   }
 
   private async preTurnCheck(issue: Issue): Promise<string | null> {
@@ -1648,258 +1578,6 @@ export class Orchestrator {
     }
   }
 
-  private async shepherdMergingIssues(): Promise<void> {
-    const mergeState = this.config.tracker.mergeState;
-    if (!mergeState) return;
-    const issues = await this.tracker.fetchCandidates([mergeState]);
-    for (const issue of issues) {
-      await this.shepherdMergeIssue(issue);
-    }
-  }
-
-  private async shepherdMergeIssue(issue: Issue): Promise<void> {
-    const timingStartedAt = new Date().toISOString();
-    let timingStatus: RunTimingStatus = "completed";
-    let timingLabel = "merge shepherding completed";
-    let timingMetadata: Record<string, unknown> = {};
-    const stateStore = new IssueStateStore(resolve(this.options.repoRoot));
-    let state = await stateStore.read(issue.identifier);
-    await this.finishOpenRunPhase(state?.lastRunId, issue, "human-wait", "completed", timingStartNoLaterThan(issue.updated_at, timingStartedAt), { reason: "issue entered merge state" });
-    if (this.config.review.enabled) {
-      state = await refreshMergeShepherdHumanDecisionsIfNeeded({
-        issue,
-        state,
-        fetchIssueComments: (target) => this.fetchDispatchGuardrailIssueComments(target),
-        ingestHumanDecisions: (target, current, comments, options) => this.ingestHumanDecisions(target, current, comments, options),
-        logger: this.logger
-      });
-    }
-    const recovered = await recoverMergeMetadataFromWorkspaceEvidence({ issue, state, repoRoot: resolve(this.options.repoRoot), logger: this.logger });
-    state = recovered.state;
-    const mergeTarget = mergeTargetPullRequest(state);
-    const mergePr = mergeTarget?.url ?? null;
-    const mergeEligiblePrs = mergeEligiblePullRequests(state);
-    try {
-      if (state && !mergePr && isNoPrHandoffApproved(state) && mergeEligiblePrs.length === 0) {
-        timingMetadata = { result: "approved no-PR handoff" };
-        await this.commentIssue(issue, noPrMergeApprovalComment(state));
-        await this.moveIssue(issue, this.config.github.doneState);
-        await this.logger.write({
-          type: "merge_no_pr_succeeded",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          message: "approved no-PR handoff"
-        });
-        return;
-      }
-      if (state && !mergePr && mergeEligiblePrs.length > 0) {
-        const reason = mergeTargetAmbiguityReason(state) ?? "Merge target selection is ambiguous; select exactly one primary PR before merging.";
-        timingStatus = "failed";
-        timingLabel = "merge shepherding failed";
-        timingMetadata = { reason };
-        await this.markMergeFailed(issue, reason, { runId: state.lastRunId });
-        return;
-      }
-      if (!state || !mergePr) {
-        const reason = recovered.refusal
-          ? `No pull request metadata was found for this issue. AgentOS could not reconstruct it from workspace handoff/validation evidence: ${recovered.refusal.message}`
-          : "No pull request metadata was found for this issue.";
-        timingStatus = "failed";
-        timingLabel = "merge shepherding failed";
-        timingMetadata = { reason };
-        await this.markMergeFailed(issue, reason, { runId: state?.lastRunId });
-        return;
-      }
-      if (isRecordedMergeTerminal(state)) {
-        timingMetadata = await completeRecordedMergeTerminal({
-          issue,
-          state,
-          mergePr,
-          config: this.config,
-          repoRoot: resolve(this.options.repoRoot),
-          logger: this.logger,
-          runtimeState: this.runtimeState,
-          retries: this.retries,
-          recordIssueState: (target, patch) => this.recordIssueState(target, patch),
-          commentIssue: (body) => this.commentIssue(issue, body),
-          moveIssue: (targetState) => this.moveIssue(issue, targetState)
-        });
-        return;
-      }
-
-      await this.logger.write({
-        type: "merge_shepherd_started",
-        issueId: issue.id,
-        issueIdentifier: issue.identifier,
-        message: mergePr,
-        payload: { prUrl: mergePr, role: mergeTarget?.role ?? "primary", mergeTarget: this.config.github.mergeTarget ?? "primary" }
-      });
-
-      const github = new GitHubClient(this.config.github.command);
-      try {
-        const repoRoot = resolve(this.options.repoRoot);
-        await assertPullRequestUrlMatchesRepo(repoRoot, mergePr);
-        let pr = await github.getPullRequest(mergePr, repoRoot);
-        state = await stateStore.merge(issue.identifier, {
-          ...state,
-          ...landingFreshnessPatch(state, pr, this.config.github.requireChecks),
-          mergeTargetUrl: mergePr,
-          mergeTargetRole: mergeTarget?.role ?? "primary",
-          updatedAt: new Date().toISOString()
-        });
-        const branchFreshness = await handleMergeBranchFreshness({ config: this.config, github, repoRoot, issue, state, stateStore, pullRequest: pr, prUrl: mergePr, logger: this.logger, commentIssue: (body, key) => this.commentIssue(issue, body, key) });
-        state = branchFreshness.state;
-        if (branchFreshness.action === "waiting") { ({ timingStatus, timingLabel, timingMetadata } = branchFreshness); await this.markMergeWaiting(issue, mergePr, branchFreshness.reason, state.lastRunId); return; }
-        if (branchFreshness.action === "failed") { ({ timingStatus, timingLabel, timingMetadata } = branchFreshness); await this.markMergeFailed(issue, branchFreshness.reason, { prUrl: mergePr, runId: state.lastRunId, route: mergeFailureActiveRepairRoute(branchFreshness.reason) }); return; }
-        if (pr.merged) {
-          const ciWaitFinishedAt = new Date().toISOString();
-          await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, result: "already merged" });
-          const cleanupWarnings = await cleanupMergedPullRequest({ issue, github, pullRequest: pr, config: this.config, repoRoot: this.options.repoRoot, logger: this.logger });
-          timingMetadata = { prUrl: mergePr, result: "already merged", cleanupWarnings };
-          await this.recordIssueState(issue, alreadyMergedIssuePatch(state, pr, new Date().toISOString(), "merge shepherd: pull request is already merged", cleanupWarnings));
-          await this.runtimeState.clearIssue(issue.id, issue.identifier);
-          this.retries.delete(issue.id);
-          await this.commentIssue(issue, `### AgentOS merge shepherd\n\nPull request is already merged. Treating that as authoritative and completing the issue.\n\n- PR: ${mergePr}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
-          await this.moveIssue(issue, this.config.github.doneState);
-          return;
-        }
-
-        const landingBlock = await mergeShepherdLandingPreflightBlock({ config: this.config, preflight: this.preflight, runtimeState: this.runtimeState, state, pullRequest: pr, prUrl: mergePr });
-        if (landingBlock) { timingStatus = landingBlock.timingStatus; timingLabel = landingBlock.timingLabel; timingMetadata = landingBlock.timingMetadata; if (landingBlock.status === "waiting") await this.markMergeWaiting(issue, mergePr, landingBlock.reason, state.lastRunId); else await this.markMergeFailed(issue, landingBlock.reason, { prUrl: mergePr, runId: state.lastRunId, route: mergeFailureActiveRepairRoute(landingBlock.reason) }); return; }
-
-        const validationBlockReason = this.config.review.enabled ? approvedReviewValidationBlockReason(state) : null;
-        if (validationBlockReason) {
-          timingStatus = "failed";
-          timingLabel = "merge shepherding failed";
-          timingMetadata = { prUrl: mergePr, reason: validationBlockReason };
-          await this.markMergeFailed(issue, validationBlockReason, { prUrl: mergePr, runId: state.lastRunId });
-          return;
-        }
-        if (this.config.review.enabled && isReviewSplitRecommendationBlocking(state)) {
-          const reason = `split/follow-up recommendation is still open (${state.splitRecommendation?.reason ?? "unknown reason"})`;
-          timingStatus = "failed";
-          timingLabel = "merge shepherding failed";
-          timingMetadata = { prUrl: mergePr, reason };
-          await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId, route: "needs-input", reviewGate: true });
-          return;
-        }
-        if (this.config.review.enabled && state.reviewStatus !== "approved") {
-          const supervisorMergeDecision = reviewSupervisorMergeDecision(state);
-          if (!supervisorMergeDecision && !this.config.github.allowHumanMergeOverride) {
-            const reason = `automated review is not approved (reviewStatus=${state.reviewStatus ?? "missing"})`;
-            timingStatus = "failed";
-            timingLabel = "merge shepherding failed";
-            timingMetadata = { prUrl: mergePr, reason };
-            await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId, route: "needs-input", reviewGate: true });
-            return;
-          }
-          if (!supervisorMergeDecision && !state.humanOverrideAt) {
-            const overrideAt = new Date().toISOString();
-            await new IssueStateStore(resolve(this.options.repoRoot)).merge(issue.identifier, {
-              ...state,
-              humanOverrideAt: overrideAt,
-              humanContinuationAt: overrideAt,
-              lifecycleStatus: "human_continuation",
-              updatedAt: overrideAt
-            });
-            await this.commentIssue(
-              issue,
-              [
-                "### AgentOS review override recorded",
-                "",
-                "This issue is in `Merging` before automated review approval. Treating the Linear status move as explicit human approval for this merge attempt.",
-                "",
-                `- PR: ${mergePr}`,
-                `- Previous reviewStatus: ${state.reviewStatus ?? "missing"}`
-              ].join("\n")
-            );
-            await this.logger.write({
-              type: "review_human_override",
-              issueId: issue.id,
-              issueIdentifier: issue.identifier,
-              message: state.reviewStatus ?? "missing",
-              payload: { prUrl: mergePr }
-            });
-          }
-          const validationFresh = state.validation?.status === "passed" || state.validation?.finalStatus === "passed";
-          if (!validationFresh) {
-            const reason = "human continuation requires fresh passing validation evidence before merge progression";
-            timingStatus = "failed";
-            timingLabel = "merge shepherding failed";
-            timingMetadata = { prUrl: mergePr, reason };
-            await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId });
-            return;
-          }
-        }
-
-        pr = await markDraftPullRequestReadyIfConfigured({ issue, github, repoRoot, pr, prUrl: mergePr, state, requireChecks: this.config.github.requireChecks, markDraftReady: this.config.github.markDraftReady, reason: "merge shepherd landing preflight passed", recordIssueState: (targetIssue, patch) => this.recordIssueState(targetIssue, patch), commentIssue: (targetIssue, body, key) => this.commentIssue(targetIssue, body, key), logger: this.logger });
-        const readiness = evaluateMergeReadiness(pr, this.config.github.requireChecks);
-        if (!readiness.ready) {
-          if (readiness.reason.includes("pending")) {
-            timingStatus = "waiting";
-            timingLabel = "merge shepherding waiting on CI";
-            timingMetadata = { prUrl: mergePr, reason: readiness.reason };
-            await this.markMergeWaiting(issue, mergePr, readiness.reason, state.lastRunId);
-          } else {
-            const ciWaitFinishedAt = new Date().toISOString();
-            await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "failed", ciWaitFinishedAt, { prUrl: mergePr, reason: readiness.reason });
-            timingStatus = "failed";
-            timingLabel = "merge shepherding failed";
-            timingMetadata = { prUrl: mergePr, reason: readiness.reason };
-            await this.markMergeFailed(issue, readiness.reason, { prUrl: mergePr, runId: state.lastRunId, route: "running" });
-          }
-          return;
-        }
-
-        const ciWaitFinishedAt = new Date().toISOString();
-        await this.finishOpenRunPhase(state.lastRunId, issue, "ci-wait", "completed", ciWaitFinishedAt, { prUrl: mergePr, reason: "checks ready" });
-        await this.commentIssue(issue, `### AgentOS merge shepherd\n\nChecks are green and the pull request is mergeable. Starting ${this.config.github.mergeMethod} merge.\n\n- PR: ${mergePr}`);
-        await github.mergePullRequest(mergePr, this.config.github, repoRoot);
-        await this.refreshDaemonRuntimeState({ forceMainRefresh: true });
-        const cleanupWarnings = await cleanupMergedPullRequest({ issue, github, pullRequest: pr, config: this.config, repoRoot: this.options.repoRoot, logger: this.logger });
-        timingMetadata = { prUrl: mergePr, mergeMethod: this.config.github.mergeMethod, cleanupWarnings };
-        await this.recordIssueState(issue, {
-          phase: "completed",
-          lifecycleStatus: cleanupWarnings.length ? "post_merge_cleanup_warning" : "merge_success",
-          mergeCleanupWarnings: cleanupWarnings.length ? cleanupWarnings : undefined,
-          mergedAt: new Date().toISOString(),
-          lastError: undefined,
-          errorCategory: undefined,
-          activeRunId: undefined,
-          nextRetryAt: undefined,
-          retryAttempt: undefined,
-          stopReason: undefined
-        });
-        await this.runtimeState.clearIssue(issue.id, issue.identifier);
-        await this.commentIssue(issue, `### AgentOS merge complete\n\nMerged successfully.\n\n- PR: ${mergePr}\n- Method: ${this.config.github.mergeMethod}${cleanupWarnings.length ? `\n\nCleanup warnings:\n${cleanupWarnings.map((warning) => `- ${warning}`).join("\n")}` : ""}`);
-        await this.moveIssue(issue, this.config.github.doneState);
-        await this.logger.write({
-          type: cleanupWarnings.length ? "merge_succeeded_with_cleanup_warnings" : "merge_succeeded",
-          issueId: issue.id,
-          issueIdentifier: issue.identifier,
-          message: mergePr,
-          payload: cleanupWarnings.length ? { cleanupWarnings } : undefined
-        });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        timingStatus = "failed";
-        timingLabel = "merge shepherding failed";
-        timingMetadata = { prUrl: mergePr, reason };
-        await this.markMergeFailed(issue, reason, { prUrl: mergePr, runId: state.lastRunId, route: mergeFailureActiveRepairRoute(reason) });
-      }
-    } finally {
-      await this.writePhaseTimingEvent(issue, {
-        phase: "merge-shepherding",
-        status: timingStatus,
-        runId: state?.lastRunId,
-        startedAt: timingStartedAt,
-        finishedAt: new Date().toISOString(),
-        label: timingLabel,
-        metadata: timingMetadata
-      });
-    }
-  }
-
   private isEligible(issue: Issue): boolean {
     if (!issue.id || !issue.identifier || !issue.title || !issue.state) return false;
     if (this.running.has(issue.id) || this.claimed.has(issue.id)) return false;
@@ -2249,58 +1927,6 @@ export class Orchestrator {
         needsInputState: this.config.tracker.needsInputState,
         error
       }
-    });
-  }
-
-  private async markMergeWaiting(issue: Issue, prUrl: string, reason: string, runId?: string | null): Promise<void> {
-    const marker = `${issue.updated_at ?? ""}:${reason}`;
-    if (this.mergeWaitingMarkers.get(issue.id) === marker) return;
-    this.mergeWaitingMarkers.set(issue.id, marker);
-    await this.commentIssue(issue, mergeWaitingCommentBody(prUrl, reason), "merge_waiting");
-    await this.logger.write({
-      type: "merge_waiting",
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      message: reason,
-      payload: { prUrl }
-    });
-    await this.writePhaseTimingEvent(issue, {
-      phase: "ci-wait",
-      status: "waiting",
-      runId,
-      startedAt: issue.updated_at ?? undefined,
-      label: "ci wait started",
-      metadata: { prUrl, reason }
-    });
-  }
-  private async markMergeFailed(issue: Issue, reason: string, options: { prUrl?: string | null; runId?: string | null; route?: MergeFailureRoute; reviewGate?: boolean } = {}): Promise<void> {
-    const prUrl = options.prUrl ?? undefined;
-    const route = options.route ?? "review";
-    const targetState = route === "needs-input" ? this.config.tracker.needsInputState : route === "running" ? this.config.tracker.runningState : this.config.tracker.reviewState;
-    if (route === "running") await this.recordIssueState(issue, mergeFailureActiveRepairStatePatch(reason, await new IssueStateStore(resolve(this.options.repoRoot)).read(issue.identifier)));
-    await this.commentIssue(
-      issue,
-      mergeFailedCommentBody({ prUrl, reason, route, targetState, reviewGate: options.reviewGate }),
-      "merge_failed"
-    );
-    await this.moveIssue(issue, targetState);
-    if (route === "needs-input") {
-      await this.writePhaseTimingEvent(issue, {
-        phase: "needs-input", status: "waiting", runId: options.runId, label: "merge needs structured human decision",
-        metadata: { needsInputState: this.config.tracker.needsInputState, reason, ...(prUrl ? { prUrl } : {}) }
-      });
-    } else if (route === "review") {
-      await this.writePhaseTimingEvent(issue, {
-        phase: "human-wait", status: "waiting", runId: options.runId, label: "human review wait restarted",
-        metadata: { reviewState: this.config.tracker.reviewState, reason, ...(prUrl ? { prUrl } : {}) }
-      });
-    }
-    await this.logger.write({
-      type: "merge_failed",
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      message: reason,
-      payload: { prUrl, route, targetState }
     });
   }
 
