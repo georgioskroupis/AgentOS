@@ -429,6 +429,7 @@ function checkNoHiddenLifecyclePolicy() {
     "src/orchestrator.ts",
     "src/orchestrator-workspace-bootstrap.ts",
     "src/orchestrator-lifecycle-comments.ts",
+    "src/merge-state-shepherd-adapter.ts",
     "src/orchestrator-planning-guardrail.ts",
     "src/orchestrator-recovery-actions.ts",
     "src/orchestrator-run-start-state-sync.ts",
