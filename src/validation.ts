@@ -15,6 +15,7 @@ export interface ValidationEvidence {
   commands: ValidationCommandEvidence[];
   githubCi?: ValidationState["githubCi"];
   reuseProfile?: ValidationReuseProfileState;
+  recovery?: ValidationRecoveryEvidence;
 }
 
 export interface ValidationFinalResultEvidence {
@@ -30,6 +31,13 @@ export interface ValidationCommandEvidence {
   exitCode: number;
   startedAt: string;
   finishedAt: string;
+}
+
+export interface ValidationRecoveryEvidence {
+  kind: "clean-pushed-work";
+  branch: string;
+  headSha: string;
+  runId?: string;
 }
 
 export interface ValidationEvidenceCheck {

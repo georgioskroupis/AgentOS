@@ -5,6 +5,7 @@ import { readText, writeTextEnsuringDir } from "./fs-utils.js";
 import { GitHubClient, type PullRequestStatus } from "./github.js";
 import { extractOutcome, extractPullRequestRefs } from "./issue-state.js";
 import { inspectWorkspaceRecovery, publishCleanNoUpstreamRecoveryBranch, recordOperatorRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
+import { finalizeTrustedRecoveryValidationEvidence } from "./recovery-validation-finalization.js";
 import { validationEvidencePath, verifyValidationEvidence, writeValidationEvidence, type ValidationCommandEvidence } from "./validation.js";
 import { validationReuseProfileForConfig } from "./validation-profile.js";
 import { workspaceKey } from "./workspace.js";
@@ -212,7 +213,34 @@ async function finalizeCleanPushedWorkEvidence(input: AutoRecoverPushedWorkInput
     validationBudget: input.config.validationBudget,
     reuseProfile: validationReuseProfileForConfig(input.config)
   });
-  if (validation.state.status === "passed") return true;
+  if (validation.state.status === "passed") {
+    const finalized = await finalizeTrustedRecoveryValidationEvidence({
+      evidence: validation.evidence,
+      path: validation.state.path,
+      issueIdentifier: issue.identifier,
+      branch: recovery.branch,
+      headSha,
+      runId: input.runId ?? null,
+      reuseProfile: validationReuseProfileForConfig(input.config),
+      fullValidationCommand: input.config.validationBudget.fullValidationCommand
+    });
+    if (!finalized) {
+      await logPushedWorkRecoverySkipped(input, "trusted validation evidence could not be finalized for clean pushed recovery", {
+        branch: recovery.branch,
+        headSha,
+        validationPath: validation.state.path ?? null
+      });
+      return false;
+    }
+    await input.logger.write({
+      type: "recovery_validation_finalized",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      message: "finalized trusted recovery validation evidence",
+      payload: { branch: recovery.branch, headSha, validationPath: validation.state.path }
+    });
+    return true;
+  }
 
   const rerun = await runRecoveryValidation({
     command: input.config.validationBudget.fullValidationCommand,
