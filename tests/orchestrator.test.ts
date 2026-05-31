@@ -12369,6 +12369,96 @@ describe("orchestrator", () => {
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("treats active recovery validation heartbeat as running activity during stall reconciliation", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-validation-heartbeat-"));
+    const workflowPath = join(repo, "WORKFLOW.md");
+    const ghState = join(repo, "gh-state.json");
+    await writeFile(
+      workflowPath,
+      `---\ntrust_mode: local-trusted\ntracker:\n  kind: linear\n  api_key: $LINEAR_API_KEY\n  project_slug: AgentOS\n  active_states: [Ready]\n  needs_input_state: Human Review\nworkspace:\n  root: .agent-os/workspaces\ngithub:\n  command: GH_FAKE_STATE=${JSON.stringify(ghState)} node ${JSON.stringify(fakeGh)}\ncodex:\n  stall_timeout_ms: 150\n  turn_timeout_ms: 360\nvalidation_budget:\n  full_validation_command: node -e "setTimeout(() => process.exit(0), 300)"\nreview:\n  enabled: false\n---\nDo {{ issue.identifier }}`,
+      "utf8"
+    );
+    await writeFile(
+      ghState,
+      JSON.stringify({
+        viewErrors: { "agent/AG-1": "no pull request found for branch" },
+        createUrl: "https://github.com/o/r/pull/78"
+      }),
+      "utf8"
+    );
+    const tracker: IssueTracker = {
+      async fetchCandidates() {
+        return [readyIssue];
+      },
+      async fetchIssueStates() {
+        return new Map([[readyIssue.id, readyIssue]]);
+      },
+      async comment() {},
+      async move() {}
+    };
+    const logger = new JsonlLogger(repo);
+    let runnerReturned = false;
+    const orchestrator = new Orchestrator({
+      repoRoot: repo,
+      workflowPath,
+      tracker: withAgentOwnedLifecycleEvidence(repo, tracker),
+      runner: {
+        async run(input): Promise<AgentRunResult> {
+          await initCleanWorkspaceAtOriginMain(input.workspace.path);
+          input.onEvent({ type: "item/commandExecution/outputDelta", issueId: input.issue.id, issueIdentifier: input.issue.identifier, timestamp: new Date().toISOString() });
+          await run("git", ["checkout", "-b", "agent/AG-1"], input.workspace.path);
+          await writeFile(join(input.workspace.path, "README.md"), "recovered work\n", "utf8");
+          await run("git", ["add", "README.md"], input.workspace.path);
+          await run("git", ["commit", "-m", "recover AG-1"], input.workspace.path);
+          await run("git", ["push", "-u", "origin", "agent/AG-1"], input.workspace.path);
+          const headSha = await run("git", ["rev-parse", "HEAD"], input.workspace.path);
+          await mkdir(join(input.workspace.path, ".agent-os"), { recursive: true });
+          await writeFile(
+            join(input.workspace.path, ".agent-os", "handoff-AG-1.md"),
+            "AgentOS-Outcome: implemented\nValidation-JSON: .agent-os/validation/AG-1.json\nPrimary PR: https://github.com/o/r/pull/78\n",
+            "utf8"
+          );
+          await writeFile(
+            ghState,
+            JSON.stringify({
+              view: {
+                url: "https://github.com/o/r/pull/78",
+                state: "OPEN",
+                headRefName: "agent/AG-1",
+                headRefOid: headSha
+              }
+            }),
+            "utf8"
+          );
+          input.onEvent({ type: "item/commandExecution/outputDelta", issueId: input.issue.id, issueIdentifier: input.issue.identifier, timestamp: new Date().toISOString() });
+          runnerReturned = true;
+          return { status: "stale", error: "codex_app_server_closed: exit 0" };
+        }
+      },
+      logger,
+      env: { LINEAR_API_KEY: "lin_test", HOME: "/tmp" }
+    });
+
+    expect((await orchestrator.runOnce(false)).dispatched).toBe(1);
+    await waitUntil(() => runnerReturned, 10_000);
+    let sawHeartbeat = false;
+    for (let index = 0; index < 1000; index += 1) {
+      const currentLogs = await logger.tail(100);
+      if (currentLogs.some((entry) => entry.type === "recovery_validation_heartbeat")) {
+        sawHeartbeat = true;
+        break;
+      }
+      await sleep(10);
+    }
+    expect(sawHeartbeat).toBe(true);
+    await (orchestrator as unknown as { reconcile: () => Promise<void> }).reconcile();
+
+    const logs = await logger.tail(100);
+    expect(logs.map((entry) => entry.type)).toContain("recovery_validation_heartbeat");
+    expect(logs.some((entry) => entry.type === "run_stalled")).toBe(false);
+    await waitUntil(() => (orchestrator as unknown as { running: Map<string, unknown> }).running.size === 0, 10_000);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("does not start duplicate clean-pushed recovery validation when one is already active for the workspace head", async () => {
     const repo = await mkdtemp(join(tmpdir(), "agent-os-orch-clean-pushed-validation-active-"));
     const workflowPath = join(repo, "WORKFLOW.md");

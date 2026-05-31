@@ -1566,6 +1566,8 @@ export class Orchestrator {
       }
     }
     for (const entry of stale) {
+      const elapsed = Date.now() - (entry.lastCodexEventAt ?? entry.startedAt);
+      if (elapsed <= this.config.codex.stallTimeoutMs) continue;
       await this.writePhaseTimingEvent(entry.issue, {
         phase: "stall-cancel",
         status: "stalled",
@@ -1888,6 +1890,7 @@ export class Orchestrator {
       config: this.config,
       runId,
       logger: this.logger,
+      markRunningActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp),
       markSucceeded: async (workspace, handoff, state) => {
         await this.markLinearSucceeded(issue, workspace, handoff, state);
         this.completedMarkers.set(issue.id, completionMarker(issue));
@@ -1906,6 +1909,7 @@ export class Orchestrator {
       repoRoot: this.options.repoRoot,
       config: this.config,
       logger: this.logger,
+      markRunningActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp),
       markSucceeded: async (targetWorkspace, handoff, recoveredState) => {
         await this.markLinearSucceeded(issue, targetWorkspace, handoff, recoveredState);
         this.completedMarkers.set(issue.id, completionMarker(issue));
