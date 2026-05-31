@@ -56,6 +56,31 @@ export function isRecordedMergeTerminal(state: IssueState | null): boolean {
   return Boolean(state?.mergedAt || state?.lifecycleStatus === "merge_success" || state?.lifecycleStatus === "post_merge_cleanup_warning" || state?.lifecycleStatus === "already_merged_pr");
 }
 
+export function isRecordedNoPrMergeTerminal(state: IssueState | null, doneState: string): boolean {
+  return Boolean(state?.phase === "completed" && state.lifecycleStatus === "terminal_linear" && state.terminalState === doneState && state.outcome === "already_satisfied");
+}
+
+export function noPrMergeTerminalPatch(state: IssueState, doneState: string, terminalAt: string, reason: string): Partial<IssueState> {
+  return {
+    phase: "completed",
+    lifecycleStatus: "terminal_linear",
+    terminalState: doneState,
+    terminalReason: reason,
+    terminalAt,
+    reviewStatus: undefined,
+    lastError: undefined,
+    errorCategory: undefined,
+    activeRunId: undefined,
+    nextRetryAt: undefined,
+    retryAttempt: undefined,
+    workspaceMissingAt: undefined,
+    mergeCleanupWarnings: undefined,
+    stopReason: reason,
+    updatedAt: terminalAt,
+    ...(state.validation ? { validation: state.validation } : {})
+  };
+}
+
 export function recordedMergeLifecycleStatus(state: IssueState | null, cleanupWarnings: string[]): LifecycleStatus {
   if (cleanupWarnings.length > 0) return "post_merge_cleanup_warning";
   return state?.lifecycleStatus === "already_merged_pr" ? "already_merged_pr" : "merge_success";
