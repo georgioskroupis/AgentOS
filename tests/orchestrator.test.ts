@@ -12043,6 +12043,27 @@ describe("orchestrator", () => {
     expect(runtime.activeRuns).toEqual([]);
     expect(runtime.retryQueue).toEqual([]);
     expect(await readFile(join(workspacePath, ".agent-os", "handoff-AG-1.md"), "utf8")).toContain("Primary PR: https://github.com/o/r/pull/77");
+    const finalizedValidation = JSON.parse(await readFile(join(workspacePath, ".agent-os", "validation", "AG-1.json"), "utf8"));
+    expect(finalizedValidation).toMatchObject({
+      issueIdentifier: "AG-1",
+      repoHead: headSha,
+      status: "passed",
+      finalResult: {
+        status: "passed",
+        command: "npm run agent-check",
+        exitCode: 0,
+        startedAt: validationNow,
+        finishedAt: validationNow
+      },
+      recovery: {
+        kind: "clean-pushed-work",
+        branch: "agent/AG-1",
+        headSha,
+        runId: staleRun.runId
+      }
+    });
+    expect(finalizedValidation.commands).toEqual([{ name: "npm run agent-check", exitCode: 0, startedAt: validationNow, finishedAt: validationNow }]);
+    expect((await new JsonlLogger(repo).tail(50)).some((entry) => entry.type === "recovery_validation_finalized")).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("finalizes live clean pushed work when the runner reports app-server closure after handoff", async () => {
