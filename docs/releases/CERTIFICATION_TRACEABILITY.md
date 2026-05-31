@@ -35,6 +35,7 @@ tests, and proof commands. Linear status alone is not certification evidence.
 | VER-146 | branch: agent/VER-146 | extension | Merge/landing shepherd implementation is extracted behind the merge-state extension adapter while source-core keeps the no-op merge-state path | `src/merge-state-extension.ts`, `src/merge-state-shepherd-adapter.ts`, `src/orchestrator.ts`, `docs/architecture/SOURCE_FAITHFUL_CORE.md` | `tests/orchestrator.test.ts`, `tests/landing-policy.test.ts`, `tests/landing-preflight.test.ts`, `docs/releases/extension-certification.json` | `npm test -- tests/orchestrator.test.ts -t "shepherds a mergeable PR from Merging to Done without running Codex|refuses Todo redispatch when an approved PR is already merge-ready|marks draft approved PRs ready before auto-promoting landing when configured|uses no-op merge-state extension path for source-core runs" --reporter verbose && npm run certification:source-core && npm run certification:extensions && npm run check:architecture` | Complete |
 | VER-147 | branch: agent/VER-147 | source-core | Disabled extension paths are explicitly proven silent for conservative source-core certification | `docs/releases/source-core-certification.json`, `tests/disabled-extension-noops.test.ts` | `tests/disabled-extension-noops.test.ts` | `npm test -- tests/disabled-extension-noops.test.ts --reporter verbose && npm run certification:source-core && npm run check:architecture` | Complete |
 | VER-148 | branch: agent/VER-148 | source-core | Final boundary recertification records complete sequence traceability, separated proof gates, local proof commands, and orchestrator-size target disposition | `docs/releases/CERTIFICATION_TRACEABILITY.md`, `docs/releases/source-core-certification.json`, `docs/releases/extension-certification.json` | `scripts/check-traceability.mjs`, `scripts/certification-source-core.mjs`, `scripts/certification-extensions.mjs`, `scripts/certification-agent-owned.mjs` | `npm run agent-check && npm run certification:source-core && npm run certification:extensions && npm run certification:agent-owned && npm run check:traceability` | Complete with VER-199 follow-up blocker for remaining orchestrator import-count debt |
+| VER-199 | branch: agent/VER-199 | source-core | Remaining orchestrator import-surface debt is converted into an executable architecture budget while preserving source-core/extension boundaries | `src/orchestrator.ts`, `src/orchestrator-default-extensions.ts`, `src/orchestrator-pr-inspection.ts`, `scripts/check-architecture.mjs` | `tests/orchestrator.test.ts`, `scripts/check-architecture.mjs` | `npm test -- tests/orchestrator.test.ts -t "merge\\|pull request\\|review" --reporter verbose && npm run check:architecture && npm run agent-check` | Complete; `src/orchestrator.ts` is capped at 60 import statements by `npm run check:architecture` |
 
 ## Certification Rules
 
@@ -62,8 +63,8 @@ tests, and proof commands. Linear status alone is not certification evidence.
   defaults.
 - Final orchestrator-size audit uses `ceefba1` as the boundary baseline before
   VER-136: `src/orchestrator.ts` moved from 2,799 LOC and 62 import statements
-  to 2,024 LOC and 62 import statements at `3bf6b29`. The LOC target is met
-  (27.7% reduction); the import-count target is not met. Source-core import
-  isolation is fully proven by `docs/architecture/source-module-map.json` and
-  `npm run check:architecture`, and the remaining import-count debt is tracked
-  by Linear child blocker VER-199 under VER-135.
+  to 1,989 LOC and 60 import statements by VER-199. The LOC target is met
+  (28.9% reduction); the original import-count target is replaced by an
+  executable architecture budget that caps `src/orchestrator.ts` at 60 import
+  statements. Source-core import isolation remains fully proven by
+  `docs/architecture/source-module-map.json` and `npm run check:architecture`.

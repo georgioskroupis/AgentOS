@@ -3,9 +3,7 @@ import { exists } from "./fs-utils.js";
 import { detectCapacityWait } from "./capacity-wait.js";
 import { contextBudgetExceededMessage } from "./context-budget.js";
 import { daemonPreflight, preflightAllowsDispatch, resolveRepoEnv, type DaemonPreflightResult, type RepoEnvLoadResult } from "./env.js";
-import { GitHubClient, summarizeFeedback, type PullRequestStatus } from "./github.js";
-import { readGitHubReviewContext } from "./github-context.js";
-import { assertPullRequestUrlMatchesRepo, assertPullRequestUrlsMatchRepo } from "./github-repository.js";
+import { assertPullRequestUrlsMatchRepo } from "./github-repository.js";
 import { verifyAndRecordAgentOwnedLifecycleEvidence } from "./orchestrator-agent-owned-evidence.js";
 import { extractPullRequestUrls, extractHumanDecisionsFromComments, hasHumanDecision, isAuthoritativeHumanDecision, latestAuthoritativeHumanDecision, latestIssueComments, issueStateFromHandoff, IssueStateStore, latestHumanDecision, mergeHumanDecisions, reconcileHumanDecisionsForFetchedComments, mergeEligiblePullRequests, mergeTargetAmbiguityReason, mergeTargetPullRequest, primaryPullRequestUrl, pullRequestUrls } from "./issue-state.js";
 import { schedulerBookkeepingHandoffComment } from "./lifecycle.js";
@@ -13,23 +11,21 @@ import { TrackerLifecycleController, type LifecycleTrackerUpdateResult } from ".
 import type { SchedulerSafetyWriteReason } from "./lifecycle-events.js";
 import { JsonlLogger } from "./logging.js";
 import type { MergeStateExtension } from "./merge-state-extension.js";
-import { createMergeShepherdExtension } from "./merge-state-shepherd-adapter.js";
 import { NullMonitorSink, type MonitorSink } from "./monitor-contracts.js";
 import { createMonitorEmitter, type MonitorEmitter } from "./monitor-sink.js";
 import { initialDaemonFreshnessState, isDaemonFreshnessStale } from "./daemon-freshness.js";
 import { type ReadDaemonIdentityOptions } from "./daemon-identity.js";
 import { summarizeText } from "./output-capture.js";
 import { persistPhaseTimingToRun, phaseTimingLogPayload, timingStartNoLaterThan, timingStatusForRunResult, validationTimingFromEvidence, type PhaseTimingEventInput } from "./phase-timing.js";
-import { createReviewFixerCiPostValidationExtension } from "./post-validation-review-adapter.js";
 import type { PostValidationExtension } from "./post-validation-extension.js";
-import { buildTargetedContextPack, pullRequestContextEntriesForUrls, pullRequestRefsForUrls } from "./context-pack.js";
+import { buildTargetedContextPack } from "./context-pack.js";
 import { existingImplementationAuditContext } from "./prompt-context.js";
 import { formatRecoveryDiagnostics, inspectWorkspaceRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { refreshOrchestratorDaemonRuntime } from "./orchestrator-daemon-runtime.js";
-import { approvedPrLandingPreflightBlock, daemonPreflightWithLandingCredentialCheck, mergeShepherdLandingPreflightBlock, noPrMergeApprovalComment } from "./orchestrator-landing-preflight.js";
+import { daemonPreflightWithLandingCredentialCheck } from "./orchestrator-landing-preflight.js";
 import { evaluateOrchestratorStartupPreflight, type OrchestratorStartupPreflightResult } from "./orchestrator-startup-preflight.js";
 import { recordSingletonPreflightFailure } from "./orchestrator-singleton-preflight.js";
-import { reviewIterationFinishedMonitorEvent, reviewIterationStartedMonitorEvent, withRunnerActivityMonitorContext, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
+import { withRunnerActivityMonitorContext, writeModelFinishedMonitorEvent, writeTurnCompletedMonitorEvent, writeTurnStartedMonitorEvent, writeValidationCommandMonitorEvents } from "./orchestrator-monitor-events.js";
 import { emitPreDispatchMonitorPause } from "./orchestrator-pre-dispatch-monitor.js";
 import { markLinearPlanningRecommended } from "./orchestrator-planning-guardrail.js";
 import { moveIssueToRunningState } from "./orchestrator-run-start-state-sync.js";
@@ -42,8 +38,8 @@ import { capacityWaitScheduledCommentBody, needsInputCommentBody, recoveryNeeded
 import { autoRecoverPushedWork, finalizeCleanPushedWorkAfterRunnerStop, publishCleanRecoveryBranchIfSafe } from "./orchestrator-pushed-work-recovery.js";
 import { isSupervisorContinuationPaused, latestAuthoritativeDecision, lifecycleStatusForHumanDecision, recoverablePartialWorkStatePatch, sleep } from "./orchestrator-recovery-actions.js";
 import { schedulerSafetyCommentIssue, schedulerSafetyMoveIssue } from "./orchestrator-scheduler-safety.js";
-import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isNoPrHandoffApproved, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
-import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, RECENT_LINEAR_COMMENT_LIMIT, refreshMergeShepherdHumanDecisionsIfNeeded } from "./orchestrator-human-decisions.js";
+import { completedDispatchStopReason, completionMarker, displayAttempt, isLocallyCompletedState, isLocallySettledIssueState, isStateIn, issueFromRunSummary, issueFromState, readHandoff, runningAllowedStates, uniqueStrings, validationFailureMessage, workspaceFromRuntime } from "./orchestrator-state-helpers.js";
+import { allowsImplementationContinuation, formatHumanDecision, formatLinearComment, GUARDRAIL_LINEAR_COMMENT_LIMIT, RECENT_LINEAR_COMMENT_LIMIT } from "./orchestrator-human-decisions.js";
 import { alreadyMergedIssuePatch, dependencyDispatchStopPatch, isSyntheticTimingRunMissingSummary, terminalHeadPatch, terminalWaitPhaseFinishes, terminalWorkspaceWarning } from "./orchestrator-terminal.js";
 import { detectExternalHumanReviewStateDrift, recordExternalHumanReviewStateDrift } from "./orchestrator-state-drift.js";
 import { dependencyDispatchStop, isPreRunDispatchSkipStop, trackerDispatchStop } from "./orchestrator-tracker-guard.js";
@@ -59,6 +55,8 @@ import { createWorkspaceForRun } from "./orchestrator-workspace-bootstrap.js";
 import { createTrackerCapabilitySet } from "./tracker-adapters.js";
 import { splitTrackerCapabilities, type AgentLifecycleWriter, type SchedulerSafetyWriter, type TrackerReader } from "./tracker-boundaries.js";
 import { recoverWorkspaceLocks, WorkspaceManager } from "./workspace.js";
+import { createDefaultMergeStateExtension, createDefaultPostValidationExtension } from "./orchestrator-default-extensions.js";
+import { alreadyMergedPullRequestStatus as readAlreadyMergedPullRequestStatus, pullRequestReentryContext } from "./orchestrator-pr-inspection.js";
 import type { AgentEvent, AgentRunResult, AgentRunner, ContextBudgetState, ContextBudgetTurnKind, HumanDecisionState, Issue, IssueComment, IssueState, LifecycleStatus, ServiceConfig, WorkflowDefinition, Workspace } from "./types.js";
 export interface OrchestratorOptions { repoRoot: string; workflowPath: string; tracker?: TrackerReader; schedulerSafetyWriter?: SchedulerSafetyWriter; agentLifecycleWriter?: AgentLifecycleWriter; runner?: AgentRunner; logger?: JsonlLogger; env?: NodeJS.ProcessEnv; maxConcurrentAgents?: number; daemonSingletonGuardOptions?: ReadDaemonIdentityOptions; monitorSink?: MonitorSink; postValidationExtension?: PostValidationExtension; mergeStateExtension?: MergeStateExtension; }
 export interface OrchestratorRunOptions { dispatchLimit?: number; }
@@ -96,7 +94,7 @@ export class Orchestrator {
     this.monitorEmitter = createMonitorEmitter({ sink: options.monitorSink ?? new NullMonitorSink(), logger: this.logger });
     this.runArtifacts = new RunArtifactStore(resolve(options.repoRoot));
     this.runtimeState = new RuntimeStateStore(resolve(options.repoRoot));
-    this.postValidationExtension = options.postValidationExtension ?? createReviewFixerCiPostValidationExtension({
+    this.postValidationExtension = options.postValidationExtension ?? createDefaultPostValidationExtension({
       repoRoot: this.options.repoRoot,
       config: () => this.config,
       runner: () => this.runner,
@@ -109,7 +107,7 @@ export class Orchestrator {
       writeRunEvent: (runId, entry) => this.writeRunEvent(runId, entry),
       markRunningActivity: (issueId, timestamp) => this.markRunningActivity(issueId, timestamp)
     });
-    this.mergeStateExtension = options.mergeStateExtension ?? createMergeShepherdExtension({
+    this.mergeStateExtension = options.mergeStateExtension ?? createDefaultMergeStateExtension({
       repoRoot: this.options.repoRoot,
       config: () => this.config,
       preflight: () => this.preflight,
@@ -951,35 +949,13 @@ export class Orchestrator {
     return Boolean(await this.alreadyMergedPullRequestStatus(state));
   }
 
-  private async alreadyMergedPullRequestStatus(state: IssueState | null): Promise<PullRequestStatus | null> {
-    const urls = uniqueStrings([mergeTargetPullRequest(state)?.url].filter((url): url is string => Boolean(url)));
-    if (urls.length === 0) return null;
-    const github = new GitHubClient(this.config.github.command);
-    const repoRoot = resolve(this.options.repoRoot);
-    for (const url of urls) {
-      const targetMatchesRepo = await assertPullRequestUrlMatchesRepo(repoRoot, url).then(
-        () => true,
-        async (error: unknown) => {
-          const message = safeGuardrailErrorMessage(error);
-          await this.logger.write({
-            type: "github_status_warning",
-            message: `skipping off-repository PR merge-state read for ${url}: ${message}`
-          });
-          return false;
-        }
-      );
-      if (!targetMatchesRepo) continue;
-      const status = await github.getPullRequest(url, repoRoot).catch(async (error: Error) => {
-        const message = safeGuardrailErrorMessage(error);
-        await this.logger.write({
-          type: "github_status_warning",
-          message: `could not read PR merge state for ${url}: ${message}`
-        });
-        return null;
-      });
-      if (status?.merged) return status;
-    }
-    return null;
+  private async alreadyMergedPullRequestStatus(state: IssueState | null) {
+    return readAlreadyMergedPullRequestStatus({
+      state,
+      config: this.config,
+      repoRoot: resolve(this.options.repoRoot),
+      logger: this.logger
+    });
   }
 
   private async dispatch(issue: Issue, attempt: number | null): Promise<boolean> {
@@ -1359,17 +1335,13 @@ export class Orchestrator {
         ].join("\n")
       : "";
     const existingPr = primaryPullRequestUrl(latestState);
-    let feedback: string | null = null;
-    let pullRequests = existingPr ? pullRequestContextEntriesForUrls(latestState, [existingPr]) : [];
-    if (existingPr && issue.state.toLowerCase() === "todo") {
-      const githubContext = await readGitHubReviewContext(pullRequestRefsForUrls(latestState, [existingPr]), { githubCommand: this.config.github.command, repoRoot: this.options.repoRoot }).catch(() => null);
-      if (githubContext) {
-        pullRequests = githubContext.entries;
-        feedback = githubContext.feedback || null;
-      } else {
-        feedback = await this.githubFeedbackSummary(existingPr).catch((error: Error) => `Could not fetch GitHub feedback: ${error.message}`);
-      }
-    }
+    const { pullRequests, feedback } = await pullRequestReentryContext({
+      issue,
+      state: latestState,
+      existingPr,
+      config: this.config,
+      repoRoot: this.options.repoRoot
+    });
     const contextPack = buildTargetedContextPack({ kind: "implementation-reentry", issue, state: latestState, pullRequests, validation: latestState?.validation, findings: latestState?.findings, feedback, runId });
     if (!existingPr || issue.state.toLowerCase() !== "todo") return `${base}${runContext}\n\n${contextPack}${existingAudit}${linearReentry}${continuation}`;
 
@@ -1492,13 +1464,6 @@ export class Orchestrator {
     }
     return state;
   }
-  private async githubFeedbackSummary(prUrl: string): Promise<string> {
-    const github = new GitHubClient(this.config.github.command);
-    const status = await github.getPullRequest(prUrl, resolve(this.options.repoRoot));
-    const threads = await github.getPullRequestReviewThreads(prUrl, resolve(this.options.repoRoot)).catch(() => []);
-    return summarizeFeedback(status, threads);
-  }
-
   private async dispatchDueRetries(maxDispatches = Number.POSITIVE_INFINITY): Promise<number> {
     if (maxDispatches <= 0) return 0;
     const due = [...this.retries.values()]
