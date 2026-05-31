@@ -75,12 +75,14 @@ export async function writeTurnCompletedMonitorEvent(input: {
   message?: string;
 }): Promise<void> {
   const eventResult = input.displayResult ?? input.result;
+  const payload = turnCompletedMonitorPayload({ ...input, result: eventResult });
+  if (input.displayResult) payload.rawResult = input.result;
   await input.writeRunEvent(input.runId, {
     type: "turn_completed",
     issueId: input.issue.id,
     issueIdentifier: input.issue.identifier,
     message: input.message ?? `${input.label} ${eventResult.status}`,
-    payload: turnCompletedMonitorPayload({ ...input, result: eventResult })
+    payload
   });
 }
 
