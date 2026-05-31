@@ -139,6 +139,7 @@ the cross-boundary assertion.
 | `tests/phase-timing.test.ts` | Unit | Phase timing redacts validation commands and preserves artifact hashes |
 | `tests/post-validation-review-adapter.test.ts` | Unit | Review/fixer/CI post-validation extension gating, no-op disabled behavior, and selected-target failure state |
 | `tests/pr-script.test.ts` | Boundary | Non-interactive PR creation script creates or reuses PRs through explicit `gh` arguments |
+| `tests/process-diagnostics.test.ts` | Unit | Process-list diagnostics are bounded to PID/status/command-name metadata and omit prompt text, run artifacts, workspace paths, and raw command lines |
 | `tests/project-profiler.test.ts` | Unit | Project profiling detects stack/profile and handles Codex summary fallbacks safely |
 | `tests/recovery.test.ts` | Integration | Operator recovery accepts only clean, current, validated work and records proof |
 | `tests/redaction.test.ts` | Unit | Secrets and sensitive runner/tracker output are redacted before persistence or comments |

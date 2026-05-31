@@ -6,6 +6,7 @@ import { GitHubClient, type PullRequestStatus } from "./github.js";
 import { extractOutcome, extractPullRequestRefs } from "./issue-state.js";
 import { inspectWorkspaceRecovery, publishCleanNoUpstreamRecoveryBranch, recordOperatorRecovery, type WorkspaceRecoveryDiagnostics } from "./recovery.js";
 import { finalizeTrustedRecoveryValidationEvidence } from "./recovery-validation-finalization.js";
+import { compactProcessDiagnostic } from "./process-diagnostics.js";
 import { validationEvidencePath, verifyValidationEvidence, writeValidationEvidence, type ValidationCommandEvidence } from "./validation.js";
 import { validationReuseProfileForConfig } from "./validation-profile.js";
 import { workspaceKey } from "./workspace.js";
@@ -256,11 +257,15 @@ async function finalizeCleanPushedWorkEvidence(input: AutoRecoverPushedWorkInput
     headSha
   });
   if (!rerun.started) {
+    const validationProcess = compactProcessDiagnostic({
+      pid: rerun.lock?.pid ?? null,
+      status: rerun.lock ? "running" : "unknown",
+      command: rerun.lock?.command ?? input.config.validationBudget.fullValidationCommand
+    });
     await logPushedWorkRecoverySkipped(input, rerun.message, {
-      command: input.config.validationBudget.fullValidationCommand,
-      workspacePath: recovery.workspacePath,
+      validationProcess,
       headSha,
-      lock: rerun.lock ?? null
+      lock: rerun.lock ? compactRecoveryValidationLock(rerun.lock) : null
     });
     return false;
   }
@@ -391,6 +396,7 @@ async function runRecoveryValidation(input: {
       cwd: input.cwd,
       timeoutMs: input.timeoutMs,
       onStart: async (pid) => {
+        lock.metadata.pid = pid ?? null;
         await writeRecoveryValidationLock(lock.path, { ...lock.metadata, pid: pid ?? null });
       },
       onHeartbeat: (elapsedMs) => {
@@ -401,7 +407,11 @@ async function runRecoveryValidation(input: {
           issueId: input.issue.id,
           issueIdentifier: input.issue.identifier,
           message: "recovery validation still running",
-          payload: { command: input.command, elapsedMs, timeoutMs: input.timeoutMs }
+          payload: {
+            validationProcess: compactProcessDiagnostic({ pid: lock.metadata.pid, status: "running", command: input.command }),
+            elapsedMs,
+            timeoutMs: input.timeoutMs
+          }
         }));
       }
     });
@@ -413,7 +423,10 @@ async function runRecoveryValidation(input: {
         issueId: input.issue.id,
         issueIdentifier: input.issue.identifier,
         message: "recovery validation timed out",
-        payload: { command: input.command, timeoutMs: input.timeoutMs }
+        payload: {
+          validationProcess: compactProcessDiagnostic({ pid: lock.metadata.pid, status: "timeout", command: input.command }),
+          timeoutMs: input.timeoutMs
+        }
       });
     }
     return { started: true, name: input.command, exitCode: result.exitCode, startedAt, finishedAt };
@@ -500,6 +513,18 @@ type RecoveryValidationRunResult =
 type RecoveryValidationLock =
   | { acquired: true; path: string; metadata: RecoveryValidationLockMetadata }
   | { acquired: false; message: string; lock?: RecoveryValidationLockMetadata | null };
+
+function compactRecoveryValidationLock(lock: RecoveryValidationLockMetadata): Omit<RecoveryValidationLockMetadata, "workspacePath" | "command"> & {
+  validationProcess: ReturnType<typeof compactProcessDiagnostic>;
+} {
+  return {
+    issueIdentifier: lock.issueIdentifier,
+    headSha: lock.headSha,
+    pid: lock.pid,
+    startedAt: lock.startedAt,
+    validationProcess: compactProcessDiagnostic({ pid: lock.pid, status: "running", command: lock.command })
+  };
+}
 
 async function acquireRecoveryValidationLock(input: { issue: Issue; workspacePath: string; headSha: string; command: string }): Promise<RecoveryValidationLock> {
   const lockPath = recoveryValidationLockPath(input.workspacePath, input.issue.identifier);
