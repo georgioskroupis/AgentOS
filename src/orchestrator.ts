@@ -1100,7 +1100,9 @@ export class Orchestrator {
         return;
       }
       await workspaceManager.beforeRun(workspace);
-      const result = await this.runImplementationTurns(issue, attempt, workspace, abortController.signal, runId);
+      const implementation = await this.runImplementationTurns(issue, attempt, workspace, abortController.signal, runId);
+      if (implementation.recoveredAfterRunnerStop) return;
+      const result = implementation.result;
       if (result.status !== "succeeded") {
         if (await this.tryFinalizeCleanPushedWorkAfterRunnerStop(issue, workspace, result, runId)) {
           return;
@@ -1245,17 +1247,17 @@ export class Orchestrator {
     }
   }
 
-  private async runImplementationTurns(issue: Issue, attempt: number | null, workspace: Workspace, signal: AbortSignal | undefined, runId: string): Promise<AgentRunResult> {
+  private async runImplementationTurns(issue: Issue, attempt: number | null, workspace: Workspace, signal: AbortSignal | undefined, runId: string): Promise<{ result: AgentRunResult; recoveredAfterRunnerStop?: boolean }> {
     let result: AgentRunResult = { status: "failed", error: "no_turn_started" };
     for (let turnNumber = 1; turnNumber <= this.config.agent.maxTurns; turnNumber += 1) {
       const preTurnStop = await this.preTurnCheck(issue);
-      if (preTurnStop) return { status: "canceled", error: preTurnStop };
+      if (preTurnStop) return { result: { status: "canceled", error: preTurnStop } };
       await this.recordIssueState(issue, { phase: "prompt" });
       const prompt = await this.implementationPrompt(issue, attempt, turnNumber, runId);
       await this.runArtifacts.writePrompt(runId, prompt);
       const promptBudget = await this.recordContextBudget(issue, runId, "implementation", prompt);
       if (promptBudget.status === "exceeded") {
-        return { status: "canceled", error: contextBudgetExceededMessage(promptBudget) };
+        return { result: { status: "canceled", error: contextBudgetExceededMessage(promptBudget) } };
       }
       await this.recordIssueState(issue, { phase: "streaming-turn" });
       const implementationTiming = await this.startRunPhase(runId, issue, "implementation", `implementation turn ${turnNumber}`, { turnNumber, maxTurns: this.config.agent.maxTurns });
@@ -1278,14 +1280,51 @@ export class Orchestrator {
         throw error;
       }
       const handoffStop = await handoffRunnerStreamStopPresentation({ result, signal, workspace, issue });
-      await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result, role: "implementation", attempt: turnNumber, ...(handoffStop ? { displayStatus: "succeeded" } : {}) });
-      await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: implementationTiming, label: `implementation turn ${turnNumber}`, current: turnNumber, result, max: this.config.agent.maxTurns, ...(handoffStop ? { displayResult: handoffStop.displayResult, message: `implementation turn ${turnNumber} handoff completed; runner stream stopped` } : {}) });
-      await this.finishRunPhase(runId, issue, implementationTiming, handoffStop ? "completed" : timingStatusForRunResult(result), { turnNumber, resultStatus: result.status, ...(handoffStop ? { displayStatus: "succeeded", stopReason: HANDOFF_RUNNER_STREAM_STOP_REASON } : {}) });
-      if (result.status !== "succeeded") return result;
-      if (await readHandoff(workspace.path, issue.identifier)) return result;
+      const recoveredAfterRunnerStop = !handoffStop && result.status !== "succeeded" && (await this.tryFinalizeCleanPushedWorkAfterRunnerStop(issue, workspace, result, runId));
+      const cleanPushedWorkDisplayResult: AgentRunResult | null = recoveredAfterRunnerStop
+        ? { ...result, status: "succeeded", error: "clean pushed work recovered; runner stream stopped" }
+        : null;
+      const displayResult = handoffStop?.displayResult ?? cleanPushedWorkDisplayResult ?? undefined;
+      const completedMessage = handoffStop
+        ? `implementation turn ${turnNumber} handoff completed; runner stream stopped`
+        : recoveredAfterRunnerStop
+          ? `implementation turn ${turnNumber} clean pushed work recovered; runner stream stopped`
+          : undefined;
+      const phaseMetadata = {
+        turnNumber,
+        resultStatus: result.status,
+        ...(handoffStop ? { displayStatus: "succeeded", stopReason: HANDOFF_RUNNER_STREAM_STOP_REASON } : {}),
+        ...(recoveredAfterRunnerStop
+          ? {
+              displayStatus: "succeeded",
+              stopReason: "clean_pushed_work_recovered_after_runner_stop",
+              originalError: result.error
+            }
+          : {})
+      };
+      await writeModelFinishedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, result, role: "implementation", attempt: turnNumber, ...(displayResult ? { displayStatus: "succeeded" } : {}) });
+      await writeTurnCompletedMonitorEvent({ writeRunEvent: (targetRunId, entry) => this.writeRunEvent(targetRunId, entry), runId, issue, timing: implementationTiming, label: `implementation turn ${turnNumber}`, current: turnNumber, result, max: this.config.agent.maxTurns, ...(displayResult ? { displayResult } : {}), ...(completedMessage ? { message: completedMessage } : {}) });
+      if (recoveredAfterRunnerStop) {
+        const revised = await this.runArtifacts.revisePhase(runId, { id: implementationTiming.id }, { status: "completed", metadata: phaseMetadata });
+        if (revised) {
+          await this.writeRunEvent(runId, {
+            type: "phase_finished",
+            issueId: issue.id,
+            issueIdentifier: issue.identifier,
+            message: revised.label ?? revised.phase,
+            timestamp: revised.finishedAt,
+            payload: { timing: revised }
+          });
+        }
+        await this.runArtifacts.refreshArtifactHashes(runId, ["events.jsonl"]);
+        return { result, recoveredAfterRunnerStop: true };
+      }
+      await this.finishRunPhase(runId, issue, implementationTiming, handoffStop ? "completed" : timingStatusForRunResult(result), phaseMetadata);
+      if (result.status !== "succeeded") return { result };
+      if (await readHandoff(workspace.path, issue.identifier)) return { result };
 
       const current = await this.tracker.fetchIssueStates([issue.id]).then((states) => states.get(issue.id)).catch(() => null);
-      if (current && !isStateIn(current.state, runningAllowedStates(this.config))) return result;
+      if (current && !isStateIn(current.state, runningAllowedStates(this.config))) return { result };
       if (turnNumber < this.config.agent.maxTurns) {
         await this.logger.write({
           type: "turn_continued",
@@ -1297,9 +1336,9 @@ export class Orchestrator {
       }
     }
     if (result.status === "succeeded" && !(await readHandoff(workspace.path, issue.identifier))) {
-      return { ...result, status: "failed", error: "missing_handoff" };
+      return { result: { ...result, status: "failed", error: "missing_handoff" } };
     }
-    return result;
+    return { result };
   }
 
   private async implementationPrompt(issue: Issue, attempt: number | null, turnNumber: number, runId: string): Promise<string> {

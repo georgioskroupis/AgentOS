@@ -12159,6 +12159,28 @@ describe("orchestrator", () => {
     const runtime = await new RuntimeStateStore(repo).read();
     expect(runtime.activeRuns).toEqual([]);
     expect(runtime.retryQueue).toEqual([]);
+    const [summary] = await new RunArtifactStore(repo).listRuns();
+    const implementationPhase = summary.timing?.phases.find((phase) => phase.phase === "implementation");
+    expect(summary.status).toBe("succeeded");
+    expect(implementationPhase).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        metadata: expect.objectContaining({
+          resultStatus: "canceled",
+          displayStatus: "succeeded",
+          stopReason: "clean_pushed_work_recovered_after_runner_stop",
+          originalError: "codex_app_server_closed: exit 0"
+        })
+      })
+    );
+    const events = await new RunArtifactStore(repo).replay(summary.runId);
+    const turnCompleted = events.find((entry) => entry.type === "turn_completed");
+    expect(turnCompleted?.message).toBe("implementation turn 1 clean pushed work recovered; runner stream stopped");
+    expect((turnCompleted?.payload as { result?: AgentRunResult; rawResult?: AgentRunResult } | undefined)?.result?.status).toBe("succeeded");
+    expect((turnCompleted?.payload as { result?: AgentRunResult; rawResult?: AgentRunResult } | undefined)?.rawResult).toMatchObject({
+      status: "canceled",
+      error: "codex_app_server_closed: exit 0"
+    });
     const logs = await new JsonlLogger(repo).tail(100);
     expect(logs.some((entry) => entry.type === "pushed_work_recovered" && entry.message?.includes("implementation runner stopped"))).toBe(true);
     expect(logs.some((entry) => entry.type === "run_succeeded" && entry.message === "completed after clean pushed work recovery")).toBe(true);
